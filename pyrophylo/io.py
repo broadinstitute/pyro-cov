@@ -1,4 +1,6 @@
+import functools
 import math
+import sys
 
 import torch.multiprocessing as mp
 from Bio.Phylo.NewickIO import Parser
@@ -6,9 +8,18 @@ from Bio.Phylo.NewickIO import Parser
 from .phylo import Phylogeny
 
 
+def _print_dot():
+    sys.stdout.write(".")
+    sys.stdout.flush()
+
+
 def _handle_translate(lines, context):
     map_lines = [line.rstrip(",").split() for line in lines[1:-1]]
     context["translate"] = {key: value for key, value in map_lines}
+
+
+def _handle_tree_count(lines, context):
+    return 1
 
 
 def _handle_tree_newick(lines, context):
@@ -34,11 +45,17 @@ def _handle_tree_torch(lines, context):
     assert tree == "tree"
     assert equal == "="
     tree = next(Parser.from_string(newick).parse())
-    return Phylogeny.from_bio_phylo(tree)
+    tree = Phylogeny.from_bio_phylo(tree)
+    _print_dot()
+    return tree
 
 
 def _handle_raw(lines, context):
     return lines, context
+
+
+def _apply(fn, args):
+    return fn(*args)
 
 
 def read_nexus_trees(filename, *, format="newick", max_num_trees=math.inf,
@@ -50,7 +67,10 @@ def read_nexus_trees(filename, *, format="newick", max_num_trees=math.inf,
 
     Returns an iterator of ``Bio.Phylo`` tree objects.
     """
-    if format == "newick":
+    if format == "count":
+        context = {}
+        handlers = {"tree": _handle_tree_count}
+    elif format == "newick":
         context = {"translate": {}}
         handlers = {"translate": _handle_translate, "tree": _handle_tree_newick}
     elif format == "_raw_newick":
@@ -65,18 +85,19 @@ def read_nexus_trees(filename, *, format="newick", max_num_trees=math.inf,
     else:
         raise ValueError(f"unknown format: {format}")
 
-    if processes > 0:
+    if processes != 0:
         trees = read_nexus_trees(filename, format="_raw_" + format,
                                  max_num_trees=max_num_trees)
         with mp.Pool(processes) as pool:
-            return pool.starmap(handlers["tree"], trees)
+            handler = functools.partial(_apply, handlers["tree"])
+            yield from pool.imap(handler, trees)
+        return
 
     with open(filename) as f:
         lines = iter(f)
         for line in lines:
             if line.startswith("Begin trees;"):
                 break
-        trees = []
         part = []
         for line in lines:
             line = line.strip()
@@ -88,11 +109,18 @@ def read_nexus_trees(filename, *, format="newick", max_num_trees=math.inf,
             if handle is not None:
                 tree = handle(part, context)
                 if tree is not None:
-                    trees.append(tree)
-                    if len(trees) == max_num_trees:
+                    yield tree
+                    max_num_trees -= 1
+                    if max_num_trees <= 0:
                         break
             part = []
-        return trees
+
+
+def count_nexus_trees(filename):
+    """
+    Counts the number of trees in a nexus file.
+    """
+    return sum(read_nexus_trees(filename, format="count"))
 
 
 def stack_nexus_trees(filename, *, max_num_trees=math.inf, processes=0):

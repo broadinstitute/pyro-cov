@@ -19,6 +19,7 @@ def test_bio_phylo_parse(args):
 @pytest.mark.parametrize("processes", [0, 2])
 def test_read_nexus_trees(processes):
     trees = read_nexus_trees(FILENAME, max_num_trees=5, processes=processes)
+    trees = list(trees)
     assert len(trees) == 5
     for tree in trees:
         assert tree.count_terminals() == 772

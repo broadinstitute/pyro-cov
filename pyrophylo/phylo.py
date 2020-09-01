@@ -13,6 +13,8 @@ class Phylogeny:
         must be first and have null id ``-1``.
     :param Tensor leaves: int tensor of ids of all leaf nodes.
     """
+    _fields = ("times", "parents", "leaves")
+
     def __init__(self, times, parents, leaves):
         num_nodes = times.size(-1)
         assert num_nodes % 2 == 1, "expected odd number of nodes"
@@ -36,8 +38,20 @@ class Phylogeny:
         self.leaves = leaves
 
     @property
+    def num_nodes(self):
+        return self.times.size(-1)
+
+    @property
+    def num_leaves(self):
+        return self.leaves.size(-1)
+
+    @property
     def batch_shape(self):
         return self.times.shape[:-1]
+
+    def __getitem__(self, index):
+        kwargs = {name: getattr(self, name)[index] for name in self._fields}
+        return Phylogeny(**kwargs)
 
     @classmethod
     def stack(cls, phylogenies):
@@ -49,7 +63,7 @@ class Phylogeny:
         """
         phylogenies = list(phylogenies)
         kwargs = {name: torch.stack([getattr(x, name) for x in phylogenies])
-                  for name in ("times", "parents", "leaves")}
+                  for name in cls._fields}
         return cls(**kwargs)
 
     @classmethod

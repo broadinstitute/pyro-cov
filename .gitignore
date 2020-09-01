@@ -129,4 +129,5 @@ dmypy.json
 .pyre/
 
 # Project-specific
-data
+/data
+/results
