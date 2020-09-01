@@ -1,5 +1,4 @@
 import math
-from contextlib import ExitStack
 
 import torch.multiprocessing as mp
 from Bio.Phylo.NewickIO import Parser
@@ -38,13 +37,12 @@ def _handle_tree_torch(lines, context):
     return Phylogeny.from_bio_phylo(tree)
 
 
-def _handle_async(pool, fn):
-    def handle(lines, context):
-        return pool.apply_async(fn, (lines, context))
-    return handle
+def _handle_raw(lines, context):
+    return lines, context
 
 
-def iter_nexus_trees(filename, *, format="newick", processes=0):
+def read_nexus_trees(filename, *, format="newick", max_num_trees=math.inf,
+                     processes=0):
     """
     Parse and iterate over newick trees stored in a nexus file.
     This streams the file and thus can handle larger files than
@@ -54,27 +52,31 @@ def iter_nexus_trees(filename, *, format="newick", processes=0):
     """
     if format == "newick":
         context = {"translate": {}}
-        handlers = {"translate": _handle_translate,
-                    "tree": _handle_tree_newick}
+        handlers = {"translate": _handle_translate, "tree": _handle_tree_newick}
+    elif format == "_raw_newick":
+        context = {"translate": {}}
+        handlers = {"translate": _handle_translate, "tree": _handle_raw}
     elif format == "torch":
         context = None
         handlers = {"tree": _handle_tree_torch}
+    elif format == "_raw_torch":
+        context = None
+        handlers = {"tree": _handle_raw}
     else:
         raise ValueError(f"unknown format: {format}")
 
-    with ExitStack() as stack:
-        # Optionally generate async results.
-        if processes > 0:
-            mp.set_start_method("spawn")
-            pool = stack.enter_context(mp.Pool(processes))
-            handlers["tree"] = _handle_async(pool, handlers.pop("tree"))
+    if processes > 0:
+        trees = read_nexus_trees(filename, format="_raw_" + format,
+                                 max_num_trees=max_num_trees)
+        with mp.Pool(processes) as pool:
+            return pool.starmap(handlers["tree"], trees)
 
-        # Skip until trees.
-        lines = iter(stack.enter_context(open(filename)))
+    with open(filename) as f:
+        lines = iter(f)
         for line in lines:
             if line.startswith("Begin trees;"):
                 break
-
+        trees = []
         part = []
         for line in lines:
             line = line.strip()
@@ -86,19 +88,18 @@ def iter_nexus_trees(filename, *, format="newick", processes=0):
             if handle is not None:
                 tree = handle(part, context)
                 if tree is not None:
-                    yield tree
+                    trees.append(tree)
+                    if len(trees) == max_num_trees:
+                        break
             part = []
+        return trees
 
 
-def stack_nexus_trees(filename, *, max_num_trees=math.inf, processes=0, timeout=None):
+def stack_nexus_trees(filename, *, max_num_trees=math.inf, processes=0):
     """
     Loads a batch of trees from a nexus file.
     """
-    phylogenies = []
-    for tree in iter_nexus_trees(filename, format="torch", processes=processes):
-        phylogenies.append(tree)
-        if len(phylogenies) >= max_num_trees:
-            break
-    if processes > 0:
-        phylogenies = [async_result.get(timeout) for async_result in phylogenies]
-    return Phylogeny.stack(phylogenies)
+    trees = read_nexus_trees(filename, format="torch",
+                             max_num_trees=max_num_trees,
+                             processes=processes)
+    return Phylogeny.stack(trees)
