@@ -8,9 +8,12 @@ This repo assumes that folder is available locally and linked as the `data/` dir
 ln -sf ~/Google\ Drive\ File\ Stream/Shared\ drives/Pyro\ CoV data
 ```
 
-## Installing Pyro
+## Installing
 
 ```sh
-pip install pyro-ppl
+make install
 ```
-For details see https://pyro.ai
+or literally
+```sh
+pip install -e .
+```
