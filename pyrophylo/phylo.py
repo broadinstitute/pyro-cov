@@ -56,8 +56,19 @@ class Phylogeny:
         kwargs = {name: getattr(self, name)[index] for name in self._fields}
         return Phylogeny(**kwargs)
 
-    @classmethod
-    def stack(cls, phylogenies):
+    def contiguous(self):
+        kwargs = {name: getattr(self, name).contiguous() for name in self._fields}
+        return Phylogeny(**kwargs)
+
+    def num_lineages(self):
+        _parents = self.parents[..., 1:]
+        sign = torch.ones_like(self.parents)
+        sign.scatter_(-1, _parents, sign.new_full(_parents.shape, -1.))
+        num_lineages = sign.flip(-1).cumsum(-1).flip(-1)
+        return num_lineages
+
+    @staticmethod
+    def stack(phylogenies):
         """
         :param iterable phylogenies: An iterable of :class:`Phylogeny` objects
             of identical shape.
@@ -66,11 +77,11 @@ class Phylogeny:
         """
         phylogenies = list(phylogenies)
         kwargs = {name: torch.stack([getattr(x, name) for x in phylogenies])
-                  for name in cls._fields}
-        return cls(**kwargs)
+                  for name in Phylogeny._fields}
+        return Phylogeny(**kwargs)
 
-    @classmethod
-    def from_bio_phylo(cls, tree):
+    @staticmethod
+    def from_bio_phylo(tree):
         """
         Builds a :class:`Phylogeny` object from a biopython tree structure.
 
@@ -92,7 +103,7 @@ class Phylogeny:
             for child in clade:
                 clade_to_time[child] = time + get_branch_length(child)
                 clade_to_parent[child] = clade
-        clades.sort(key=clade_to_time.__getitem__)
+        clades.sort(key=lambda c: (clade_to_time[c], c.name))
         assert clades[0] not in clade_to_parent, "invalid root"
         # TODO binarize the tree
         clade_to_id = {clade: i for i, clade in enumerate(clades)}
@@ -105,4 +116,4 @@ class Phylogeny:
         leaves.sort(key=lambda clade: clade.name)
         leaves = torch.tensor([clade_to_id[clade] for clade in leaves])
 
-        return cls(times, parents, leaves)
+        return Phylogeny(times, parents, leaves)
