@@ -49,6 +49,9 @@ class Phylogeny:
     def batch_shape(self):
         return self.times.shape[:-1]
 
+    def __len__(self):
+        return self.batch_shape[0]
+
     def __getitem__(self, index):
         kwargs = {name: getattr(self, name)[index] for name in self._fields}
         return Phylogeny(**kwargs)
