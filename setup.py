@@ -22,6 +22,7 @@ setup(
     install_requires=[
         'biopython>=1.54',
         'pyro-ppl>=1.4',
+        'geopy',
     ],
     extras_require={
         'test': [
