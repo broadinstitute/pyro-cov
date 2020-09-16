@@ -1,4 +1,8 @@
+import math
+
+import pyro.distributions as dist
 import torch
+from pyro.distributions import constraints, is_validation_enabled
 
 
 class Phylogeny:
@@ -55,6 +59,10 @@ class Phylogeny:
     def __getitem__(self, index):
         kwargs = {name: getattr(self, name)[index] for name in self._fields}
         return Phylogeny(**kwargs)
+
+    def __iter__(self):
+        for i in range(len(self)):
+            yield self[i]
 
     def contiguous(self):
         kwargs = {name: getattr(self, name).contiguous() for name in self._fields}
@@ -117,3 +125,104 @@ class Phylogeny:
         leaves = torch.tensor([clade_to_id[clade] for clade in leaves])
 
         return Phylogeny(times, parents, leaves)
+
+
+def markov_log_prob(phylo, leaf_state, state_trans):
+    """
+    Compute the marginal log probability of a Markov tree with given edge
+    transitions and leaf observations. This can be used for either mutation or
+    phylogeographic mugration models, but does not allow state-dependent
+    reproduction rate as in the structured coalescent [1].
+
+    **References**
+
+    [1] T. Vaughan, D. Kuhnert, A. Popinga, D. Welch, A. Drummond (2014)
+        `Efficient Bayesian inference under the structured coalescent`
+        https://academic.oup.com/bioinformatics/article/30/16/2272/2748160
+
+    :param Phylogeny phylo: A phylogeny or batch of phylogenies.
+    :param Tensor leaf_state: int tensor of states of all leaf nodes.
+    :param Tensor state_trans: Either a homogeneous reverse-time state
+        transition matrix, or a heterogeneous grid of ``T`` transition matrices
+        applying to time intervals ``(-inf,1]``, ``(1,2]``, ..., ``(T-1,inf)``.
+    :returns: Marginal log probability of data ``leaf_state``.
+    :rtype: Tensor
+    """
+    batch_shape = phylo.batch_shape
+    if batch_shape:
+        # TODO vectorize.
+        return torch.stack([markov_log_prob(p, leaf_state, state_trans)
+                            for p in phylo])
+    num_nodes = phylo.num_nodes
+    num_leaves = phylo.num_leaves
+    num_states = state_trans.size(-1)
+    assert leaf_state.shape == (num_leaves,)
+    assert state_trans.dim() in (2, 3)  # homogeneous, heterogeneous
+    assert state_trans.shape[-2:] == (num_states, num_states)
+    if is_validation_enabled():
+        constraints.simplex.check(state_trans.exp())
+    times = phylo.times
+    parents = phylo.parents
+    leaves = phylo.leaves
+
+    # Convert (leaves,leaf_state) to initial state log density.
+    logp = state_trans.new_zeros(num_nodes, num_states)
+    logp[leaves] = -math.inf
+    logp[leaves, leaf_state] = 0
+
+    # Dynamic programming along the tree.
+    for i in range(-1, -num_nodes, -1):
+        j = parents[i]
+        logp[j] += _interpolate_mv(times[j], times[i], state_trans, logp[i])
+    logp = logp[0].logsumexp(-1)
+    return logp
+
+
+class MarkovTree(dist.TorchDistribution):
+    """
+    :param Phylogeny phylo: A phylogeny or batch of phylogenies.
+    :param Tensor state_trans: Either a homogeneous reverse-time state
+        transition matrix, or a heterogeneous grid of ``T`` transition matrices
+        applying to time intervals ``(-inf,1]``, ``(1,2]``, ..., ``(T-1,inf)``.
+    """
+    arg_constraints = {
+        "transition": constraints.IndependentConstraint(constraints.simplex, 2),
+    }
+
+    def __init__(self, phylogeny, transition, *, validate_args=None):
+        assert isinstance(transition, torch.Tensor)
+        assert isinstance(phylogeny, Phylogeny)
+        assert transition.dim() in (2, 3)
+        self.num_states = transition.size(-1)
+        assert transition.size(-2) == self.num_states
+        self.phylogeny = phylogeny
+        self.transition = transition
+        batch_shape = phylogeny.batch_shape
+        event_shape = torch.Size([phylogeny.num_leaves])
+        super().__init__(batch_shape, event_shape, validate_args=validate_args)
+
+    @constraints.dependent_property
+    def support(self):
+        return constraints.IndependentConstraint(
+            constraints.integer_interval(0, self.num_states), 1)
+
+    def log_prob(self, leaf_state):
+        return markov_log_prob(self.phylogeny, leaf_state, self.transition,
+                               validate_args=self._validate_args)
+
+
+def _mv(matrix, log_vector):
+    shift = log_vector.logsumexp(-1)
+    p = (log_vector - shift)
+    q = matrix.matmul(p.unsqueeze(-1)).squeeze(-1)
+    return q + shift
+
+
+def _interpolate_mv(t0, t1, matrix, log_vector):
+    if is_validation_enabled():
+        assert (t0 <= t1).all()
+    if matrix.dim() == 2 or matrix.size(-3) == 1:
+        # homogeneous
+        m = matrix.matrix_power(t1 - t0)
+        return _mv(m, log_vector)
+    raise NotImplementedError("TODO support time-inhomogeneous transitions")
