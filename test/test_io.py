@@ -10,7 +10,7 @@ FILENAME = os.path.join(ROOT, "data", "GTR4G_posterior.trees")
 
 
 @pytest.mark.xfail(reason="Python <3.8 cannot .read() large files")
-def test_bio_phylo_parse(args):
+def test_bio_phylo_parse():
     trees = Phylo.parse(FILENAME, format="nexus")
     for tree in trees:
         print(tree.count_terminals())

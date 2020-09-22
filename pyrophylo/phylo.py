@@ -173,7 +173,7 @@ def markov_log_prob(phylo, leaf_state, state_trans):
     # Dynamic programming along the tree.
     for i in range(-1, -num_nodes, -1):
         j = parents[i]
-        logp[j] += _interpolate_mv(times[j], times[i], state_trans, logp[i])
+        logp[j] += _interpolate_lmve(times[j], times[i], state_trans, logp[i])
     logp = logp[0].logsumexp(-1)
     return logp
 
@@ -189,7 +189,7 @@ class MarkovTree(dist.TorchDistribution):
         "transition": constraints.IndependentConstraint(constraints.simplex, 2),
     }
 
-    def __init__(self, phylogeny, transition, *, validate_args=None):
+    def __init__(self, phylogeny, transition):
         assert isinstance(transition, torch.Tensor)
         assert isinstance(phylogeny, Phylogeny)
         assert transition.dim() in (2, 3)
@@ -199,7 +199,7 @@ class MarkovTree(dist.TorchDistribution):
         self.transition = transition
         batch_shape = phylogeny.batch_shape
         event_shape = torch.Size([phylogeny.num_leaves])
-        super().__init__(batch_shape, event_shape, validate_args=validate_args)
+        super().__init__(batch_shape, event_shape)
 
     @constraints.dependent_property
     def support(self):
@@ -207,22 +207,26 @@ class MarkovTree(dist.TorchDistribution):
             constraints.integer_interval(0, self.num_states), 1)
 
     def log_prob(self, leaf_state):
-        return markov_log_prob(self.phylogeny, leaf_state, self.transition,
-                               validate_args=self._validate_args)
+        return markov_log_prob(self.phylogeny, leaf_state, self.transition)
 
 
-def _mv(matrix, log_vector):
-    shift = log_vector.logsumexp(-1)
-    p = (log_vector - shift)
+def _lmve(matrix, log_vector):
+    """
+    log(matrix @ exp(log_vector))
+    """
+    shift = log_vector.logsumexp(-1, keepdim=True)
+    p = (log_vector - shift).exp()
     q = matrix.matmul(p.unsqueeze(-1)).squeeze(-1)
-    return q + shift
+    return q.log() + shift
 
 
-def _interpolate_mv(t0, t1, matrix, log_vector):
+def _interpolate_lmve(t0, t1, matrix, log_vector):
     if is_validation_enabled():
         assert (t0 <= t1).all()
     if matrix.dim() == 2 or matrix.size(-3) == 1:
         # homogeneous
         m = matrix.matrix_power(t1 - t0)
-        return _mv(m, log_vector)
+        return _lmve(m, log_vector)
+    # heterogeneous
+    assert t0.numel() == 1 and t1.numel() == 1
     raise NotImplementedError("TODO support time-inhomogeneous transitions")
