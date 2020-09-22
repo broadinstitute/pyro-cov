@@ -210,23 +210,64 @@ class MarkovTree(dist.TorchDistribution):
         return markov_log_prob(self.phylogeny, leaf_state, self.transition)
 
 
-def _lmve(matrix, log_vector):
+def _mpm(m, t, v):
     """
-    log(matrix @ exp(log_vector))
+    Like ``m.matrix_power(t) @ v`` but
+    approximates fractional powers via linear interpolation.
     """
-    shift = log_vector.logsumexp(-1, keepdim=True)
-    p = (log_vector - shift).exp()
-    q = matrix.matmul(p.unsqueeze(-1)).squeeze(-1)
-    return q.log() + shift
+    assert t >= 0
+    t_int = t.floor()
+    t_frac = t - t_int
+    if t_int:
+        v = m.matrix_power(int(t_int)) @ v
+    if t_frac:
+        v = v + t_frac * (m @ v - v)  # linear approximation
+    return v
+
+
+def _interpolate_mm(t0, t1, m, v):
+    if is_validation_enabled():
+        assert (t0 <= t1).all()
+
+    # Homogeneous.
+    if m.dim() == 2:
+        return _mpm(m, t1 - t0, v)
+    T = m.size(-3)
+    if T == 1:
+        return _mpm(m[..., 0, :, :], t1 - t0, v)
+
+    # Heterogeneous.
+    assert t0.numel() == 1 and t1.numel() == 1
+    # Handle trivial cases.
+    if t0 >= T - 1:  # After grid.
+        return _mpm(m[..., T - 1, :, :], t1 - t0, v)
+    if t1 <= 1:  # Before grid.
+        return _mpm(m[..., 0, :, :], t1 - t0, v)
+    if t0.floor() == t1.floor():  # Same grid cell.
+        t = int(t0.floor())
+        return _mpm(m[..., t, :, :], t1 - t0, v)
+
+    # Handle case when (t0,t1) spans at least two grid cells.
+    t1_floor = min(T - 1, int(t1.floor()))
+    t0_ceil = max(1, int(t0.ceil()))
+
+    # Note this assumes m encodes a reverse-time transition.
+    t = t1_floor
+    v = _mpm(m[..., t, :, :], t1 - t1_floor, v)
+
+    for t in range(t1_floor - 1, t0_ceil - 1, -1):
+        v = m[..., t, :, :] @ v
+
+    t = t0_ceil - 1
+    v = _mpm(m[..., t, :, :], t0_ceil - t0, v)
+
+    return v
 
 
 def _interpolate_lmve(t0, t1, matrix, log_vector):
-    if is_validation_enabled():
-        assert (t0 <= t1).all()
-    if matrix.dim() == 2 or matrix.size(-3) == 1:
-        # homogeneous
-        m = matrix.matrix_power(t1 - t0)
-        return _lmve(m, log_vector)
-    # heterogeneous
-    assert t0.numel() == 1 and t1.numel() == 1
-    raise NotImplementedError("TODO support time-inhomogeneous transitions")
+    shift = log_vector.logsumexp(dim=-1, keepdim=True)
+    v = (log_vector - shift).exp()
+    v = v.unsqueeze(-1)
+    v = _interpolate_mm(t0, t1, matrix, v)
+    v = v.squeeze(-1)
+    return v.log() + shift

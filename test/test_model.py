@@ -13,7 +13,7 @@ def model_inputs():
     return torch.load("results/model_inputs.pt")
 
 
-@pytest.mark.xfail(reason="not implemented")
+@pytest.mark.xfail(reason="not implemented", run=False)
 def test_county_model(model_inputs):
     model = CountyModel(**model_inputs)
     model.fit_svi(guide_rank=0, num_samples=10, log_every=10)
