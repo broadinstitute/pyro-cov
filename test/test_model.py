@@ -15,5 +15,6 @@ def model_inputs():
 
 @pytest.mark.xfail(reason="not implemented", run=False)
 def test_county_model(model_inputs):
+    model_inputs["trees"] = model_inputs["trees"][:2]  # Subsample for speed.
     model = CountyModel(**model_inputs)
     model.fit_svi(guide_rank=0, num_samples=10, log_every=10)

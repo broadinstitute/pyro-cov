@@ -82,6 +82,9 @@ class CountyModel(CompartmentalModel):
                         binomial_dist(S2E, rho),
                         obs=self.new_cases[t] if t_is_observed else None)
 
+    def finalize(self, params, state):
+        R0, tau_e, tau_i, rho, coupling = params
+
         # Tree likelihood.
         provenance = coupling  # TODO adjust for population of source and destin
         pyro.sample("geolocation", MarkovTree(self.trees, provenance),
