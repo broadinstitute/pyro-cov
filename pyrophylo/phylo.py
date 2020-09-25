@@ -1,3 +1,4 @@
+import logging
 import math
 
 import pyro.distributions as dist
@@ -296,10 +297,70 @@ class MarkovTreeLikelihood:
     :param Phylogeny phylo: A phylogeny or batch of phylogenies.
     :param Tensor leaf_state: int tensor of states of all leaf nodes.
     """
-    def __init__(self, phylo, leaf_state):
-        raise NotImplementedError
+    def __init__(
+        self,
+        phylo,  # batched Phylogeny
+        leaf_state,  # leaf_id -> category
+        num_states,  # int
+    ):
+        times = phylo.times.round().long()  # batch * node_id -> time
+        batch_size, num_nodes = times.shape
+        parents = phylo.parents  # batch * node_id -> {-1} + node_id
+        leaves = phylo.leaves  # leaf_id -> node_id
+        T0 = times.min().item()
+        T1 = times.max().item()
 
-    def __call__(self, state_trans):
+        # Flatten the batch of trees to a forest.
+        # Let bnode_id = batch * num_nodes + node_id.
+        #     bleaf_id = batch * num_leaves + leaf_id.
+        times = times.reshape(-1)
+        batch_expand = (torch.arange(batch_size) * num_nodes).unsqueeze(-1)
+        parents = parents + batch_expand
+        parents[0] = -1  # Retain nonce.
+        parents = parents.reshape(-1)
+        leaves = (leaves + batch_expand).reshape(-1)
+        leaf_state = leaf_state.expand(batch_size, -1).reshape(-1)
+        # Now times : bnode_id -> time
+        #     parents : bnode_id -> bnode_id
+        #     leaves : Set[bnode_id]
+        #     leaf_state : bleaf_id -> category
+
+        # Sort and stratify leaves by time. Strata are represented as
+        # leaf_strata : time -> Set[bleaf_id].
+        order = times[leaves].sort().indices
+        leaves = leaves[order]
+        leaf_state = leaf_state[order]
+        leaf_strata = torch.zeros(T1 - T0 + 1, dtype=torch.long) \
+                           .scatter_add_(0, times[leaves] - T0) \
+                           .cumsum(0)
+
+        # Collapse lineages that are alive for zero duration.
+        while True:
+            nodes = (times[parents] == times).nonzero()
+            if not nodes.shape:
+                break
+            logging.debug(f"collapsing {len(nodes)} parent-child pairs")
+            parents[nodes] = parents[parents[nodes]]
+
+        # Initialize sparse log_prob state at latest time.
+        beg, end = map(int, leaf_strata[T1 - T0 - 1:])
+        nodes = leaves[beg:end]
+        logps = _log_one_hot(nodes.shape, leaf_state[beg:end])
+
+        # Save.
+        self.sizes = T0, T1
+        self.times = times
+        self.parents = parents
+        self.leaves = leaves
+        self.leaf_state = leaf_state
+        self.leaf_strata = leaf_strata
+        self.init_nodes = nodes
+        self.init_logps = logps
+
+    def __call__(
+        self,
+        state_trans,  # time * category * category -> prob
+    ):
         """
         :param Tensor state_trans: Either a homogeneous reverse-time state
             transition matrix, or a heterogeneous grid of ``T`` transition
@@ -308,78 +369,45 @@ class MarkovTreeLikelihood:
         :returns: Marginal log probability of data ``leaf_state``.
         :rtype: Tensor
         """
-        raise NotImplementedError
+        T, N, N = state_trans.shape
+        T0, T1 = self.sizes
+        times = self.times
+        parents = self.parents
+        leaves = self.leaves
+        leaf_state = self.leaf_state
+        leaf_strata = self.leaf_strata
+        nodes = self.init_nodes
+        logps = self.init_logps
 
+        # Sequentially propagate backward in time.
+        finfo = torch.finfo(logps.dtype)
+        for t in range(T1 - 1, T0 - 1, -1):
+            # Update each lineage's distribution independently.
+            shift = logps.detach().max(-1, True).values.clamp_(min=finfo.min)
+            v = (logps - shift).exp()
+            v = v @ state_trans[max(0, min(T - 1, t))].t()
+            logps = v.log() + shift
 
-def markov_log_prob_parallel(
-    phylo,  # batched Phylogeny
-    leaf_state,  # leaf_id -> bint
-    state_trans,  # time * category * category -> prob
-):
-    times = phylo.times.round().long()  # batch * node_id -> time
-    # TODO collapse lineages that are alive for zero duration.
-    batch_size, num_nodes = times.shape
-    parents = phylo.parents  # batch * node_id -> {-1} + node_id
-    leaves = phylo.leaves  # leaf_id -> node_id
-    T0 = times.min().item()
-    T1 = times.max().item()
+            # Merge existing lineages.
+            pi = parents[nodes]
+            nodes, order = torch.where(times[pi] == t, pi, nodes) \
+                                .unique(return_inverse=True)
+            logps = logps.new_zeros(nodes.shape).scatter_add(0, order, logps)
 
-    # Convert the batch of trees to a forest.
-    # Let bnode_id = batch * num_nodes + node_id.
-    times = times.reshape(-1)
-    parents = parents + torch.arange(batch_size).unsqueeze(-1) * num_nodes
-    parents[0] = torch.arange(batch_size) - batch_size
-    parents = parents.reshape(-1)
-    # Keep leaf_state unexpanded until we use replicate_leaves().
-    batch_shift = torch.arange(batch_size).mul(num_nodes).unsqueeze(-1)
+            # Add new lineages.
+            t0 = max(0, min(T, t - T0))
+            t1 = max(0, min(T, t - T0 + 1))
+            beg, end = map(int, leaf_strata[t0:t1])
+            if beg != end:
+                new_nodes = leaves[beg:end]
+                new_logps = _log_one_hot((end - beg, N), leaf_state[beg:end])
+                nodes = torch.cat([nodes, new_nodes], 0)
+                logps = torch.cat([logps, new_logps], 0)
 
-    def replicate_leaves(index, data):
-        assert index.shape == data.shape
-        index = index.add(batch_shift).reshape(-1)
-        data = data.expand([batch_size, -1]).reshape(-1)
-
-    # Construct a schedule of leaf births; we do not need to track births of
-    # internal nodes, since they are introduced by their children.
-    birth_index = torch.zeros(T1 - T0 + 1, dtype=torch.long) \
-                       .scatter_add_(0, times[leaves] - T0) \
-                       .cumsum(0)
-    birth_data = leaves[times[leaves].sort(0).index]
-
-    # Initialize sparse log_prob state at latest time.
-    T, N, N = state_trans.shape
-    index = birth_data[birth_index[T1 - T0 - 1]:]
-    state = _log_one_hot(index.shape, leaf_state)
-    index, state = replicate_leaves(index, state)
-
-    # Sequentially propagate backward in time.
-    finfo = torch.finfo(state.dtype)
-    for t in range(T1 - 1, T0 - 1, -1):
-        # Update each lineage's distribution independently.
-        shift = state.detach().max(-1, True).values.clamp_(min=finfo.min)
-        v = (state - shift).exp()
-        v = v @ state_trans[max(0, min(T - 1, t))].t()
-        state = v.log() + shift
-
-        # Merge existing lineages.
-        pi = parents[index]
-        alive_mask = times[pi] != t
-        index, order = torch.where(alive_mask, index, pi) \
-                            .unique(return_inverse=True)
-        state = state.new_zeros().scatter_add(0, order, state)
-
-        # Add new lineages.
-        beg, end = birth_index[t - T0:t - T0 + 1]
-        if beg != end:
-            new_index = birth_data[beg:end]
-            new_state = _log_one_hot(new_index.shape + (N,), leaf_state[new_index])
-            new_index, new_state = replicate_leaves(new_index, new_state)
-            index = torch.cat([index, new_index], 0)
-            state = torch.cat([state, new_state], 0)
-
-    # Marginalize over root states.
-    log_prob = state.logsumexp(dim=-1)
-    log_prob = log_prob[index.sort().indices].contiguous()
-    return log_prob
+        # Marginalize over root states.
+        logps = logps.logsumexp(dim=-1)
+        logps = logps[nodes.sort().indices].contiguous()
+        return logps
 
 
 def _log_one_hot(shape, index):
