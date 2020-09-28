@@ -5,6 +5,8 @@ import pyro.distributions as dist
 import torch
 from pyro.distributions import constraints, is_validation_enabled
 
+from .util import weak_memoize_by_id
+
 
 class Phylogeny:
     """
@@ -139,12 +141,15 @@ class MarkovTree(dist.TorchDistribution):
         "transition": constraints.IndependentConstraint(constraints.simplex, 2),
     }
 
-    def __init__(self, phylogeny, transition):
+    def __init__(self, phylogeny, transition, *,
+                 method="likelihood"):
         assert isinstance(transition, torch.Tensor)
         assert isinstance(phylogeny, Phylogeny)
         assert transition.dim() in (2, 3)
         self.num_states = transition.size(-1)
         assert transition.size(-2) == self.num_states
+        assert isinstance(method, str)
+        self.method = method
         self.phylogeny = phylogeny
         self.transition = transition
         batch_shape = phylogeny.batch_shape
@@ -157,7 +162,14 @@ class MarkovTree(dist.TorchDistribution):
             constraints.integer_interval(0, self.num_states), 1)
 
     def log_prob(self, leaf_state):
-        return markov_log_prob(self.phylogeny, leaf_state, self.transition)
+        if self.method == "naive":
+            return markov_log_prob(self.phylogeny, leaf_state, self.transition)
+        elif self.method == "likelihood":
+            # This likelihood object is memoized across model invocations.
+            likelihood = markov_tree_likelihood(self.phylogeny, leaf_state)
+            return likelihood(self.transition)
+        else:
+            raise NotImplementedError(f"Unknown implementation: {self.method}")
 
 
 def markov_log_prob(phylo, leaf_state, state_trans):
@@ -301,7 +313,6 @@ class MarkovTreeLikelihood:
         self,
         phylo,  # batched Phylogeny
         leaf_state,  # leaf_id -> category
-        num_states,  # int
     ):
         times = phylo.times.round().long()  # batch * node_id -> time
         batch_size, num_nodes = times.shape
@@ -342,11 +353,6 @@ class MarkovTreeLikelihood:
             logging.debug(f"collapsing {len(nodes)} parent-child pairs")
             parents[nodes] = parents[parents[nodes]]
 
-        # Initialize sparse log_prob state at latest time.
-        beg, end = map(int, leaf_strata[T1 - T0 - 1:])
-        nodes = leaves[beg:end]
-        logps = _log_one_hot(nodes.shape, leaf_state[beg:end])
-
         # Save.
         self.sizes = T0, T1
         self.times = times
@@ -354,8 +360,6 @@ class MarkovTreeLikelihood:
         self.leaves = leaves
         self.leaf_state = leaf_state
         self.leaf_strata = leaf_strata
-        self.init_nodes = nodes
-        self.init_logps = logps
 
     def __call__(
         self,
@@ -377,7 +381,11 @@ class MarkovTreeLikelihood:
         leaf_state = self.leaf_state
         leaf_strata = self.leaf_strata
         nodes = self.init_nodes
-        logps = self.init_logps
+
+        # Initialize sparse log_prob state at latest time.
+        beg, end = map(int, leaf_strata[T1 - T0 - 1:])
+        nodes = leaves[beg:end]
+        logps = _log_one_hot(nodes.shape + (N,), leaf_state[beg:end])
 
         # Sequentially propagate backward in time.
         finfo = torch.finfo(logps.dtype)
@@ -386,7 +394,7 @@ class MarkovTreeLikelihood:
             shift = logps.detach().max(-1, True).values.clamp_(min=finfo.min)
             v = (logps - shift).exp()
             v = v @ state_trans[max(0, min(T - 1, t))].t()
-            logps = v.log() + shift
+            logps = v.clamp(min=1e-5).log() + shift
 
             # Merge existing lineages.
             pi = parents[nodes]
@@ -408,6 +416,9 @@ class MarkovTreeLikelihood:
         logps = logps.logsumexp(dim=-1)
         logps = logps[nodes.sort().indices].contiguous()
         return logps
+
+
+markov_tree_likelihood = weak_memoize_by_id(MarkovTreeLikelihood)
 
 
 def _log_one_hot(shape, index):
