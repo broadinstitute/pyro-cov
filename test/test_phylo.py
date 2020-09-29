@@ -49,13 +49,14 @@ def test_generate_batch(num_leaves, num_samples):
     Phylogeny.generate(num_leaves, num_samples=num_samples)
 
 
-@pytest.mark.xfail(reason="TODO")
+@pytest.mark.xfail(reason="disagreement")
 @pytest.mark.parametrize("num_leaves", [2, 12, 22])
 @pytest.mark.parametrize("num_states", [3, 7])
 @pytest.mark.parametrize("duration", [1, 5])
 def test_markov_tree_log_prob(duration, num_leaves, num_states):
     phylo = Phylogeny.generate(num_leaves, num_samples=4)
     phylo.times.mul_(duration * 0.25).add_(0.75 * duration)
+    phylo.times = phylo.times.round()  # Required for agreement.
 
     leaf_state = dist.Categorical(torch.ones(num_states)).sample([num_leaves])
 
@@ -71,6 +72,7 @@ def test_markov_tree_log_prob(duration, num_leaves, num_states):
     logp2 = dist2.log_prob(leaf_state)
     assert torch.allclose(logp1, logp2)
 
-    grad1 = torch.autograd.grad(logp1.sum(), [leaf_state])[0]
-    grad2 = torch.autograd.grad(logp2.sum(), [leaf_state])[0]
-    assert torch.allclose(grad1, grad2)
+    # FIXME method="naive" does not support gradients.
+    # grad1 = torch.autograd.grad(logp1.sum(), [state_trans])[0]
+    torch.autograd.grad(logp2.sum(), [state_trans])[0]
+    # assert torch.allclose(grad1, grad2)

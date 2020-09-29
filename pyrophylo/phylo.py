@@ -8,6 +8,8 @@ from pyro.distributions import constraints, is_validation_enabled
 
 from .util import weak_memoize_by_id
 
+logger = logging.getLogger(__name__)
+
 
 class Phylogeny:
     """
@@ -34,9 +36,9 @@ class Phylogeny:
         if __debug__:
             _parents = parents[..., 1:]
             is_leaf_1 = torch.ones_like(parents, dtype=torch.bool)
-            is_leaf_1.scatter_(-1, _parents, is_leaf_1.new_zeros(_parents.shape))
+            is_leaf_1.scatter_(-1, _parents, False)
             is_leaf_2 = torch.zeros_like(is_leaf_1)
-            is_leaf_2.scatter_(-1, leaves, is_leaf_2.new_ones(leaves.shape))
+            is_leaf_2.scatter_(-1, leaves, True)
             assert (is_leaf_1.sum(-1) == num_leaves).all()
             assert (is_leaf_2.sum(-1) == num_leaves).all()
             assert (is_leaf_2 == is_leaf_1).all()
@@ -74,8 +76,7 @@ class Phylogeny:
 
     def num_lineages(self):
         _parents = self.parents[..., 1:]
-        sign = torch.ones_like(self.parents)
-        sign.scatter_(-1, _parents, sign.new_full(_parents.shape, -1.))
+        sign = torch.ones_like(self.parents).scatter_(-1, _parents, -1.)
         num_lineages = sign.flip(-1).cumsum(-1).flip(-1)
         return num_lineages
 
@@ -256,6 +257,7 @@ def markov_log_prob(phylo, leaf_state, state_trans):
     # Dynamic programming along the tree.
     for i in range(-1, -num_nodes, -1):
         j = parents[i]
+        # FIXME this breaks gradients.
         logp[j] += _interpolate_lmve(times[j], times[i], state_trans, logp[i])
     logp = logp[0].logsumexp(-1)
     return logp
@@ -344,6 +346,10 @@ class MarkovTreeLikelihood:
         like = MarkovTreeLikelihood(phylo, leaf_state, state_trans.size(-1))
         return like(state_trans)
 
+    This is invariant under adding new single-child nodes along branches;
+    thus polysemy can be faithfully encoded by converting a >2-way branching
+    tree to a binary tree by adding fake nodes.
+
     :param Phylogeny phylo: A phylogeny or batch of phylogenies.
     :param Tensor leaf_state: int tensor of states of all leaf nodes.
     """
@@ -359,37 +365,57 @@ class MarkovTreeLikelihood:
         T0 = times.min().item()
         T1 = times.max().item()
 
+        # Ensure all root-to-leaf paths have positive duration,
+        # as required by the propagation algorithm in .__call__().
+        # We accomplish this by appending new root nodes at time T0-1.
+        old_root_id = 0
+        new_root_id = num_nodes
+        new_root_time = T0 - 1
+        num_nodes += 1
+        times = torch.nn.functional.pad(times, (0, 1), value=new_root_time)
+        parents = torch.nn.functional.pad(parents, (0, 1), value=-1)
+        parents[:, old_root_id] = new_root_id
+        T0 = new_root_time
+        assert (parents == -1).sum() == batch_size
+
         # Flatten the batch of trees to a forest.
         # Let bnode_id = batch * num_nodes + node_id.
         #     bleaf_id = batch * num_leaves + leaf_id.
         times = times.reshape(-1)
         batch_expand = (torch.arange(batch_size) * num_nodes).unsqueeze(-1)
         parents = parents + batch_expand
-        parents[0] = -1  # Retain nonce.
+        parents[:, new_root_id] = -1  # Retain nonce.
         parents = parents.reshape(-1)
         leaves = (leaves + batch_expand).reshape(-1)
         leaf_state = leaf_state.expand(batch_size, -1).reshape(-1)
+        assert (parents == -1).sum() == batch_size
         # Now times : bnode_id -> time
         #     parents : bnode_id -> bnode_id
         #     leaves : Set[bnode_id]
         #     leaf_state : bleaf_id -> category
+
+        # Collapse segments of zero duration,
+        # as required by the propagation algorithm in .__call__().
+        not_root = (parents != -1)
+        while True:
+            children = ((times[parents] == times) & not_root).nonzero()
+            if not children.numel():
+                break
+            logger.debug(f"collapsing {len(children)} parent-child pairs")
+            assert (parents[children] != -1).all()
+            parents[children] = parents[parents[children]]
 
         # Sort and stratify leaves by time. Strata are represented as
         # leaf_strata : time -> Set[bleaf_id].
         order = times[leaves].sort().indices
         leaves = leaves[order]
         leaf_state = leaf_state[order]
-        leaf_strata = torch.zeros(T1 - T0 + 1, dtype=torch.long) \
-                           .scatter_add_(0, times[leaves] - T0) \
-                           .cumsum(0)
-
-        # Collapse lineages that are alive for zero duration.
-        while True:
-            nodes = (times[parents] == times).nonzero()
-            if not nodes.shape:
-                break
-            logging.debug(f"collapsing {len(nodes)} parent-child pairs")
-            parents[nodes] = parents[parents[nodes]]
+        ones = torch.ones(()).expand_as(leaves)
+        leaf_strata = torch.zeros(T1 - T0 + 2) \
+                           .scatter_add_(0, times[leaves] - T0 + 1, ones) \
+                           .cumsum(0).long()
+        assert leaf_strata[0] == 0
+        assert leaf_strata[-1] == len(leaves)
 
         # Save.
         self.sizes = T0, T1
@@ -418,10 +444,9 @@ class MarkovTreeLikelihood:
         leaves = self.leaves
         leaf_state = self.leaf_state
         leaf_strata = self.leaf_strata
-        nodes = self.init_nodes
 
         # Initialize sparse log_prob state at latest time.
-        beg, end = map(int, leaf_strata[T1 - T0 - 1:])
+        beg, end = map(int, leaf_strata[-2:])
         nodes = leaves[beg:end]
         logps = _log_one_hot(nodes.shape + (N,), leaf_state[beg:end])
 
@@ -438,12 +463,11 @@ class MarkovTreeLikelihood:
             pi = parents[nodes]
             nodes, order = torch.where(times[pi] == t, pi, nodes) \
                                 .unique(return_inverse=True)
-            logps = logps.new_zeros(nodes.shape).scatter_add(0, order, logps)
+            order = order.unsqueeze(-1).expand_as(logps)
+            logps = logps.new_zeros(nodes.shape + (N,)).scatter_add(0, order, logps)
 
             # Add new lineages.
-            t0 = max(0, min(T, t - T0))
-            t1 = max(0, min(T, t - T0 + 1))
-            beg, end = map(int, leaf_strata[t0:t1])
+            beg, end = map(int, leaf_strata[t - T0:t - T0 + 2])
             if beg != end:
                 new_nodes = leaves[beg:end]
                 new_logps = _log_one_hot((end - beg, N), leaf_state[beg:end])
@@ -460,6 +484,4 @@ markov_tree_likelihood = weak_memoize_by_id(MarkovTreeLikelihood)
 
 
 def _log_one_hot(shape, index):
-    neg_inf = torch.tensor(-math.inf).expand(shape)
-    zero = torch.tensor(0.).expand(index.shape)
-    return neg_inf.scatter(-1, index, zero)
+    return torch.full(shape, -math.inf).scatter_(-1, index.unsqueeze(-1), 0.)
