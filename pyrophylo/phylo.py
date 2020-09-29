@@ -1,6 +1,7 @@
 import logging
 import math
 
+import numpy as np
 import pyro.distributions as dist
 import torch
 from pyro.distributions import constraints, is_validation_enabled
@@ -129,9 +130,46 @@ class Phylogeny:
 
         return Phylogeny(times, parents, leaves)
 
+    @staticmethod
+    def generate(num_leaves, *, num_samples=None):
+        """
+        Generate a random (arbitrarily distributed) phylogeny for testing.
+        """
+        if num_samples is not None:
+            return Phylogeny.stack(Phylogeny.generate(num_leaves)
+                                   for _ in range(num_samples))
+        num_nodes = 2 * num_leaves - 1
+        times = torch.randn(num_nodes)
+        nodes = list(range(num_leaves))
+        parents = torch.zeros(num_nodes, dtype=torch.long)
+        for w in range(num_leaves, num_nodes):
+            i, j = np.random.choice(len(nodes), 2, replace=False)
+            u = nodes[i]
+            v = nodes[j]
+            nodes[i] = w
+            del nodes[j]
+            parents[u] = w
+            parents[v] = w
+            times[w] = torch.min(times[u], times[v]) - torch.rand(()) / num_leaves
+        assert len(nodes) == 1
+        leaves = torch.arange(num_leaves)
+
+        # Sort results.
+        times, new2old = times.sort()
+        old2new = torch.empty(num_nodes, dtype=torch.long)
+        old2new[new2old] = torch.arange(num_nodes)
+        assert new2old[0] == nodes[0]
+        leaves = old2new[leaves]
+        parents = old2new[parents[new2old]]
+        parents[0] = -1
+        return Phylogeny(times, parents, leaves)
+
 
 class MarkovTree(dist.TorchDistribution):
     """
+    Joint distribution over states of leaves of a phylogenetic tree whose
+    branches define a discrete-state Markov process.
+
     :param Phylogeny phylo: A phylogeny or batch of phylogenies.
     :param Tensor state_trans: Either a homogeneous reverse-time state
         transition matrix, or a heterogeneous grid of ``T`` transition matrices
