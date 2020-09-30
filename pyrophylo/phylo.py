@@ -394,26 +394,13 @@ class MarkovTreeLikelihood:
         T0 = times.min().item()
         T1 = times.max().item()
 
-        # Ensure all root-to-leaf paths have positive duration,
-        # as required by the propagation algorithm in .__call__().
-        # We accomplish this by appending new root nodes at time T0-1.
-        old_root_id = 0
-        new_root_id = num_nodes
-        new_root_time = T0 - 1
-        num_nodes += 1
-        times = torch.nn.functional.pad(times, (0, 1), value=new_root_time)
-        parents = torch.nn.functional.pad(parents, (0, 1), value=-1)
-        parents[:, old_root_id] = new_root_id
-        T0 = new_root_time
-        assert (parents == -1).sum() == batch_size
-
         # Flatten the batch of trees to a forest.
         # Let bnode_id = batch * num_nodes + node_id.
         #     bleaf_id = batch * num_leaves + leaf_id.
         times = times.reshape(-1)
         batch_expand = (torch.arange(batch_size) * num_nodes).unsqueeze(-1)
         parents = parents + batch_expand
-        parents[:, new_root_id] = -1  # Retain nonce.
+        parents[:, 0] = -1  # Retain nonce.
         parents = parents.reshape(-1)
         leaves = (leaves + batch_expand).reshape(-1)
         leaf_state = leaf_state.expand(batch_size, -1).reshape(-1)
@@ -474,43 +461,37 @@ class MarkovTreeLikelihood:
         leaves = self.leaves
         leaf_state = self.leaf_state
         leaf_strata = self.leaf_strata
-        print(f"DEBUG likelhood parents =\n{parents}")
-        print(f"DEBUG likelhood times =\n{times}")
-
-        # Initialize sparse log_prob state at latest time.
-        beg, end = map(int, leaf_strata[-2:])
-        nodes = leaves[beg:end]
-        logps = _log_one_hot(nodes.shape + (N,), leaf_state[beg:end])
-
-        # DEBUG
-        for n, logp in zip(nodes, logps):
-            print(f"DEBUG likelihood logp[{n}] = {logp}")
+        print(f"DEBUG likelihood parents =\n{parents}")
+        print(f"DEBUG likelihood times =\n{times}")
 
         # Sequentially propagate backward in time.
+        nodes = parents.new_empty((0,))
+        logps = state_trans.new_empty((0,))
         finfo = torch.finfo(logps.dtype)
-        for t in range(T1 - 1, T0 - 1, -1):
-            # Update each lineage's distribution independently.
-            shift = logps.detach().max(-1, True).values.clamp_(min=finfo.min)
-            v = (logps - shift).exp()
-            v = v @ state_trans[max(0, min(T - 1, t))]
-            logps = v.log() + shift  # TODO use safe_log?
+        for t in range(T1, T0 - 1, -1):
+            # Update each existing lineage's state distribution independently.
+            if nodes.numel():
+                shift = logps.detach().max(-1, True).values.clamp_(min=finfo.min)
+                v = (logps - shift).exp()
+                v = v @ state_trans[max(0, min(T - 1, t))]
+                logps = v.log() + shift  # TODO use safe_log?
+                # TODO Lazily convert between (exp,shift) <--> log representations.
 
-            # TODO Lazily convert between (exp,shift) <--> log representations.
-
-            # Merge existing lineages.
-            pi = parents[nodes]
-            nodes, order = torch.where(times[pi] == t, pi, nodes) \
-                                .unique(return_inverse=True)
-            order = order.unsqueeze(-1).expand_as(logps)
-            logps = logps.new_zeros(nodes.shape + (N,)).scatter_add(0, order, logps)
-
-            # Add new lineages.
-            beg, end = map(int, leaf_strata[t - T0:t - T0 + 2])
-            if beg != end:
-                new_nodes = leaves[beg:end]
-                new_logps = _log_one_hot((end - beg, N), leaf_state[beg:end])
+            # Add new leaf lineages ("birth").
+            beg, end = leaf_strata[t - T0:t - T0 + 2]
+            new_nodes = leaves[beg:end]
+            if new_nodes.numel():
+                new_logps = _log_one_hot(new_nodes.shape + (N,), leaf_state[beg:end])
                 nodes = torch.cat([nodes, new_nodes], 0)
                 logps = torch.cat([logps, new_logps], 0)
+
+            # Merge lineages, replacing children by parents ("death").
+            pi = parents[nodes]
+            to_merge = times[pi] == t
+            if to_merge.any():
+                nodes, order = torch.where(to_merge, pi, nodes).unique(return_inverse=True)
+                order = order.unsqueeze(-1).expand_as(logps)
+                logps = logps.new_zeros(nodes.shape + (N,)).scatter_add(0, order, logps)
 
             # DEBUG
             for n, logp in zip(nodes, logps):

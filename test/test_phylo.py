@@ -59,8 +59,7 @@ def test_generate_batch(num_leaves, num_samples):
 @pytest.mark.parametrize("num_samples", [1, 2])
 def test_markov_tree_log_prob(num_samples, duration, num_leaves, num_states):
     phylo = Phylogeny.generate(num_leaves, num_samples=num_samples)
-    # phylo.times.mul_(duration * 0.25).add_(0.75 * duration)
-    phylo.times.add_(0.5 * duration)  # DEBUG
+    phylo.times.mul_(duration * 0.25).add_(0.75 * duration)
     phylo.times.round_()  # Required for naive-vs-likelihood agreement.
 
     leaf_state = dist.Categorical(torch.ones(num_states)).sample([num_leaves])
