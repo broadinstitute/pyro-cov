@@ -176,8 +176,8 @@ class MarkovTree(dist.TorchDistribution):
     :param Tensor state_trans: Either a homogeneous reverse-time state
         transition matrix, or a heterogeneous grid of ``T`` transition matrices
         applying to time intervals ``(-inf,1]``, ``(1,2]``, ..., ``(T-1,inf)``.
-        These are oriented such that ``earlier_probs[...,None] = state_trans @
-        later_probs[...,None]``.
+        These are oriented such that ``earlier_probs = later_probs @
+        state_trans``.
     :param str method: Either "likeliood" for vectorized computation or "naive"
         for sequential computation. The "likelihood" method rounds times to the
         nearest integer; the "naive" method allows non-integer times but
@@ -240,8 +240,8 @@ def markov_log_prob(phylo, leaf_state, state_trans):
     :param Tensor state_trans: Either a homogeneous reverse-time state
         transition matrix, or a heterogeneous grid of ``T`` transition matrices
         applying to time intervals ``(-inf,1]``, ``(1,2]``, ..., ``(T-1,inf)``.
-        These are oriented such that ``earlier_probs[...,None] = state_trans @
-        later_probs[...,None]``.
+        These are oriented such that ``earlier_probs = later_probs @
+        state_trans``.
     :returns: Marginal log probability of data ``leaf_state``.
     :rtype: Tensor
     """
@@ -257,7 +257,7 @@ def markov_log_prob(phylo, leaf_state, state_trans):
     assert state_trans.dim() in (2, 3)  # homogeneous, heterogeneous
     assert state_trans.shape[-2:] == (num_states, num_states)
     if is_validation_enabled():
-        constraints.simplex.check(state_trans.exp())
+        constraints.simplex.check(state_trans)
     times = phylo.times
     parents = phylo.parents
     leaves = phylo.leaves
@@ -272,13 +272,15 @@ def markov_log_prob(phylo, leaf_state, state_trans):
     for i in range(-1, -num_nodes, -1):
         j = parents[i]
         logp[j] = logp[j] + _interpolate_lmve(times[j], times[i], state_trans, logp[i])
+    print(f"DEBUG {torch.stack(logp)}")
     logp = logp[0].logsumexp(-1)
+    assert not torch.isnan(logp).any()
     return logp
 
 
 def _mpm(m, t, v):
     """
-    Like ``m.matrix_power(t) @ v`` but
+    Like ``v @ m.matrix_power(t)`` but
     approximates fractional powers via linear interpolation.
     """
     assert t >= 0
@@ -287,9 +289,9 @@ def _mpm(m, t, v):
     t_int = t.floor()
     t_frac = t - t_int
     if t_int:
-        v = m.matrix_power(int(t_int)) @ v
+        v = v @ m.matrix_power(int(t_int))
     if t_frac:
-        v = v + t_frac * (m @ v - v)  # linear approximation
+        v = v + t_frac * (v @ m - v)  # linear approximation
     return v
 
 
@@ -330,7 +332,7 @@ def _interpolate_mm(t0, t1, m, v):
     v = _mpm(m[..., t, :, :], t1 - t1_floor, v)
 
     for t in range(t1_floor - 1, t0_ceil - 1, -1):
-        v = m[..., t, :, :] @ v
+        v = v @ m[..., t, :, :]
 
     t = t0_ceil - 1
     v = _mpm(m[..., t, :, :], t0_ceil - t0, v)
@@ -341,11 +343,10 @@ def _interpolate_mm(t0, t1, m, v):
 def _interpolate_lmve(t0, t1, matrix, log_vector):
     if t0 == t1:
         return log_vector
-    shift = log_vector.logsumexp(dim=-1, keepdim=True)
+    finfo = torch.finfo(log_vector.dtype)
+    shift = log_vector.detach().max(-1, True).values.clamp_(min=finfo.min)
     v = (log_vector - shift).exp()
-    v = v.unsqueeze(-1)
     v = _interpolate_mm(t0, t1, matrix, v)
-    v = v.squeeze(-1)
     return v.log() + shift
 
 
@@ -450,8 +451,8 @@ class MarkovTreeLikelihood:
         :param Tensor state_trans: Either a homogeneous reverse-time state
             transition matrix, or a heterogeneous grid of ``T`` transition
             matrices applying to time intervals ``(-inf,1]``, ``(1,2]``, ...,
-            ``(T-1,inf)``. These are oriented such that
-            ``earlier_probs[...,None] = state_trans @ later_probs[...,None]``.
+            ``(T-1,inf)``. These are oriented such that ``earlier_probs =
+            later_probs @ state_trans``.
         :returns: Marginal log probability of data ``leaf_state``.
         :rtype: Tensor
         """
@@ -474,7 +475,7 @@ class MarkovTreeLikelihood:
             # Update each lineage's distribution independently.
             shift = logps.detach().max(-1, True).values.clamp_(min=finfo.min)
             v = (logps - shift).exp()
-            v = v @ state_trans[max(0, min(T - 1, t))].t()
+            v = v @ state_trans[max(0, min(T - 1, t))]
             logps = v.clamp(min=1e-5).log() + shift
 
             # Merge existing lineages.
@@ -495,6 +496,7 @@ class MarkovTreeLikelihood:
         # Marginalize over root states.
         logps = logps.logsumexp(dim=-1)
         logps = logps[nodes.sort().indices].contiguous()
+        assert not torch.isnan(logps).any()
         return logps
 
 

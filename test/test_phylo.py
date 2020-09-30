@@ -5,28 +5,32 @@ import torch
 from pyrophylo.phylo import MarkovTree, Phylogeny, _interpolate_lmve, _mpm
 
 
-@pytest.mark.parametrize("shape", [(), (4,), (3, 2)], ids=str)
-@pytest.mark.parametrize("size", [5])
-def test_mpm(shape, size):
-    matrix = torch.randn(shape + (size, size)).exp()
-    matrix /= matrix.logsumexp(dim=-2, keepdim=True)  # Make stochastic.
+def grad(output, inputs, **kwargs):
+    if not output.requires_grad:
+        return list(map(torch.zeros_like, inputs))
+    return torch.autograd.grad(output, inputs, **kwargs)
+
+
+@pytest.mark.parametrize("size", range(2, 10))
+def test_mpm(size):
+    matrix = torch.randn(size, size).exp()
+    matrix /= matrix.sum(dim=-1, keepdim=True)  # Make stochastic.
     matrix = (matrix + 4 * torch.eye(size)) / 5  # Make diagonally dominant.
-    vector = torch.randn(shape + (size, 1))
+    vector = torch.randn(size)
 
     for t in range(0, 10):
-        expected = matrix.matrix_power(t) @ vector
+        expected = vector @ matrix.matrix_power(t)
         actual = _mpm(matrix, torch.tensor(float(t)), vector)
 
     assert actual.shape == expected.shape
     assert torch.allclose(actual, expected)
 
 
-@pytest.mark.parametrize("shape", [(), (4,), (3, 2)], ids=str)
-@pytest.mark.parametrize("size", [5])
+@pytest.mark.parametrize("size", [2, 3, 4, 5])
 @pytest.mark.parametrize("duration", [1, 2, 3, 4, 5])
-def test_interpolate_lmve_smoke(shape, size, duration):
-    matrix = torch.randn(shape + (duration, size, size)).exp()
-    log_vector = torch.randn(shape + (size,))
+def test_interpolate_lmve_smoke(size, duration):
+    matrix = torch.randn(duration, size, size).exp()
+    log_vector = torch.randn(size)
     t0 = -0.6
     while t0 < duration + 0.9:
         t1 = t0 + 0.2
@@ -51,19 +55,19 @@ def test_generate_batch(num_leaves, num_samples):
 
 @pytest.mark.xfail(reason="disagreement")
 @pytest.mark.parametrize("num_states", [3, 7])
-@pytest.mark.parametrize("num_leaves", [2, 12, 22])
+@pytest.mark.parametrize("num_leaves", [2, 4, 16, 17])
 @pytest.mark.parametrize("duration", [1, 5])
 def test_markov_tree_log_prob(duration, num_leaves, num_states):
-    phylo = Phylogeny.generate(num_leaves, num_samples=4)
+    phylo = Phylogeny.generate(num_leaves, num_samples=2)
     phylo.times.mul_(duration * 0.25).add_(0.75 * duration)
     phylo.times.round_()  # Required for naive-likelihood agreement.
 
     leaf_state = dist.Categorical(torch.ones(num_states)).sample([num_leaves])
 
     state_trans = torch.randn(duration, num_states, num_states).mul(0.1).exp()
-    state_trans /= state_trans.sum(dim=-2, keepdim=True)
+    state_trans /= state_trans.sum(dim=-1, keepdim=True)
     state_trans += torch.eye(num_states)
-    state_trans /= state_trans.sum(dim=-2, keepdim=True)
+    state_trans /= state_trans.sum(dim=-1, keepdim=True)
     state_trans.requires_grad_()
 
     dist1 = MarkovTree(phylo, state_trans, method="naive")
@@ -73,6 +77,6 @@ def test_markov_tree_log_prob(duration, num_leaves, num_states):
     logp2 = dist2.log_prob(leaf_state)
     assert torch.allclose(logp1, logp2)
 
-    grad1 = torch.autograd.grad(logp1.sum(), [state_trans])[0]
-    grad2 = torch.autograd.grad(logp2.sum(), [state_trans])[0]
+    grad1 = grad(logp1.sum(), [state_trans], allow_unused=True)[0]
+    grad2 = grad(logp2.sum(), [state_trans], allow_unused=True)[0]
     assert torch.allclose(grad1, grad2)
