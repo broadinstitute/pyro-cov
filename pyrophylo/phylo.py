@@ -5,6 +5,8 @@ import numpy as np
 import pyro.distributions as dist
 import torch
 from pyro.distributions import constraints, is_validation_enabled
+from pyro.ops.special import safe_log
+from pyro.util import warn_if_nan
 
 from .util import weak_memoize_by_id
 
@@ -152,7 +154,7 @@ class Phylogeny:
             del nodes[j]
             parents[u] = w
             parents[v] = w
-            times[w] = torch.min(times[u], times[v]) - 4 - torch.rand(()) / num_leaves
+            times[w] = torch.min(times[u], times[v]) - torch.rand(()) / num_leaves
         assert len(nodes) == 1
         leaves = torch.arange(num_leaves)
 
@@ -261,6 +263,7 @@ def markov_log_prob(phylo, leaf_state, state_trans):
     times = phylo.times
     parents = phylo.parents
     leaves = phylo.leaves
+    finfo = torch.finfo(state_trans.dtype)
     print(f"DEBUG naive parents =\n{parents}")
     print(f"DEBUG naive times =\n{times}")
 
@@ -279,8 +282,8 @@ def markov_log_prob(phylo, leaf_state, state_trans):
         j = parents[i]
         logp[j] = logp[j] + _interpolate_lmve(times[j], times[i], state_trans, logp[i])
         print(f"DEBUG naive logp[{j}] = {logp[j]}")
-    logp = logp[0].logsumexp(dim=-1)
-    assert not torch.isnan(logp).any()
+    logp = logp[0].clamp(min=finfo.min).logsumexp(dim=-1)
+    warn_if_nan(logp, "logp")
     return logp
 
 
@@ -358,7 +361,7 @@ def _interpolate_lmve(t0, t1, matrix, log_vector):
     shift = log_vector.detach().max(-1, True).values.clamp_(min=finfo.min)
     v = (log_vector - shift).exp()
     v = _interpolate_mm(t0, t1, matrix, v)
-    return v.log() + shift  # TODO use safe_log?
+    return safe_log(v) + shift
 
 
 class MarkovTreeLikelihood:
@@ -410,15 +413,17 @@ class MarkovTreeLikelihood:
         #     leaves : Set[bnode_id]
         #     leaf_state : bleaf_id -> category
 
-        # Collapse segments of zero duration,
+        # Collapse parent-grandparent relationships of zero duration,
         # as required by the propagation algorithm in .__call__().
-        not_root = (parents != -1)
+        has_parent = (parents != -1)
         while True:
-            children = ((times[parents] == times) & not_root).nonzero()
+            has_gparent = has_parent & has_parent[parents]
+            ptimes = times[parents]
+            gptimes = ptimes[parents]
+            children = (has_gparent & (gptimes == ptimes)).nonzero()
             if not children.numel():
                 break
-            logger.debug(f"collapsing {len(children)} parent-child pairs")
-            assert (parents[children] != -1).all()
+            logger.debug(f"collapsing parent-grandparent of {len(children)} children")
             parents[children] = parents[parents[children]]
 
         # Sort and stratify leaves by time. Strata are represented as
@@ -434,6 +439,7 @@ class MarkovTreeLikelihood:
         assert leaf_strata[-1] == len(leaves)
 
         # Save.
+        self.batch_size = batch_size
         self.sizes = T0, T1
         self.times = times
         self.parents = parents
@@ -461,20 +467,20 @@ class MarkovTreeLikelihood:
         leaves = self.leaves
         leaf_state = self.leaf_state
         leaf_strata = self.leaf_strata
+        finfo = torch.finfo(state_trans.dtype)
         print(f"DEBUG likelihood parents =\n{parents}")
         print(f"DEBUG likelihood times =\n{times}")
 
         # Sequentially propagate backward in time.
         nodes = parents.new_empty((0,))
         logps = state_trans.new_empty((0,))
-        finfo = torch.finfo(logps.dtype)
         for t in range(T1, T0 - 1, -1):
             # Update each existing lineage's state distribution independently.
             if nodes.numel():
                 shift = logps.detach().max(-1, True).values.clamp_(min=finfo.min)
                 v = (logps - shift).exp()
                 v = v @ state_trans[max(0, min(T - 1, t))]
-                logps = v.log() + shift  # TODO use safe_log?
+                logps = safe_log(v) + shift  # TODO use safe_log?
                 # TODO Lazily convert between (exp,shift) <--> log representations.
 
             # Add new leaf lineages ("birth").
@@ -496,11 +502,12 @@ class MarkovTreeLikelihood:
             # DEBUG
             for n, logp in zip(nodes, logps):
                 print(f"DEBUG likelihood logp[{n}] = {logp}")
+        assert nodes.shape == (self.batch_size,)
 
         # Marginalize over root states.
-        logps = logps.logsumexp(dim=-1)
+        logps = logps.clamp(min=finfo.min).logsumexp(dim=-1)
         logps = logps[nodes.sort().indices].contiguous()
-        assert not torch.isnan(logps).any()
+        warn_if_nan(logps, "logps")
         return logps
 
 

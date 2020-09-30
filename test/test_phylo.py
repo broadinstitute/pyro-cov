@@ -56,7 +56,7 @@ def test_generate_batch(num_leaves, num_samples):
 @pytest.mark.parametrize("num_states", [3, 7])
 @pytest.mark.parametrize("num_leaves", [4, 16, 17])
 @pytest.mark.parametrize("duration", [1, 5])
-@pytest.mark.parametrize("num_samples", [1, 2])
+@pytest.mark.parametrize("num_samples", [1, 2, 3])
 def test_markov_tree_log_prob(num_samples, duration, num_leaves, num_states):
     phylo = Phylogeny.generate(num_leaves, num_samples=num_samples)
     phylo.times.mul_(duration * 0.25).add_(0.75 * duration)
@@ -78,8 +78,8 @@ def test_markov_tree_log_prob(num_samples, duration, num_leaves, num_states):
     logp2 = dist2.log_prob(leaf_state)
     assert torch.allclose(logp1, logp2)
 
-    grad1 = grad(logp1.sum(), [state_trans], allow_unused=True)[0]
-    grad2 = grad(logp2.sum(), [state_trans], allow_unused=True)[0]
+    grad1 = grad(logp1.logsumexp(0), [state_trans], allow_unused=True)[0]
+    grad2 = grad(logp2.logsumexp(0), [state_trans], allow_unused=True)[0]
     grad1 = grad1 - grad1.mean(dim=-1, keepdim=True)
     grad2 = grad2 - grad2.mean(dim=-1, keepdim=True)
     assert torch.allclose(grad1, grad2, rtol=1e-4, atol=1e-4)
