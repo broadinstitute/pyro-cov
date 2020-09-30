@@ -33,6 +33,7 @@ class Phylogeny:
         assert leaves.shape == times.shape[:-1] + (num_leaves,)
         assert (times[..., :-1] <= times[..., 1:]).all(), "expected nodes ordered by time"
         assert (parents[..., 0] == -1).all(), "expected root node first"
+        assert (parents[..., 1:] >= 0).all(), "multiple root nodes"
         if __debug__:
             _parents = parents[..., 1:]
             is_leaf_1 = torch.ones_like(parents, dtype=torch.bool)
@@ -175,13 +176,18 @@ class MarkovTree(dist.TorchDistribution):
     :param Tensor state_trans: Either a homogeneous reverse-time state
         transition matrix, or a heterogeneous grid of ``T`` transition matrices
         applying to time intervals ``(-inf,1]``, ``(1,2]``, ..., ``(T-1,inf)``.
+        These are oriented such that ``earlier_probs[...,None] = state_trans @
+        later_probs[...,None]``.
+    :param str method: Either "likeliood" for vectorized computation or "naive"
+        for sequential computation. The "likelihood" method rounds times to the
+        nearest integer; the "naive" method allows non-integer times but
+        linearly approximates matrix exponentials within short time intervals.
     """
     arg_constraints = {
         "transition": constraints.IndependentConstraint(constraints.simplex, 2),
     }
 
-    def __init__(self, phylogeny, transition, *,
-                 method="likelihood"):
+    def __init__(self, phylogeny, transition, *, method="likelihood"):
         assert isinstance(transition, torch.Tensor)
         assert isinstance(phylogeny, Phylogeny)
         assert transition.dim() in (2, 3)
@@ -195,16 +201,21 @@ class MarkovTree(dist.TorchDistribution):
         event_shape = torch.Size([phylogeny.num_leaves])
         super().__init__(batch_shape, event_shape)
 
+    # TODO def expand(self, shape): ...
+
     @constraints.dependent_property
     def support(self):
         return constraints.IndependentConstraint(
             constraints.integer_interval(0, self.num_states), 1)
 
     def log_prob(self, leaf_state):
+        """
+        :param Tensor leaf_state: int tensor of states of all leaf nodes.
+        """
         if self.method == "naive":
             return markov_log_prob(self.phylogeny, leaf_state, self.transition)
         elif self.method == "likelihood":
-            # This likelihood object is memoized across model invocations.
+            # This likelihood object is memoized across model executions.
             likelihood = markov_tree_likelihood(self.phylogeny, leaf_state)
             return likelihood(self.transition)
         else:
@@ -229,6 +240,8 @@ def markov_log_prob(phylo, leaf_state, state_trans):
     :param Tensor state_trans: Either a homogeneous reverse-time state
         transition matrix, or a heterogeneous grid of ``T`` transition matrices
         applying to time intervals ``(-inf,1]``, ``(1,2]``, ..., ``(T-1,inf)``.
+        These are oriented such that ``earlier_probs[...,None] = state_trans @
+        later_probs[...,None]``.
     :returns: Marginal log probability of data ``leaf_state``.
     :rtype: Tensor
     """
@@ -253,12 +266,12 @@ def markov_log_prob(phylo, leaf_state, state_trans):
     logp = state_trans.new_zeros(num_nodes, num_states)
     logp[leaves] = -math.inf
     logp[leaves, leaf_state] = 0
+    logp = list(logp)  # Work around non-differentiability of in-place update.
 
     # Dynamic programming along the tree.
     for i in range(-1, -num_nodes, -1):
         j = parents[i]
-        # FIXME this breaks gradients.
-        logp[j] += _interpolate_lmve(times[j], times[i], state_trans, logp[i])
+        logp[j] = logp[j] + _interpolate_lmve(times[j], times[i], state_trans, logp[i])
     logp = logp[0].logsumexp(-1)
     return logp
 
@@ -269,6 +282,8 @@ def _mpm(m, t, v):
     approximates fractional powers via linear interpolation.
     """
     assert t >= 0
+    if t == 0:
+        return v
     t_int = t.floor()
     t_frac = t - t_int
     if t_int:
@@ -302,7 +317,7 @@ def _interpolate_mm(t0, t1, m, v):
         return _mpm(m[..., T - 1, :, :], t1 - t0, v)
     if t1 <= 1:  # Before grid.
         return _mpm(m[..., 0, :, :], t1 - t0, v)
-    if t0.floor() == t1.floor():  # Same grid cell.
+    if t1.ceil() - t0.floor() <= 1:  # Single grid cell.
         t = int(t0.floor())
         return _mpm(m[..., t, :, :], t1 - t0, v)
 
@@ -324,6 +339,8 @@ def _interpolate_mm(t0, t1, m, v):
 
 
 def _interpolate_lmve(t0, t1, matrix, log_vector):
+    if t0 == t1:
+        return log_vector
     shift = log_vector.logsumexp(dim=-1, keepdim=True)
     v = (log_vector - shift).exp()
     v = v.unsqueeze(-1)
@@ -433,7 +450,8 @@ class MarkovTreeLikelihood:
         :param Tensor state_trans: Either a homogeneous reverse-time state
             transition matrix, or a heterogeneous grid of ``T`` transition
             matrices applying to time intervals ``(-inf,1]``, ``(1,2]``, ...,
-            ``(T-1,inf)``.
+            ``(T-1,inf)``. These are oriented such that
+            ``earlier_probs[...,None] = state_trans @ later_probs[...,None]``.
         :returns: Marginal log probability of data ``leaf_state``.
         :rtype: Tensor
         """
