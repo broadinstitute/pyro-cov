@@ -152,7 +152,7 @@ class Phylogeny:
             del nodes[j]
             parents[u] = w
             parents[v] = w
-            times[w] = torch.min(times[u], times[v]) - torch.rand(()) / num_leaves
+            times[w] = torch.min(times[u], times[v]) - 4 - torch.rand(()) / num_leaves
         assert len(nodes) == 1
         leaves = torch.arange(num_leaves)
 
@@ -261,6 +261,8 @@ def markov_log_prob(phylo, leaf_state, state_trans):
     times = phylo.times
     parents = phylo.parents
     leaves = phylo.leaves
+    print(f"DEBUG naive parents =\n{parents}")
+    print(f"DEBUG naive times =\n{times}")
 
     # Convert (leaves,leaf_state) to initial state log density.
     logp = state_trans.new_zeros(num_nodes, num_states)
@@ -268,12 +270,16 @@ def markov_log_prob(phylo, leaf_state, state_trans):
     logp[leaves, leaf_state] = 0
     logp = list(logp)  # Work around non-differentiability of in-place update.
 
+    # DEBUG
+    for n in range(num_nodes):
+        print(f"DEBUG naive logp[{n}] = {logp[n]}")
+
     # Dynamic programming along the tree.
     for i in range(-1, -num_nodes, -1):
         j = parents[i]
         logp[j] = logp[j] + _interpolate_lmve(times[j], times[i], state_trans, logp[i])
-    print(f"DEBUG {torch.stack(logp)}")
-    logp = logp[0].logsumexp(-1)
+        print(f"DEBUG naive logp[{j}] = {logp[j]}")
+    logp = logp[0].logsumexp(dim=-1)
     assert not torch.isnan(logp).any()
     return logp
 
@@ -297,6 +303,8 @@ def _mpm(m, t, v):
 
 def _interpolate_mm(t0, t1, m, v):
     """
+    Like ``v @ m.matrix_power(t1 - t2)`` but allows time-varying ``m``.
+
     ``m`` specifies a piecewise constant unit-time transition matrix over time
     intervals ``(-inf,1]``, ``(1,2]``, ..., ``(T-1,inf)``, where ``T =
     m.size(-3)``. Note if ``h`` is the differential transition matrix, then ``m
@@ -341,13 +349,16 @@ def _interpolate_mm(t0, t1, m, v):
 
 
 def _interpolate_lmve(t0, t1, matrix, log_vector):
+    """
+    Like ``log(exp(v) @ m.matrix_power(t1-t2))`` but allows time-varying ``m``.
+    """
     if t0 == t1:
         return log_vector
     finfo = torch.finfo(log_vector.dtype)
     shift = log_vector.detach().max(-1, True).values.clamp_(min=finfo.min)
     v = (log_vector - shift).exp()
     v = _interpolate_mm(t0, t1, matrix, v)
-    return v.log() + shift
+    return v.log() + shift  # TODO use safe_log?
 
 
 class MarkovTreeLikelihood:
@@ -463,11 +474,17 @@ class MarkovTreeLikelihood:
         leaves = self.leaves
         leaf_state = self.leaf_state
         leaf_strata = self.leaf_strata
+        print(f"DEBUG likelhood parents =\n{parents}")
+        print(f"DEBUG likelhood times =\n{times}")
 
         # Initialize sparse log_prob state at latest time.
         beg, end = map(int, leaf_strata[-2:])
         nodes = leaves[beg:end]
         logps = _log_one_hot(nodes.shape + (N,), leaf_state[beg:end])
+
+        # DEBUG
+        for n, logp in zip(nodes, logps):
+            print(f"DEBUG likelihood logp[{n}] = {logp}")
 
         # Sequentially propagate backward in time.
         finfo = torch.finfo(logps.dtype)
@@ -476,7 +493,9 @@ class MarkovTreeLikelihood:
             shift = logps.detach().max(-1, True).values.clamp_(min=finfo.min)
             v = (logps - shift).exp()
             v = v @ state_trans[max(0, min(T - 1, t))]
-            logps = v.clamp(min=1e-5).log() + shift
+            logps = v.log() + shift  # TODO use safe_log?
+
+            # TODO Lazily convert between (exp,shift) <--> log representations.
 
             # Merge existing lineages.
             pi = parents[nodes]
@@ -492,6 +511,10 @@ class MarkovTreeLikelihood:
                 new_logps = _log_one_hot((end - beg, N), leaf_state[beg:end])
                 nodes = torch.cat([nodes, new_nodes], 0)
                 logps = torch.cat([logps, new_logps], 0)
+
+            # DEBUG
+            for n, logp in zip(nodes, logps):
+                print(f"DEBUG likelihood logp[{n}] = {logp}")
 
         # Marginalize over root states.
         logps = logps.logsumexp(dim=-1)

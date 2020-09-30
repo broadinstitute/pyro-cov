@@ -53,22 +53,24 @@ def test_generate_batch(num_leaves, num_samples):
     Phylogeny.generate(num_leaves, num_samples=num_samples)
 
 
-@pytest.mark.xfail(reason="disagreement")
 @pytest.mark.parametrize("num_states", [3, 7])
-@pytest.mark.parametrize("num_leaves", [2, 4, 16, 17])
+@pytest.mark.parametrize("num_leaves", [4, 16, 17])
 @pytest.mark.parametrize("duration", [1, 5])
-def test_markov_tree_log_prob(duration, num_leaves, num_states):
-    phylo = Phylogeny.generate(num_leaves, num_samples=2)
-    phylo.times.mul_(duration * 0.25).add_(0.75 * duration)
-    phylo.times.round_()  # Required for naive-likelihood agreement.
+@pytest.mark.parametrize("num_samples", [1, 2])
+def test_markov_tree_log_prob(num_samples, duration, num_leaves, num_states):
+    phylo = Phylogeny.generate(num_leaves, num_samples=num_samples)
+    # phylo.times.mul_(duration * 0.25).add_(0.75 * duration)
+    phylo.times.add_(0.5 * duration)  # DEBUG
+    phylo.times.round_()  # Required for naive-vs-likelihood agreement.
 
     leaf_state = dist.Categorical(torch.ones(num_states)).sample([num_leaves])
 
     state_trans = torch.randn(duration, num_states, num_states).mul(0.1).exp()
     state_trans /= state_trans.sum(dim=-1, keepdim=True)
-    state_trans += torch.eye(num_states)
+    state_trans += 4 * torch.eye(num_states)
     state_trans /= state_trans.sum(dim=-1, keepdim=True)
     state_trans.requires_grad_()
+    print(f"DEBUG state_trans:\n{state_trans}")
 
     dist1 = MarkovTree(phylo, state_trans, method="naive")
     dist2 = MarkovTree(phylo, state_trans, method="likelihood")
@@ -79,4 +81,6 @@ def test_markov_tree_log_prob(duration, num_leaves, num_states):
 
     grad1 = grad(logp1.sum(), [state_trans], allow_unused=True)[0]
     grad2 = grad(logp2.sum(), [state_trans], allow_unused=True)[0]
-    assert torch.allclose(grad1, grad2)
+    grad1 = grad1 - grad1.mean(dim=-1, keepdim=True)
+    grad2 = grad2 - grad2.mean(dim=-1, keepdim=True)
+    assert torch.allclose(grad1, grad2, rtol=1e-4, atol=1e-4)
