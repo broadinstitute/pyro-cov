@@ -264,8 +264,6 @@ def markov_log_prob(phylo, leaf_state, state_trans):
     parents = phylo.parents
     leaves = phylo.leaves
     finfo = torch.finfo(state_trans.dtype)
-    print(f"DEBUG naive parents =\n{parents}")
-    print(f"DEBUG naive times =\n{times}")
 
     # Convert (leaves,leaf_state) to initial state log density.
     logp = state_trans.new_zeros(num_nodes, num_states)
@@ -273,15 +271,10 @@ def markov_log_prob(phylo, leaf_state, state_trans):
     logp[leaves, leaf_state] = 0
     logp = list(logp)  # Work around non-differentiability of in-place update.
 
-    # DEBUG
-    for n in range(num_nodes):
-        print(f"DEBUG naive logp[{n}] = {logp[n]}")
-
     # Dynamic programming along the tree.
     for i in range(-1, -num_nodes, -1):
         j = parents[i]
         logp[j] = logp[j] + _interpolate_lmve(times[j], times[i], state_trans, logp[i])
-        print(f"DEBUG naive logp[{j}] = {logp[j]}")
     logp = logp[0].clamp(min=finfo.min).logsumexp(dim=-1)
     warn_if_nan(logp, "logp")
     return logp
@@ -468,8 +461,6 @@ class MarkovTreeLikelihood:
         leaf_state = self.leaf_state
         leaf_strata = self.leaf_strata
         finfo = torch.finfo(state_trans.dtype)
-        print(f"DEBUG likelihood parents =\n{parents}")
-        print(f"DEBUG likelihood times =\n{times}")
 
         # Sequentially propagate backward in time.
         nodes = parents.new_empty((0,))
@@ -498,10 +489,6 @@ class MarkovTreeLikelihood:
                 nodes, order = torch.where(to_merge, pi, nodes).unique(return_inverse=True)
                 order = order.unsqueeze(-1).expand_as(logps)
                 logps = logps.new_zeros(nodes.shape + (N,)).scatter_add(0, order, logps)
-
-            # DEBUG
-            for n, logp in zip(nodes, logps):
-                print(f"DEBUG likelihood logp[{n}] = {logp}")
         assert nodes.shape == (self.batch_size,)
 
         # Marginalize over root states.

@@ -69,7 +69,6 @@ def test_markov_tree_log_prob(num_samples, duration, num_leaves, num_states):
     state_trans += 4 * torch.eye(num_states)
     state_trans /= state_trans.sum(dim=-1, keepdim=True)
     state_trans.requires_grad_()
-    print(f"DEBUG state_trans:\n{state_trans}")
 
     dist1 = MarkovTree(phylo, state_trans, method="naive")
     dist2 = MarkovTree(phylo, state_trans, method="likelihood")
