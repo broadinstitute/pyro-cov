@@ -2,6 +2,7 @@ import math
 
 import pyro
 import pyro.distributions as dist
+import torch
 from pyro.contrib.epidemiology import CompartmentalModel, binomial_dist, infection_dist
 
 from pyrophylo.phylo import MarkovTree
@@ -95,8 +96,15 @@ class CountyModel(CompartmentalModel):
         #                   sum(coupling[k,i] I[k] for k in regions)
         provenance = prev["I"].unsqueeze(-1) * coupling.unsqueeze(-3)
         provenance = provenance / provenance.sum(-1, keepdim=True)
-        print(f"DEBUG provenance.shape = {provenance.shape}")
+
+        # Avoid conflict between particle dim and batch dim.
+        assert len(self.trees.batch_shape) == 1
+        if provenance.dim() > 3:
+            provenance = provenance.unsqueeze(-4)
 
         # Tree likelihood.
-        pyro.sample("geolocation", MarkovTree(self.trees, provenance),
+        pyro.sample("geolocation",
+                    dist.MixtureSameFamily(
+                        dist.Categorical(torch.ones(self.trees.batch_shape)),
+                        MarkovTree(self.trees, provenance)),
                     obs=self.leaf_to_county)

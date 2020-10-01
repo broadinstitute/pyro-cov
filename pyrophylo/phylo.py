@@ -5,6 +5,7 @@ import numpy as np
 import pyro.distributions as dist
 import torch
 from pyro.distributions import constraints, is_validation_enabled
+from pyro.distributions.util import broadcast_shape
 from pyro.ops.special import safe_log
 from pyro.util import warn_if_nan
 
@@ -192,14 +193,14 @@ class MarkovTree(dist.TorchDistribution):
     def __init__(self, phylogeny, transition, *, method="likelihood"):
         assert isinstance(transition, torch.Tensor)
         assert isinstance(phylogeny, Phylogeny)
-        assert transition.dim() in (2, 3)
+        assert transition.dim() >= 2
         self.num_states = transition.size(-1)
         assert transition.size(-2) == self.num_states
         assert isinstance(method, str)
         self.method = method
         self.phylogeny = phylogeny
         self.transition = transition
-        batch_shape = phylogeny.batch_shape
+        batch_shape = broadcast_shape(phylogeny.batch_shape, transition.shape[:-3])
         event_shape = torch.Size([phylogeny.num_leaves])
         super().__init__(batch_shape, event_shape)
 
@@ -377,6 +378,7 @@ class MarkovTreeLikelihood:
 
     :param Phylogeny phylo: A phylogeny or batch of phylogenies.
     :param Tensor leaf_state: int tensor of states of all leaf nodes.
+        Nonnegative values are observed. The value ``-1`` denods missing data.
     """
     def __init__(
         self,
@@ -389,6 +391,12 @@ class MarkovTreeLikelihood:
         leaves = phylo.leaves  # leaf_id -> node_id
         T0 = times.min().item()
         T1 = times.max().item()
+
+        # Drop leaves that have not been observed.
+        observed = (leaf_state != -1).nonzero(as_tuple=True)[-1]
+        if observed.numel():
+            leaves = leaves[..., observed]
+            leaf_state = leaf_state[..., observed]
 
         # Flatten the batch of trees to a forest.
         # Let bnode_id = batch * num_nodes + node_id.
@@ -463,8 +471,8 @@ class MarkovTreeLikelihood:
         finfo = torch.finfo(state_trans.dtype)
 
         # Sequentially propagate backward in time.
-        nodes = parents.new_empty((0,))
-        logps = state_trans.new_empty((0,))
+        nodes = parents.new_empty(0)
+        logps = state_trans.new_empty(0, N)
         for t in range(T1, T0 - 1, -1):
             # Update each existing lineage's state distribution independently.
             if nodes.numel():

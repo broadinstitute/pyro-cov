@@ -13,9 +13,12 @@ def model_inputs():
     return torch.load("results/model_inputs.pt")
 
 
-@pytest.mark.xfail(reason="not implemented", run=False)
-@pytest.mark.parametrize("num_particles", [1, 10])
-def test_county_model(model_inputs, num_particles):
-    model_inputs["trees"] = model_inputs["trees"][:2]  # Subsample for speed.
+@pytest.mark.parametrize("num_trees", [2])
+def test_county_model(model_inputs, num_trees):
+    if num_trees is None:
+        model_inputs["trees"] = model_inputs["trees"][0]
+    else:
+        model_inputs["trees"] = model_inputs["trees"][:num_trees]
     model = CountyModel(**model_inputs)
-    model.fit_svi(num_particles=num_particles, log_every=10)
+    model.fit_svi(num_particles=1, log_every=1, num_steps=2)
+    # model.predict()  # FIXME this fails
