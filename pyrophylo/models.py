@@ -19,8 +19,8 @@ class CountyModel(CompartmentalModel):
         assert init_cases.shape == (N,)
         assert new_cases.shape == (T, N)
         assert leaf_to_county.shape == (trees.num_leaves,)
-        compartments = ("S", "E", "I")  # R is implicit.
-        duration = new_cases.size(-1)
+        compartments = ("S", "I")  # R is implicit.
+        duration = new_cases.size(0)
         super().__init__(compartments, duration, population)
         self.county_names = county_names
         self.population = population  # assume this is constant over relevant timescale
@@ -31,61 +31,72 @@ class CountyModel(CompartmentalModel):
         self.leaf_to_county = leaf_to_county
 
     def global_model(self):
-        tau_e = 5.5  # incubation time
-        tau_i = 14.  # recovery time
+        tau = 14.  # recovery time
         # Assume basic reproductive number around 2.
         R0 = pyro.sample("R0", dist.LogNormal(math.log(2), 1.))
         # Assume about 40% response rate.
         rho = pyro.sample("rho", dist.Beta(4, 6))
+        # Assume all distributions are overdispersed.
+        od = pyro.sample("od", dist.Beta(2, 6))
 
         # Let's use a Gaussian kernel with learnable radius.
         radius = self.distance_matrix.mean()
         radius = pyro.sample("radius", dist.LogNormal(math.log(radius), 1.))
         coupling = self.distance_matrix.div(radius).pow(2).mul(-0.5).exp()
 
-        return R0, tau_e, tau_i, rho, coupling
+        return R0, tau, rho, od, coupling
 
     def initialize(self, params):
+        R0, tau, rho, od, coupling = params
         with self.region_plate:
             # Assume a small portion of cumulative cases are still infected.
-            E = pyro.sample("E_init", binomial_dist(self.init_cases, 0.1))
-            I = pyro.sample("I_init", binomial_dist(self.init_cases, 0.2))
-            S = self.population - E - I
-        return {"S": S, "E": E, "I": I}
+            I = pyro.sample("I_init", binomial_dist(self.init_cases, 0.5,
+                                                    overdispersion=od))
+            # Assume all infections were observed. FIXME
+            S = self.population - self.init_cases
+        return {"S": S, "I": I}
 
     def transition(self, params, state, t):
-        R0, tau_e, tau_i, rho, coupling = params
+        R0, tau, rho, od, coupling = params
         I_coupled = state["I"] @ coupling
         I_coupled = I_coupled.clamp(min=0)
-        pop_coupled = self.population @ coupling
+        pop_coupled = self.population[None] @ coupling
 
         with self.region_plate:
             # Sample flows between compartments.
-            S2E = pyro.sample("S2E_{}".format(t),
-                              infection_dist(individual_rate=R0 / tau_i,
+            S2I = pyro.sample("S2I_{}".format(t),
+                              infection_dist(individual_rate=R0 / tau,
                                              num_susceptible=state["S"],
                                              num_infectious=I_coupled,
-                                             population=pop_coupled))
-            E2I = pyro.sample("E2I_{}".format(t),
-                              binomial_dist(state["E"], 1 / tau_e))
+                                             population=pop_coupled,
+                                             overdispersion=od))
             I2R = pyro.sample("I2R_{}".format(t),
-                              binomial_dist(state["I"], 1 / tau_i))
+                              binomial_dist(state["I"], 1 / tau,
+                                            overdispersion=od))
 
             # Update compartments with flows.
-            state["S"] = state["S"] - S2E
-            state["E"] = state["E"] + S2E - E2I
-            state["I"] = state["I"] + E2I - I2R
+            state["S"] = state["S"] - S2I
+            state["I"] = state["I"] + S2I - I2R
 
             # Condition on aggregate observations.
             t_is_observed = isinstance(t, slice) or t < self.duration
             pyro.sample("obs_{}".format(t),
-                        binomial_dist(S2E, rho),
+                        binomial_dist(S2I, rho, overdispersion=od),
                         obs=self.new_cases[t] if t_is_observed else None)
 
-    def finalize(self, params, state):
-        R0, tau_e, tau_i, rho, coupling = params
+    def finalize(self, params, prev, curr):
+        R0, tau, rho, od, coupling = params
+
+        # Consider the categorical distribution of
+        # the provenance j of an infection in region i.
+        #
+        #                       coupling[j,i] I[j]
+        # provenance[i,j] = ----------------------------------------
+        #                   sum(coupling[k,i] I[k] for k in regions)
+        provenance = prev["I"].unsqueeze(-1) * coupling.unsqueeze(-3)
+        provenance = provenance / provenance.sum(-1, keepdim=True)
+        print(f"DEBUG provenance.shape = {provenance.shape}")
 
         # Tree likelihood.
-        provenance = coupling  # TODO adjust for population of source and destin
         pyro.sample("geolocation", MarkovTree(self.trees, provenance),
                     obs=self.leaf_to_county)

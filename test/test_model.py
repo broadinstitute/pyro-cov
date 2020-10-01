@@ -14,7 +14,8 @@ def model_inputs():
 
 
 @pytest.mark.xfail(reason="not implemented", run=False)
-def test_county_model(model_inputs):
+@pytest.mark.parametrize("num_particles", [1, 10])
+def test_county_model(model_inputs, num_particles):
     model_inputs["trees"] = model_inputs["trees"][:2]  # Subsample for speed.
     model = CountyModel(**model_inputs)
-    model.fit_svi(guide_rank=0, num_samples=10, log_every=10)
+    model.fit_svi(num_particles=num_particles, log_every=10)
