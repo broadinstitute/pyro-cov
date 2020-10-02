@@ -19,3 +19,11 @@ def weak_memoize_by_id(fn):
         return result
 
     return memoized_fn
+
+
+_TENSORS = {}
+
+
+def deduplicate_tensor(x):
+    key = x.dtype, x.stride(), x.data_ptr()
+    return _TENSORS.setdefault(key, x)

@@ -9,7 +9,7 @@ from pyro.distributions.util import broadcast_shape
 from pyro.ops.special import safe_log
 from pyro.util import warn_if_nan
 
-from .util import weak_memoize_by_id
+from .util import deduplicate_tensor, weak_memoize_by_id
 
 logger = logging.getLogger(__name__)
 
@@ -219,6 +219,7 @@ class MarkovTree(dist.TorchDistribution):
             return markov_log_prob(self.phylogeny, leaf_state, self.transition)
         elif self.method == "likelihood":
             # This likelihood object is memoized across model executions.
+            leaf_state = deduplicate_tensor(leaf_state)  # FIXME leaks memory.
             likelihood = markov_tree_likelihood(self.phylogeny, leaf_state)
             return likelihood(self.transition)
         else:
@@ -502,6 +503,7 @@ class MarkovTreeLikelihood:
         # Marginalize over root states.
         logps = logps.clamp(min=finfo.min).logsumexp(dim=-1)
         logps = logps[nodes.sort().indices].contiguous()
+        print(f"DEBUG logps.shape = {logps.shape}")
         warn_if_nan(logps, "logps")
         return logps
 
