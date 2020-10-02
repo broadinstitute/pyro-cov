@@ -21,4 +21,4 @@ def test_county_model(model_inputs, num_trees):
         model_inputs["trees"] = model_inputs["trees"][:num_trees]
     model = CountyModel(**model_inputs)
     model.fit_svi(num_particles=1, log_every=1, num_steps=2)
-    # model.predict()  # FIXME this fails
+    model.predict()

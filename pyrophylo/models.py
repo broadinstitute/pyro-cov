@@ -50,9 +50,8 @@ class CountyModel(CompartmentalModel):
     def initialize(self, params):
         R0, tau, rho, od, coupling = params
         with self.region_plate:
-            # Assume a small portion of cumulative cases are still infected.
-            I = pyro.sample("I_init", binomial_dist(self.init_cases, 0.5,
-                                                    overdispersion=od))
+            # Assume half of cumulative cases are still infected.
+            I = (self.init_cases[None] + 1) // 2
             # Assume all infections were observed. FIXME
             S = self.population - self.init_cases
         return {"S": S, "I": I}
