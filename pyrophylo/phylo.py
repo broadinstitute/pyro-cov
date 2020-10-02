@@ -218,8 +218,10 @@ class MarkovTree(dist.TorchDistribution):
         if self.method == "naive":
             return markov_log_prob(self.phylogeny, leaf_state, self.transition)
         elif self.method == "likelihood":
-            # This likelihood object is memoized across model executions.
+            # Work around MixtureSameFamily.log_prob() calling .unsqueeze(),
+            # which thwarts the blow use of memoize_by_id().
             leaf_state = deduplicate_tensor(leaf_state)  # FIXME leaks memory.
+            # This likelihood object is memoized across model executions.
             likelihood = markov_tree_likelihood(self.phylogeny, leaf_state)
             return likelihood(self.transition)
         else:
@@ -503,7 +505,6 @@ class MarkovTreeLikelihood:
         # Marginalize over root states.
         logps = logps.clamp(min=finfo.min).logsumexp(dim=-1)
         logps = logps[nodes.sort().indices].contiguous()
-        print(f"DEBUG logps.shape = {logps.shape}")
         warn_if_nan(logps, "logps")
         return logps
 
