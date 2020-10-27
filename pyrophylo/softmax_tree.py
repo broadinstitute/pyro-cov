@@ -24,7 +24,7 @@ class SoftmaxTree(dist.Distribution):
         assert bit_times.dim() == 1
         assert logits.dim() == 2
         assert logits.shape == leaf_times.shape + bit_times.shape
-        self.leaf_tiems = leaf_times
+        self.leaf_times = leaf_times
         self.bit_times = bit_times
         self._bernoulli = dist.Bernoulli(logits=logits)
         super().__init__()
@@ -98,29 +98,36 @@ def _decode(leaf_times, bit_times, bits, probs):
         for partition, p in partitions[-2].items():
             children = defaultdict(set)
             for n in partition:
-                bit = bits[n, b]
+                bit = bits[n, b].item()
                 # TODO Clamp bit if t is later than node n.
                 children[bit].add(n)
             if len(children) == 1:
                 partitions[-1][partition] = p
                 continue
+            assert len(children) == 2
             for child in children.values():
                 if len(child) == 1:
                     # Terminate at a leaf.
-                    parents[child.pop()] = p
+                    c = child.pop()
                 else:
                     # Create a new internal node.
                     c = get_id()
-                    parents[c] = p
                     partitions[-1][frozenset(child)] = c
+                parents[c] = p
+            times[p] = t
     # Create binarized fans for remaining leaves.
     for partition, p in partitions[-1].items():
+        t = times[torch.tensor(list(partition))].min()
+        times[p] = t
         partition = set(partition)
-        while len(partition) >= 2:
-            parents[partition.pop()] = p
+        while len(partition) > 2:
             c = get_id()
+            times[c] = t
             parents[c] = p
+            parents[partition.pop()] = p
             p = c
         parents[partition.pop()] = p
+        parents[partition.pop()] = p
+        assert not partition
 
     return Phylogeny.from_unsorted(times, parents, leaves)

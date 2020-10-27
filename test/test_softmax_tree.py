@@ -12,6 +12,18 @@ from pyrophylo.phylo import Phylogeny
 from pyrophylo.softmax_tree import SoftmaxTree
 
 
+@pytest.mark.parametrize("num_bits", [2, 3, 4, 5, 10])
+@pytest.mark.parametrize("num_leaves", [2, 3, 4, 5, 10])
+def test_rsample(num_leaves, num_bits):
+    phylo = Phylogeny.generate(num_leaves)
+    leaf_times = phylo.times[phylo.leaves]
+    bit_times = torch.randn(num_bits)
+    logits = torch.randn(num_leaves, num_bits)
+    tree = SoftmaxTree(leaf_times, bit_times, logits)
+    value = tree.rsample()
+    tree.log_prob(value)
+
+
 def model(leaf_times, leaf_states, num_features):
     assert len(leaf_times) == len(leaf_states)
 
