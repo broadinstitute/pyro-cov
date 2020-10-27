@@ -150,12 +150,14 @@ class Phylogeny:
             times[w] = torch.min(times[u], times[v]) - torch.rand(()) / num_leaves
         assert len(nodes) == 1
         leaves = torch.arange(num_leaves)
+        return Phylogeny.from_unsorted(times, parents, leaves)
 
-        # Sort results.
+    @staticmethod
+    def from_unsorted(times, parents, leaves):
+        num_nodes = times.size(-1)
         times, new2old = times.sort()
         old2new = torch.empty(num_nodes, dtype=torch.long)
         old2new[new2old] = torch.arange(num_nodes)
-        assert new2old[0] == nodes[0]
         leaves = old2new[leaves]
         parents = old2new[parents[new2old]]
         parents[0] = -1
