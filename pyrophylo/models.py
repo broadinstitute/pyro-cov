@@ -5,7 +5,7 @@ import pyro.distributions as dist
 import torch
 from pyro.contrib.epidemiology import CompartmentalModel, binomial_dist, infection_dist
 
-from pyrophylo.phylo import MarkovTree
+from pyrophylo.markov_tree import MarkovTree
 
 
 class CountyModel(CompartmentalModel):
