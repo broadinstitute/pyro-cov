@@ -114,7 +114,7 @@ def _decode(leaf_times, bit_times, bits, probs):
                     c = get_id()
                     partitions[-1][frozenset(child)] = c
                 parents[c] = p
-            times[p] = t
+            times[p] = t  # TODO support gradients
     # Create binarized fans for remaining leaves.
     for partition, p in partitions[-1].items():
         t = times[torch.tensor(list(partition))].min()
@@ -122,7 +122,7 @@ def _decode(leaf_times, bit_times, bits, probs):
         partition = set(partition)
         while len(partition) > 2:
             c = get_id()
-            times[c] = t
+            times[c] = t  # TODO support gradients
             parents[c] = p
             parents[partition.pop()] = p
             p = c

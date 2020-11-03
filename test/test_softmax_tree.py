@@ -14,7 +14,7 @@ from pyrophylo.softmax_tree import SoftmaxTree
 
 @pytest.mark.parametrize("num_bits", [2, 3, 4, 5, 10])
 @pytest.mark.parametrize("num_leaves", [2, 3, 4, 5, 10])
-def test_rsample(num_leaves, num_bits):
+def test_rsample_smoke(num_leaves, num_bits):
     phylo = Phylogeny.generate(num_leaves)
     leaf_times = phylo.times[phylo.leaves]
     bit_times = torch.randn(num_bits)
@@ -22,6 +22,11 @@ def test_rsample(num_leaves, num_bits):
     tree = SoftmaxTree(leaf_times, bit_times, logits)
     value = tree.rsample()
     tree.log_prob(value)
+
+
+def test_rsample_expectation():
+    # TODO find a property this should satisfy.
+    # Possibly this is E[TMRCA]
 
 
 def model(leaf_times, leaf_states, num_features):
