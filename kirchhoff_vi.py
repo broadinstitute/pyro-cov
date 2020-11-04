@@ -11,7 +11,7 @@ from pyro.optim import Adam
 
 from pyrophylo.kirchhoff import KirchhoffModel
 
-logging.basicConfig(format='%(relativeCreated) 9d %(message)s', level=logging.DEBUG)
+logging.basicConfig(format="%(relativeCreated) 9d %(message)s", level=logging.DEBUG)
 
 
 def load_data(args):
@@ -41,10 +41,6 @@ def main(args):
     leaf_times, leaf_states = load_data(args)
 
     model = KirchhoffModel(leaf_times, leaf_states)
-    logging.info("Fitting embedding")
-    model.fit_embedding()
-
-    logging.info("Fitting posterior")
     guide = AutoLowRankMultivariateNormal(model)
     optim = Adam({"lr": args.learning_rate})
     svi = SVI(model, guide, optim, Trace_ELBO())
