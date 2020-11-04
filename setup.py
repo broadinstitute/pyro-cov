@@ -21,8 +21,10 @@ setup(
     author_email='fobermey@broadinstitute.org',
     install_requires=[
         'biopython>=1.54',
-        'pyro-ppl>=1.4',
+        'pyro-ppl>=1.5',
         'geopy',
+        'gpytorch',
+        'scikit-learn',
     ],
     extras_require={
         'test': [
@@ -36,6 +38,7 @@ setup(
     classifiers=[
         'Intended Audience :: Developers',
         'Intended Audience :: Science/Research',
+        'License :: OSI Approved :: Apache Software License',
         'Operating System :: POSIX :: Linux',
         'Operating System :: MacOS :: MacOS X',
         'Programming Language :: Python :: 3.6',
