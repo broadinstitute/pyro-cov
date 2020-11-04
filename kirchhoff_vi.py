@@ -1,3 +1,16 @@
+"""
+This experiment aims to assess posterior accuracy of a variational approach to
+phylogenetic inference. We examine by default the dataset DS4 [2] from Whidden
+and Matsen [1]. This dataset has 41 taxa and 1137 characters, many of which are
+unobserved for many taxa.
+
+[1] Chris Whidden, Frederick A. Matsen, IV (2015)
+    "Quantifying MCMC Exploration of Phylogenetic Tree Space"
+    https://academic.oup.com/sysbio/article/64/3/472/1632660
+[2] TreeBase dataset M487
+    https://treebase.org/treebase-web/search/study/matrices.html?id=965
+"""
+
 import argparse
 import io
 import logging
