@@ -6,6 +6,7 @@ import pyro.distributions as dist
 import pyro.poutine as poutine
 import torch
 from pyro.distributions import constraints
+from pyro.distributions.spanning_tree import make_complete_graph
 from pyro.nn import PyroModule, PyroSample
 from pyro.util import warn_if_nan
 from sklearn.cluster import AgglomerativeClustering
@@ -110,12 +111,17 @@ class KirchhoffModel(PyroModule):
         self.is_latent = torch.cat([~leaf_mask, leaf_mask.new_ones(L - 1, C)], dim=0)
         is_leaf = torch.full((N,), False, dtype=torch.bool)
         is_leaf[:L] = True
-        self.leaf_leaf = is_leaf[:, None] & is_leaf
         self.leaf_internal = is_leaf[:, None] & ~is_leaf
+        leaf_leaf = is_leaf[:, None] & is_leaf
+        self.infeasible = leaf_leaf | torch.eye(N, dtype=torch.bool)
 
         self._initialize()
 
-    def forward(self):
+    @property
+    def num_nodes(self):
+        return len(self.is_latent)
+
+    def forward(self, sample_tree=False):
         L, C, D = self.leaf_states.shape
         N = 2 * L - 1
 
@@ -141,9 +147,18 @@ class KirchhoffModel(PyroModule):
         warn_if_nan(internal_times, "internal_times")
         times = torch.cat([self.leaf_times, internal_times])
 
-        # Analytically marginalize over tree topology.
+        # Account for random tree structure.
         w = self.kernel(states, times)
-        pyro.factor("topology", log_count_spanning_trees(w))
+        if not sample_tree:
+            # During training, analytically marginalize over trees.
+            pyro.factor("state_likelihood", log_count_spanning_trees(w))
+        else:
+            # During prediction, simply sample a tree.
+            i, j = make_complete_graph(N)
+            edge_logits = w.detach()[i, j].log()
+            return pyro.sample(
+                "tree",
+                dist.SpanningTree(edge_logits, {"backend": "cpp"}))
 
     def kernel(self, states, times):
         N, C, D = states.shape
@@ -157,9 +172,9 @@ class KirchhoffModel(PyroModule):
         w = _vv(x, y).add(1e-6).log().logsumexp(dim=-1)
         assert w.shape == (N, N)
 
-        # Exclude leaf-leaf edges and out-of-order leaf-internal edges.
+        # Exclude self edges, leaf-leaf edges, and out-of-order leaf-internal edges.
         ooo = self.leaf_internal & (dt <= 0)
-        w = w.masked_fill(self.leaf_leaf | ooo | ooo.transpose(-1, -2), 0.)
+        w = w.masked_fill(self.infeasible | ooo | ooo.transpose(-1, -2), 0.)
         assert w.isfinite().all()
 
         return w
