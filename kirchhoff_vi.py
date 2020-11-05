@@ -42,31 +42,47 @@ def load_data(args):
     num_characters = len(alignment[0])
     data = torch.zeros((num_taxa, num_characters), dtype=torch.long)
     mask = torch.zeros((num_taxa, num_characters), dtype=torch.bool)
-    raise NotImplementedError("TODO")
+    mapping = {
+        "?": (False, 0),  # unobserved
+        "A": (True, 0),
+        "C": (True, 1),
+        "G": (True, 2),
+        "T": (True, 3),
+        "-": (True, 4),  # insertion/deletion
+    }
+    for i, seq in enumerate(alignment):
+        for j, value in enumerate(seq.seq):
+            mask[i, j], data[i, j] = mapping[value]
 
-    return data, mask
+    times = torch.zeros(num_taxa)
+    return times, data, mask
 
 
 def main(args):
-    pyro.enable_validation(__debug__)
+    torch.set_default_dtype(torch.double)
     pyro.set_rng_seed(args.seed)
+    pyro.enable_validation(__debug__)
 
-    leaf_times, leaf_states = load_data(args)
+    leaf_times, leaf_data, leaf_mask = load_data(args)
+    num_leaves = len(leaf_times)
 
-    model = KirchhoffModel(leaf_times, leaf_states)
+    model = KirchhoffModel(leaf_times, leaf_data, leaf_mask)
     guide = AutoLowRankMultivariateNormal(model)
     optim = Adam({"lr": args.learning_rate})
     svi = SVI(model, guide, optim, Trace_ELBO())
+    losses = []
     for step in range(args.num_steps):
-        loss = svi.step()
+        loss = svi.step() / num_leaves
         if step % 100 == 0:
             logging.info(f"step {step: >4} loss = {loss:0.4g}")
+        losses.append(loss)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Tree learning experiment")
     parser.add_argument("--nexus-infile", default="data/treebase/M487.nex")
     parser.add_argument("-n", "--num-steps", default=1001, type=int)
+    parser.add_argument("-lr", "--learning-rate", default=0.01, type=float)
     parser.add_argument("--seed", default=20201103, type=int)
     args = parser.parse_args()
     main(args)
