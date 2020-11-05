@@ -14,20 +14,24 @@ unobserved for many taxa.
 import argparse
 import io
 import logging
+import math
 
 import pyro
 import torch
 from Bio import AlignIO
 from pyro.infer import SVI, Trace_ELBO
-from pyro.infer.autoguide import AutoLowRankMultivariateNormal
+from pyro.infer.autoguide import AutoNormal, AutoLowRankMultivariateNormal
 from pyro.optim import Adam
 
 from pyrophylo.kirchhoff import KirchhoffModel
 
+logger = logging.getLogger(__name__)
 logging.basicConfig(format="%(relativeCreated) 9d %(message)s", level=logging.DEBUG)
 
 
 def load_data(args):
+    logger.info(f"loading data from {args.nexus_infile}")
+
     # Truncate file to work around bug in Bio.Nexus reader.
     lines = []
     with open(args.nexus_infile) as f:
@@ -38,8 +42,8 @@ def load_data(args):
     f = io.StringIO("".join(lines))
     alignment = AlignIO.read(f, "nexus")
 
-    num_taxa = len(alignment)
-    num_characters = len(alignment[0])
+    num_taxa = min(len(alignment), args.max_taxa)
+    num_characters = min(len(alignment[0]), args.max_characters)
     data = torch.zeros((num_taxa, num_characters), dtype=torch.long)
     mask = torch.zeros((num_taxa, num_characters), dtype=torch.bool)
     mapping = {
@@ -50,9 +54,10 @@ def load_data(args):
         "T": (True, 3),
         "-": (True, 4),  # insertion/deletion
     }
-    for i, seq in enumerate(alignment):
-        for j, value in enumerate(seq.seq):
-            mask[i, j], data[i, j] = mapping[value]
+    for i in range(num_taxa):
+        seq = alignment[i].seq
+        for j in range(num_characters):
+            mask[i, j], data[i, j] = mapping[seq[j]]
 
     times = torch.zeros(num_taxa)
     return times, data, mask
@@ -66,23 +71,37 @@ def main(args):
     leaf_times, leaf_data, leaf_mask = load_data(args)
     num_leaves = len(leaf_times)
 
-    model = KirchhoffModel(leaf_times, leaf_data, leaf_mask)
-    guide = AutoLowRankMultivariateNormal(model)
+    model = KirchhoffModel(leaf_times, leaf_data, leaf_mask,
+                           temperature=args.temperature)
+
+    logger.info("Training via SVI")
+    guide_config = {"init_loc_fn": model.init_loc_fn, "init_scale": 0.01}
+    if args.guide_rank == 0:
+        guide = AutoNormal(model, **guide_config)
+    else:
+        guide_config["rank"] = args.guide_rank
+        guide = AutoLowRankMultivariateNormal(model, **guide_config)
     optim = Adam({"lr": args.learning_rate})
     svi = SVI(model, guide, optim, Trace_ELBO())
     losses = []
     for step in range(args.num_steps):
         loss = svi.step() / num_leaves
-        if step % 100 == 0:
-            logging.info(f"step {step: >4} loss = {loss:0.4g}")
+        if step % args.log_every == 0:
+            logger.info(f"step {step: >4} loss = {loss:0.4g}")
+        assert math.isfinite(loss)
         losses.append(loss)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Tree learning experiment")
     parser.add_argument("--nexus-infile", default="data/treebase/M487.nex")
+    parser.add_argument("--max-taxa", default=int(1e6), type=int)
+    parser.add_argument("--max-characters", default=int(1e6), type=int)
+    parser.add_argument("--guide-rank", default=0, type=int)
     parser.add_argument("-n", "--num-steps", default=1001, type=int)
-    parser.add_argument("-lr", "--learning-rate", default=0.01, type=float)
+    parser.add_argument("-lr", "--learning-rate", default=0.1, type=float)
     parser.add_argument("--seed", default=20201103, type=int)
+    parser.add_argument("-t", "--temperature", default=1.0, type=float)
+    parser.add_argument("--log-every", default=100, type=int)
     args = parser.parse_args()
     main(args)

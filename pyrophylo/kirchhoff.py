@@ -1,13 +1,32 @@
+import logging
+import math
+
 import pyro
 import pyro.distributions as dist
 import pyro.poutine as poutine
 import torch
+from pyro.distributions import constraints
 from pyro.nn import PyroModule, PyroSample
+from pyro.util import warn_if_nan
 from sklearn.cluster import AgglomerativeClustering
+
+logger = logging.getLogger(__name__)
 
 
 def _vv(x, y):
     return (x[..., None, :] @ y[..., None]).squeeze(-1).squeeze(-1)
+
+
+class FakeCoalescentTimes(dist.TransformedDistribution):
+    support = constraints.less_than(0.)
+
+    def __init__(self, leaf_times):
+        if not (leaf_times == 0).all():
+            raise NotImplementedError
+        L = len(leaf_times)
+        super().__init__(
+            dist.Exponential(torch.ones(L - 1)).to_event(1),
+            dist.transforms.AffineTransform(0., -1.))
 
 
 class GTRSubstitutionModel(PyroModule):
@@ -19,7 +38,7 @@ class GTRSubstitutionModel(PyroModule):
         self.dim = dim
         self.stationary = PyroSample(dist.Dirichlet(torch.full((dim,), 2.)))
         self.rates = PyroSample(
-            dist.Exponential(1.).expand([dim * (dim - 1) // 2]).to_event(1))
+            dist.Exponential(torch.ones(dim * (dim - 1) // 2)).to_event(1))
         i = torch.arange(dim)
         self._index = (i > i[:, None]).nonzero(as_tuple=False).T
 
@@ -35,6 +54,8 @@ class GTRSubstitutionModel(PyroModule):
 
     def forward(self, times, states):
         m = self.transition
+        warn_if_nan(m, "transition")
+        times = times.abs()
         return states @ (m * times[..., None]).matrix_exp().transpose(-1, -2)
 
 
@@ -46,13 +67,23 @@ def log_count_spanning_trees(w):
     :returns: The log sum-over-trees product-over-edges.
     """
     assert w.dim() == 2
-    L = w.sum(dim=-1).diag_embed() - w
-    truncated = L[:-1, :-1]
+    L = w.sum(dim=-1).diag_embed() - w  # Construct laplacian.
+    m = L[:-1, :-1]  # Truncate.
+
+    # Numerically stabilize.
+    scale = m.diag()
+    shift = scale.log().sum()
+    scale = scale.sqrt()
+    m = m / (scale * scale[:, None])
+
+    # Defer to logdet.
     try:
         import gpytorch
-        return gpytorch.lazy.NonLazyTensor(truncated).logdet()
+        result = gpytorch.lazy.NonLazyTensor(m).logdet()
     except ImportError:
-        return torch.cholesky(truncated).diag().log().sum() * 2
+        result = torch.cholesky(m).diag().log().sum() * 2
+
+    return result + shift
 
 
 class KirchhoffModel(PyroModule):
@@ -64,21 +95,25 @@ class KirchhoffModel(PyroModule):
         assert leaf_data.dim() == 2
         assert leaf_mask.shape == leaf_data.shape
         assert leaf_data.shape[:1] == leaf_times.shape
+        assert temperature > 0
         L, C = leaf_data.shape
         N = 2 * L - 1
         D = 1 + leaf_data.max().item() - leaf_data.min().item()
 
         self.leaf_times = leaf_times
-        self.leaf_mask = leaf_mask
-        self.mask = torch.cat([~leaf_mask, leaf_mask.new_ones(L - 1, C)], dim=0)
-        self.leaf_states = torch.ones(L, C, D).scatter_(-1, leaf_data[..., None], 1)
+        self.leaf_states = torch.zeros(L, C, D).scatter_(-1, leaf_data[..., None], 1)
         self.subs_model = GTRSubstitutionModel(dim=D)
-        self.temperature = temperature
+        self.temperature = torch.tensor(float(temperature))
 
+        # Precompute masks.
+        self.leaf_mask = leaf_mask
+        self.is_latent = torch.cat([~leaf_mask, leaf_mask.new_ones(L - 1, C)], dim=0)
         is_leaf = torch.full((N,), False, dtype=torch.bool)
         is_leaf[:L] = True
-        self._leaf_leaf = is_leaf[:, None] & is_leaf
-        self._leaf_internal = is_leaf[:, None] & ~is_leaf
+        self.leaf_leaf = is_leaf[:, None] & is_leaf
+        self.leaf_internal = is_leaf[:, None] & ~is_leaf
+
+        self._initialize()
 
     def forward(self):
         L, C, D = self.leaf_states.shape
@@ -87,26 +122,26 @@ class KirchhoffModel(PyroModule):
         # Impute missing states.
         with pyro.plate("nodes", N, dim=-2), \
              pyro.plate("characters", C, dim=-1), \
-             poutine.mask(mask=self.mask):
+             poutine.mask(mask=self.is_latent):
             # TODO reparametrize this with a SoftmaxReparam
             states = pyro.sample(
                 "states",
                 dist.RelaxedOneHotCategorical(self.temperature, torch.ones(D)))
         # Interleave with observed states.
-        leaf_states = torch.where(self.leaf_mask[..., None],
-                                  self.leaf_states, states[:L])
-        states = torch.cat([leaf_states, states[L:]], dim=0)
+        states = torch.cat([torch.where(self.leaf_mask[..., None],
+                                        self.leaf_states, states[:L]),
+                            states[L:]], dim=0)
         assert states.shape == (N, C, D)
+        warn_if_nan(states, "states")
 
         # Sample times of internal nodes.
-        if not (self.leaf_times == 0).all():
-            raise NotImplementedError("TODO")
-        internal_times = pyro.sample(
-            "internal_times",
-            # TODO replace with CoalescentTimes(self.leaf_times, ordered=False)
-            dist.Exponential(torch.ones(L - 1)).to_event(1).mask(False))
-
+        # TODO replace with CoalescentTimes(self.leaf_times, ordered=False)
+        internal_times = pyro.sample("internal_times",
+                                     FakeCoalescentTimes(self.leaf_times))
+        warn_if_nan(internal_times, "internal_times")
         times = torch.cat([self.leaf_times, internal_times])
+
+        # Analytically marginalize over tree topology.
         w = self.kernel(states, times)
         pyro.factor("topology", log_count_spanning_trees(w))
 
@@ -123,18 +158,52 @@ class KirchhoffModel(PyroModule):
         assert w.shape == (N, N)
 
         # Exclude leaf-leaf edges and out-of-order leaf-internal edges.
-        ooo = self._leaf_internal & (dt <= 0)
-        w = w.masked_fill(self._leaf_leaf | ooo | ooo.transpose(-1, -2), 0.)
+        ooo = self.leaf_internal & (dt <= 0)
+        w = w.masked_fill(self.leaf_leaf | ooo | ooo.transpose(-1, -2), 0.)
+        assert w.isfinite().all()
 
         return w
 
+    def _initialize(self):
+        logger.info("Initializing via agglomerative clustering")
+
+        # Deterministically impute, only used by initialization.
+        missing = ~self.leaf_mask
+        self.leaf_states[missing] = 1. / self.subs_model.dim
+
+        # Heuristically initialize hierarchy.
+        L, C, D = self.leaf_states.shape
+        N = 2 * L - 1
+        data = self.leaf_states.reshape(L, C * D)
+        clustering = AgglomerativeClustering(
+            distance_threshold=0, n_clusters=None).fit(data)
+        children = clustering.children_
+        assert children.shape == (L - 1, 2)
+
+        times = torch.full((N,), math.nan)
+        states = torch.full((N, C, D), math.nan)
+        times[:L] = self.leaf_times
+        states[:L] = self.leaf_states * 0.99 + 0.01 / D
+        for p, (c1, c2) in enumerate(children):
+            times[L + p] = min(times[c1], times[c2]) - 1
+            states[L + p] = (states[c1] + states[c2]) / 2
+        assert times.isfinite().all()
+        assert states.isfinite().all()
+        self.init_internal_times = times[L:].clone()
+        self.init_states = states
+
     def init_loc_fn(self, site):
         """
-        Heuristic to initialize ``internal_times`` and ``internal_states``.
+        Heuristic initialization for guides.
         """
-        if not hasattr(self, "clustering"):
-            self.clustering = AgglomerativeClustering(
-                distance_threshold=0, n_clusters=None).fit(self.leaf_states)
-        clustering = self.clustering
-        assert clustering
-        raise NotImplementedError("TODO")
+        if site["name"] == "states":
+            return self.init_states
+        if site["name"] == "internal_times":
+            return self.init_internal_times
+        if site["name"].endswith("subs_model.rates"):
+            # Initialize to low mutation rate.
+            return torch.full(site["fn"].shape(), 0.01)
+        if site["name"].endswith("subs_model.stationary"):
+            D, = site["fn"].event_shape
+            return torch.ones(D) / D
+        raise ValueError("unknown site {}".format(site["name"]))
