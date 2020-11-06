@@ -6,6 +6,7 @@ import pyro.distributions as dist
 import pyro.poutine as poutine
 import torch
 from pyro.distributions import constraints
+from pyro.infer.reparam import GumbelSoftmaxReparam
 from pyro.nn import PyroModule, PyroSample
 from sklearn.cluster import AgglomerativeClustering
 
@@ -88,8 +89,8 @@ class KirchhoffModel(PyroModule):
         # Impute missing states.
         with pyro.plate("nodes", N, dim=-2), \
              pyro.plate("characters", C, dim=-1), \
-             poutine.mask(mask=self.is_latent):
-            # TODO reparametrize this with a SoftmaxReparam
+             poutine.mask(mask=self.is_latent), \
+             poutine.reparam(config={"states": GumbelSoftmaxReparam()}):
             states = pyro.sample(
                 "states",
                 dist.RelaxedOneHotCategorical(self.temperature, torch.ones(D)))
@@ -192,6 +193,9 @@ class KirchhoffModel(PyroModule):
         """
         if site["name"] == "states":
             return self.init_states
+        if site["name"] == "states_uniform":
+            # This is the GumbelSoftmaxReparam latent variable.
+            return 0.1 + 0.8 * self.init_states
         if site["name"] == "internal_times":
             return self.init_internal_times
         if site["name"].endswith("subs_model.rates"):
