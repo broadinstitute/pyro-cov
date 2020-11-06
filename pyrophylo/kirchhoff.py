@@ -7,17 +7,13 @@ import pyro.poutine as poutine
 import torch
 from pyro.distributions import constraints
 from pyro.nn import PyroModule, PyroSample
-from pyro.util import warn_if_nan
 from sklearn.cluster import AgglomerativeClustering
 
 logger = logging.getLogger(__name__)
 
 
-def _vv(x, y):
-    return (x[..., None, :] @ y[..., None]).squeeze(-1).squeeze(-1)
-
-
-class FakeCoalescentTimes(dist.TransformedDistribution):
+# TODO replace with CoalescentTimes(self.leaf_times, ordered=False)
+class CoalescentTimes(dist.TransformedDistribution):
     support = constraints.less_than(0.)
 
     def __init__(self, leaf_times):
@@ -54,12 +50,15 @@ class GTRSubstitutionModel(PyroModule):
 
     def forward(self, times, states):
         m = self.transition
-        warn_if_nan(m, "transition")
         times = times.abs()
         return states @ (m * times[..., None]).matrix_exp().transpose(-1, -2)
 
 
 class KirchhoffModel(PyroModule):
+    """
+    A phylogenetic tree model that marginalizes over tree structure and relaxes
+    over the states of internal nodes.
+    """
     def __init__(self, leaf_times, leaf_data, leaf_mask, *,
                  temperature=1.):
         super().__init__()
@@ -78,12 +77,9 @@ class KirchhoffModel(PyroModule):
         self.temperature = torch.tensor(float(temperature))
         self.leaf_mask = leaf_mask
         self.is_latent = torch.cat([~leaf_mask, leaf_mask.new_ones(L - 1, C)], dim=0)
+        self.num_nodes = 2 * L - 1
 
         self._initialize()
-
-    @property
-    def num_nodes(self):
-        return len(self.is_latent)
 
     def forward(self, sample_tree=False):
         L, C, D = self.leaf_states.shape
@@ -101,14 +97,9 @@ class KirchhoffModel(PyroModule):
         states = torch.cat([torch.where(self.leaf_mask[..., None],
                                         self.leaf_states, states[:L]),
                             states[L:]], dim=0)
-        assert states.shape == (N, C, D)
-        warn_if_nan(states, "states")
 
         # Sample times of internal nodes.
-        # TODO replace with CoalescentTimes(self.leaf_times, ordered=False)
-        internal_times = pyro.sample("internal_times",
-                                     FakeCoalescentTimes(self.leaf_times))
-        warn_if_nan(internal_times, "internal_times")
+        internal_times = pyro.sample("internal_times", CoalescentTimes(self.leaf_times))
         times = torch.cat([self.leaf_times, internal_times])
 
         # Account for random tree structure.
@@ -122,43 +113,49 @@ class KirchhoffModel(PyroModule):
             return pyro.sample("tree", tree_dist)
 
     def kernel(self, states, times):
+        """
+        Given states and times, compute pairwise transition log probability
+        between every undirected pair of states. This will be -inf for
+        infeasible pairs, namely leaf-leaf and internal-after-leaf.
+        """
         N, C, D = states.shape
         assert times.shape == (N,)
         L = (N + 1) // 2
 
-        # Select feasible pairs.
+        # Select feasible time-ordered pairs.
         with torch.no_grad():
             feasible = times[:, None] < times
             feasible[:L] = False  # Leaves are terminal.
             v0, v1 = feasible.nonzero(as_tuple=False).unbind(-1)
 
-        # Convert dense square -> sparse.
+        # Convert dense square float64 -> sparse float32.
+        dtype = states.dtype
+        states = states.float()
+        times = times.float()
         x0 = states[v0]
         x1 = states[v1]
         dt = times[v1] - times[v0] + 1e-6
+        m = self.subs_model.transition.float()
 
         # There are multiple ways to extend the mutation likelihood function to
         # the interior of the relaxed space.
-        m = self.subs_model.transition
         exp_mt = (dt[:, None, None] * m).matrix_exp()
         kernel_version = 1
         if kernel_version == 0:
-            # This version has space complexity O(F (C + D) D).
             sparse_logits = torch.einsum("fcd,fce,fde->fc", x0, x1, exp_mt).log().sum(-1)
         elif kernel_version == 1:
-            # This version has space complexity O(F (C + D) D).
             # Accumulate sufficient statistics over characters.
             stats = torch.einsum("fcd,fce->fde", x0, x1)
             sparse_logits = torch.einsum("fde,fde->f", exp_mt.add(1e-6).log(), stats)
         assert sparse_logits.isfinite().all()
 
-        # Convert sparse -> packed triangular.
+        # Convert sparse float32 -> dense triangular float64.
         v0, v1 = torch.min(v0, v1), torch.max(v0, v1)
         k = v0 + v1 * (v1 - 1) // 2  # SpanningTree canonical ordering.
         K = N * (N - 1) // 2         # Number of edges in complete graph.
-        edge_logits = torch.full((K,), -math.inf)
+        edge_logits = sparse_logits.new_full((K,), -math.inf)
         edge_logits[k] = sparse_logits
-        return edge_logits
+        return edge_logits.to(dtype)
 
     def _initialize(self):
         logger.info("Initializing via agglomerative clustering")
@@ -176,6 +173,7 @@ class KirchhoffModel(PyroModule):
         children = clustering.children_
         assert children.shape == (L - 1, 2)
 
+        # Heuristically initialize times and states.
         times = torch.full((N,), math.nan)
         states = torch.full((N, C, D), math.nan)
         times[:L] = self.leaf_times
@@ -198,7 +196,7 @@ class KirchhoffModel(PyroModule):
             return self.init_internal_times
         if site["name"].endswith("subs_model.rates"):
             # Initialize to low mutation rate.
-            return torch.full(site["fn"].shape(), 0.01)
+            return torch.full(site["fn"].shape(), 0.1)
         if site["name"].endswith("subs_model.stationary"):
             D, = site["fn"].event_shape
             return torch.ones(D) / D
