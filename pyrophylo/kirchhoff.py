@@ -114,6 +114,7 @@ class KirchhoffModel(PyroModule):
         self.leaf_internal = is_leaf[:, None] & ~is_leaf
         leaf_leaf = is_leaf[:, None] & is_leaf
         self.infeasible = leaf_leaf | torch.eye(N, dtype=torch.bool)
+        self.is_leaf = is_leaf
 
         self._initialize()
 
@@ -160,7 +161,7 @@ class KirchhoffModel(PyroModule):
                 "tree",
                 dist.SpanningTree(edge_logits, {"backend": "cpp"}))
 
-    def kernel(self, states, times):
+    def kernel1(self, states, times):
         N, C, D = states.shape
         assert times.shape == (N,)
 
@@ -178,6 +179,45 @@ class KirchhoffModel(PyroModule):
         assert w.isfinite().all()
 
         return w
+
+    def kernel2(self, states, times):
+        """
+        This kernel is cheaper but is less forgiving of unlikely values,
+        and ends up leading to near zero mutation likelihood.
+        """
+        N, C, D = states.shape
+        assert times.shape == (N,)
+        L = (N + 1) // 2
+
+        # Select feasible pairs.
+        with torch.no_grad():
+            feasible = times[:, None] < times
+            feasible[:L] = False  # Leaves are terminal.
+            ancestor, descendent = feasible.nonzero(as_tuple=False).unbind(-1)
+            F = len(ancestor)
+
+        # Convert dense -> sparse.
+        x0 = states[ancestor]
+        x1 = states[descendent]
+        dt = 1e-6 + times[descendent] - times[ancestor]
+
+        # Accumulate sufficient statistics over characters.
+        stats = torch.einsum("fcd,fce->fde", x0, x1)
+        assert stats.shape == (F, D, D)
+
+        # Interpolate mutation likelihood to relaxed values.
+        m = self.subs_model.transition
+        exp_mt = (dt[:, None, None] * m).matrix_exp()
+        w_sparse = torch.einsum("fde,fde->f", exp_mt.add(1e-6).log(), stats).exp()
+        assert w_sparse.isfinite().all()
+
+        # Convert sparse -> dense.
+        w = torch.zeros(N, N)
+        w[feasible] = w_sparse
+        w.T[feasible] = w_sparse
+        return w
+
+    kernel = kernel1
 
     def _initialize(self):
         logger.info("Initializing via agglomerative clustering")
