@@ -23,7 +23,7 @@ import torch
 from Bio import AlignIO
 from pyro.infer import SVI, Trace_ELBO
 from pyro.infer.autoguide import AutoLowRankMultivariateNormal, AutoNormal
-from pyro.optim import Adam
+from pyro.optim import ClippedAdam
 
 from pyrophylo.kirchhoff import KirchhoffModel
 
@@ -75,11 +75,15 @@ def train_guide(args, model):
         guide_config["rank"] = args.guide_rank
         guide = AutoLowRankMultivariateNormal(model, **guide_config)
 
-    optim = Adam({"lr": args.learning_rate})
+    optim = ClippedAdam({"lr": args.learning_rate,
+                         "lrd": args.learning_rate_decay ** (1 / args.num_steps)})
     svi = SVI(model, guide, optim, Trace_ELBO())
+    t0 = args.init_temperature
+    t1 = args.final_temperature
     num_observations = model.leaf_mask.sum()
     losses = []
     for step in range(args.num_steps):
+        model.temperature = t0 * (t1 / t0) ** (step / (args.num_steps - 1))
         loss = svi.step() / num_observations
         if step % args.log_every == 0:
             logger.info(f"step {step: >4} loss = {loss:0.4g}")
@@ -111,8 +115,7 @@ def main(args):
     pyro.enable_validation(__debug__)
 
     leaf_times, leaf_data, leaf_mask = load_data(args)
-    model = KirchhoffModel(leaf_times, leaf_data, leaf_mask,
-                           temperature=args.temperature)
+    model = KirchhoffModel(leaf_times, leaf_data, leaf_mask)
     guide = train_guide(args, model)
     trees = predict(args, model, guide)
     evaluate(args, trees)
@@ -123,10 +126,12 @@ if __name__ == "__main__":
     parser.add_argument("--nexus-infile", default="data/treebase/M487.nex")
     parser.add_argument("--max-taxa", default=int(1e6), type=int)
     parser.add_argument("--max-characters", default=int(1e6), type=int)
-    parser.add_argument("-t", "--temperature", default=1.0, type=float)
+    parser.add_argument("-t0", "--init-temperature", default=1.0, type=float)
+    parser.add_argument("-t1", "--final-temperature", default=0.01, type=float)
     parser.add_argument("--guide-rank", default=0, type=int)
-    parser.add_argument("-n", "--num-steps", default=1001, type=int)
-    parser.add_argument("-lr", "--learning-rate", default=0.1, type=float)
+    parser.add_argument("-n", "--num-steps", default=501, type=int)
+    parser.add_argument("-lr", "--learning-rate", default=0.2, type=float)
+    parser.add_argument("-lrd", "--learning-rate-decay", default=0.1, type=float)
     parser.add_argument("-s", "--num-samples", default=1000, type=int)
     parser.add_argument("--seed", default=20201103, type=int)
     parser.add_argument("--log-every", default=100, type=int)
