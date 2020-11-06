@@ -6,7 +6,6 @@ import pyro.distributions as dist
 import pyro.poutine as poutine
 import torch
 from pyro.distributions import constraints
-from pyro.distributions.spanning_tree import make_complete_graph
 from pyro.nn import PyroModule, PyroSample
 from pyro.util import warn_if_nan
 from sklearn.cluster import AgglomerativeClustering
@@ -60,33 +59,6 @@ class GTRSubstitutionModel(PyroModule):
         return states @ (m * times[..., None]).matrix_exp().transpose(-1, -2)
 
 
-def log_count_spanning_trees(w):
-    """
-    Uses Kirchhoff's matrix tree theorem to count weighted spanning trees.
-
-    :param Tensor w: A symmetric matrix of edge weights.
-    :returns: The log sum-over-trees product-over-edges.
-    """
-    assert w.dim() == 2
-    L = w.sum(dim=-1).diag_embed() - w  # Construct laplacian.
-    m = L[:-1, :-1]  # Truncate.
-
-    # Numerically stabilize.
-    scale = m.diag()
-    shift = scale.log().sum()
-    scale = scale.sqrt()
-    m = m / (scale * scale[:, None])
-
-    # Defer to logdet.
-    try:
-        import gpytorch
-        result = gpytorch.lazy.NonLazyTensor(m).logdet()
-    except ImportError:
-        result = torch.cholesky(m).diag().log().sum() * 2
-
-    return result + shift
-
-
 class KirchhoffModel(PyroModule):
     def __init__(self, leaf_times, leaf_data, leaf_mask, *,
                  temperature=1.):
@@ -98,23 +70,14 @@ class KirchhoffModel(PyroModule):
         assert leaf_data.shape[:1] == leaf_times.shape
         assert temperature > 0
         L, C = leaf_data.shape
-        N = 2 * L - 1
         D = 1 + leaf_data.max().item() - leaf_data.min().item()
 
         self.leaf_times = leaf_times
         self.leaf_states = torch.zeros(L, C, D).scatter_(-1, leaf_data[..., None], 1)
         self.subs_model = GTRSubstitutionModel(dim=D)
         self.temperature = torch.tensor(float(temperature))
-
-        # Precompute masks.
         self.leaf_mask = leaf_mask
         self.is_latent = torch.cat([~leaf_mask, leaf_mask.new_ones(L - 1, C)], dim=0)
-        is_leaf = torch.full((N,), False, dtype=torch.bool)
-        is_leaf[:L] = True
-        self.leaf_internal = is_leaf[:, None] & ~is_leaf
-        leaf_leaf = is_leaf[:, None] & is_leaf
-        self.infeasible = leaf_leaf | torch.eye(N, dtype=torch.bool)
-        self.is_leaf = is_leaf
 
         self._initialize()
 
@@ -149,42 +112,16 @@ class KirchhoffModel(PyroModule):
         times = torch.cat([self.leaf_times, internal_times])
 
         # Account for random tree structure.
-        w = self.kernel(states, times)
+        edge_logits = self.kernel(states, times)
+        tree_dist = dist.SpanningTree(edge_logits, {"backend": "cpp"})
         if not sample_tree:
             # During training, analytically marginalize over trees.
-            pyro.factor("state_likelihood", log_count_spanning_trees(w))
+            pyro.factor("tree_likelihood", tree_dist.log_partition_function)
         else:
             # During prediction, simply sample a tree.
-            i, j = make_complete_graph(N)
-            edge_logits = w.detach()[i, j].log()
-            return pyro.sample(
-                "tree",
-                dist.SpanningTree(edge_logits, {"backend": "cpp"}))
+            return pyro.sample("tree", tree_dist)
 
-    def kernel1(self, states, times):
-        N, C, D = states.shape
-        assert times.shape == (N,)
-
-        # Start with a naive mutation kernel.
-        dt = times[:, None] - times
-        x = states
-        y = self.subs_model(dt[..., None], x[:, None])
-        assert y.shape == (N, N, C, D)
-        w = _vv(x, y).add(1e-6).log().logsumexp(dim=-1)
-        assert w.shape == (N, N)
-
-        # Exclude self edges, leaf-leaf edges, and out-of-order leaf-internal edges.
-        ooo = self.leaf_internal & (dt <= 0)
-        w = w.masked_fill(self.infeasible | ooo | ooo.transpose(-1, -2), 0.)
-        assert w.isfinite().all()
-
-        return w
-
-    def kernel2(self, states, times):
-        """
-        This kernel is cheaper but is less forgiving of unlikely values,
-        and ends up leading to near zero mutation likelihood.
-        """
+    def kernel(self, states, times):
         N, C, D = states.shape
         assert times.shape == (N,)
         L = (N + 1) // 2
@@ -193,31 +130,35 @@ class KirchhoffModel(PyroModule):
         with torch.no_grad():
             feasible = times[:, None] < times
             feasible[:L] = False  # Leaves are terminal.
-            ancestor, descendent = feasible.nonzero(as_tuple=False).unbind(-1)
-            F = len(ancestor)
+            v0, v1 = feasible.nonzero(as_tuple=False).unbind(-1)
 
-        # Convert dense -> sparse.
-        x0 = states[ancestor]
-        x1 = states[descendent]
-        dt = 1e-6 + times[descendent] - times[ancestor]
+        # Convert dense square -> sparse.
+        x0 = states[v0]
+        x1 = states[v1]
+        dt = times[v1] - times[v0] + 1e-6
 
-        # Accumulate sufficient statistics over characters.
-        stats = torch.einsum("fcd,fce->fde", x0, x1)
-        assert stats.shape == (F, D, D)
-
-        # Interpolate mutation likelihood to relaxed values.
+        # There are multiple ways to extend the mutation likelihood function to
+        # the interior of the relaxed space.
         m = self.subs_model.transition
         exp_mt = (dt[:, None, None] * m).matrix_exp()
-        w_sparse = torch.einsum("fde,fde->f", exp_mt.add(1e-6).log(), stats).exp()
-        assert w_sparse.isfinite().all()
+        kernel_version = 1
+        if kernel_version == 0:
+            # This version has space complexity O(F (C + D) D).
+            sparse_logits = torch.einsum("fcd,fce,fde->fc", x0, x1, exp_mt).log().sum(-1)
+        elif kernel_version == 1:
+            # This version has space complexity O(F (C + D) D).
+            # Accumulate sufficient statistics over characters.
+            stats = torch.einsum("fcd,fce->fde", x0, x1)
+            sparse_logits = torch.einsum("fde,fde->f", exp_mt.add(1e-6).log(), stats)
+        assert sparse_logits.isfinite().all()
 
-        # Convert sparse -> dense.
-        w = torch.zeros(N, N)
-        w[feasible] = w_sparse
-        w.T[feasible] = w_sparse
-        return w
-
-    kernel = kernel1
+        # Convert sparse -> packed triangular.
+        v0, v1 = torch.min(v0, v1), torch.max(v0, v1)
+        k = v0 + v1 * (v1 - 1) // 2  # SpanningTree canonical ordering.
+        K = N * (N - 1) // 2         # Number of edges in complete graph.
+        edge_logits = torch.full((K,), -math.inf)
+        edge_logits[k] = sparse_logits
+        return edge_logits
 
     def _initialize(self):
         logger.info("Initializing via agglomerative clustering")
