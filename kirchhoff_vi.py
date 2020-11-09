@@ -87,6 +87,9 @@ def train_guide(args, model):
     for step in range(args.num_steps):
         model.temperature = t0 * (t1 / t0) ** (step / (args.num_steps - 1))
         loss = svi.step() / num_observations
+        if step == 0:
+            logger.info("guide has {} parameters".format(
+                sum(p.numel() for p in guide.parameters())))
         if step % args.log_every == 0:
             logger.info(f"step {step: >4} loss = {loss:0.4g}")
         assert math.isfinite(loss)
@@ -196,7 +199,8 @@ def main(args):
     pyro.enable_validation(__debug__)
 
     leaf_times, leaf_data, leaf_mask = load_data(args)
-    model = KirchhoffModel(leaf_times, leaf_data, leaf_mask)
+    model = KirchhoffModel(leaf_times, leaf_data, leaf_mask,
+                           embedding_dim=args.embedding_dim)
     guide = train_guide(args, model)
     times, trees = predict(args, model, guide)
     evaluate(args, times, trees)
@@ -207,9 +211,10 @@ if __name__ == "__main__":
     parser.add_argument("--nexus-infile", default="data/treebase/M487.nex")
     parser.add_argument("--max-taxa", default=int(1e6), type=int)
     parser.add_argument("--max-characters", default=int(1e6), type=int)
+    parser.add_argument("-d", "--embedding-dim", default=20, type=int)
+    parser.add_argument("--guide-rank", default=0, type=int)
     parser.add_argument("-t0", "--init-temperature", default=1.0, type=float)
     parser.add_argument("-t1", "--final-temperature", default=0.01, type=float)
-    parser.add_argument("--guide-rank", default=0, type=int)
     parser.add_argument("-n", "--num-steps", default=501, type=int)
     parser.add_argument("-lr", "--learning-rate", default=0.2, type=float)
     parser.add_argument("-lrd", "--learning-rate-decay", default=0.1, type=float)

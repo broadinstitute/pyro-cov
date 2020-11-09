@@ -5,8 +5,8 @@ import pyro
 import pyro.distributions as dist
 import pyro.poutine as poutine
 import torch
+import torch.nn as nn
 from pyro.distributions import constraints
-from pyro.infer.reparam import GumbelSoftmaxReparam
 from pyro.nn import PyroModule
 from sklearn.cluster import AgglomerativeClustering
 
@@ -28,30 +28,44 @@ class CoalescentTimes(dist.TransformedDistribution):
             dist.transforms.AffineTransform(0., -1.))
 
 
+class Decoder(nn.Module):
+    def __init__(self, input_dim, output_shape):
+        super().__init__()
+        self.shape = torch.Size(output_shape)
+        self.linear = torch.nn.Linear(input_dim, self.shape.numel())
+
+    def forward(self, code, temperature):
+        logits = self.linear(code)
+        logits = logits.reshape(code.shape[:-1] + self.shape)
+        return logits.div(temperature).softmax(dim=-1)
+
+
 class KirchhoffModel(PyroModule):
     """
     A phylogenetic tree model that marginalizes over tree structure and relaxes
     over the states of internal nodes.
     """
     def __init__(self, leaf_times, leaf_data, leaf_mask, *,
-                 temperature=1.):
+                 embedding_dim=20, temperature=1.):
         super().__init__()
         assert leaf_times.dim() == 1
         assert (leaf_times[:-1] <= leaf_times[1:]).all()
         assert leaf_data.dim() == 2
         assert leaf_mask.shape == leaf_data.shape
         assert leaf_data.shape[:1] == leaf_times.shape
+        assert isinstance(embedding_dim, int) and embedding_dim > 0
         assert temperature > 0
         L, C = leaf_data.shape
         D = 1 + leaf_data.max().item() - leaf_data.min().item()
 
         self.leaf_times = leaf_times
+        self.leaf_data = leaf_data
+        self.leaf_mask = leaf_mask
         self.leaf_states = torch.zeros(L, C, D).scatter_(-1, leaf_data[..., None], 1)
         self.subs_model = JukesCantor69(dim=D)
         self.temperature = torch.tensor(float(temperature))
-        self.leaf_mask = leaf_mask
-        self.is_latent = torch.cat([~leaf_mask, leaf_mask.new_ones(L - 1, C)], dim=0)
         self.num_nodes = 2 * L - 1
+        self.decoder = Decoder(embedding_dim, (C, D))
 
         self._initialize()
 
@@ -59,27 +73,31 @@ class KirchhoffModel(PyroModule):
         L, C, D = self.leaf_states.shape
         N = 2 * L - 1
 
-        # Impute missing states.
+        # Sample genetic sequences of all nodes, leaves + internal.
         with pyro.plate("nodes", N, dim=-2), \
+             pyro.plate("code_plate", 20, dim=-1):
+            codes = pyro.sample("codes", dist.Normal(0, 1))
+        states = self.decoder(codes, self.temperature)
+
+        # Interleave samples with observations.
+        with pyro.plate("leaves", L, dim=-2), \
              pyro.plate("characters", C, dim=-1), \
-             poutine.mask(mask=self.is_latent), \
-             poutine.reparam(config={"states": GumbelSoftmaxReparam()}):
-            states = pyro.sample(
-                "states",
-                dist.RelaxedOneHotCategorical(self.temperature, torch.ones(D)))
-        # Interleave with observed states.
-        states = torch.cat([torch.where(self.leaf_mask[..., None],
-                                        self.leaf_states, states[:L]),
-                            states[L:]], dim=0)
+             poutine.mask(mask=self.leaf_mask):
+            pyro.sample("leaf_likelihood", dist.Categorical(states[:L]),
+                        obs=self.leaf_data)
+        imputed_leaf_states = torch.where(self.leaf_mask[..., None],
+                                          self.leaf_states, states[:L])
+        states = torch.cat([imputed_leaf_states, states[L:]], dim=0)
 
         # Sample times of internal nodes.
-        internal_times = pyro.sample("internal_times", CoalescentTimes(self.leaf_times))
-        times = pyro.deterministic("times", torch.cat([self.leaf_times, internal_times]))
+        internal_times = pyro.sample("internal_times",
+                                     CoalescentTimes(self.leaf_times))
+        times = pyro.deterministic("times",
+                                   torch.cat([self.leaf_times, internal_times]))
 
         # Account for random tree structure.
         edge_logits = self.kernel(states, times)
-        # tree_dist = dist.SpanningTree(edge_logits, {"backend": "cpp"})
-        tree_dist = dist.SpanningTree(edge_logits, {"backend": "python"})  # DEBUG
+        tree_dist = dist.SpanningTree(edge_logits, {"backend": "cpp"})
         if not sample_tree:
             # During training, analytically marginalize over trees.
             pyro.factor("tree_likelihood", tree_dist.log_partition_function)
@@ -117,11 +135,13 @@ class KirchhoffModel(PyroModule):
         exp_mt = (dt[:, None, None] * m).matrix_exp()
         kernel_version = 1
         if kernel_version == 0:
-            sparse_logits = torch.einsum("fcd,fce,fde->fc", x0, x1, exp_mt).log().sum(-1)
+            sparse_logits = torch.einsum("fcd,fce,fde->fc",
+                                         x0, x1, exp_mt).log().sum(-1)
         elif kernel_version == 1:
             # Accumulate sufficient statistics over characters.
             stats = torch.einsum("fcd,fce->fde", x0, x1)
-            sparse_logits = torch.einsum("fde,fde->f", exp_mt.add(1e-6).log(), stats)
+            sparse_logits = torch.einsum("fde,fde->f",
+                                         (exp_mt + 1e-6).log(), stats)
         assert sparse_logits.isfinite().all()
 
         # Convert sparse float32 -> dense triangular float64.
@@ -179,4 +199,6 @@ class KirchhoffModel(PyroModule):
         if site["name"].endswith("subs_model.stationary"):
             D, = site["fn"].event_shape
             return torch.ones(D) / D
+        if site["name"] == "codes":
+            return torch.randn(site["fn"].shape())
         raise ValueError("unknown site {}".format(site["name"]))
