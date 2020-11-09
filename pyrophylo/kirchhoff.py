@@ -7,8 +7,10 @@ import pyro.poutine as poutine
 import torch
 from pyro.distributions import constraints
 from pyro.infer.reparam import GumbelSoftmaxReparam
-from pyro.nn import PyroModule, PyroSample
+from pyro.nn import PyroModule
 from sklearn.cluster import AgglomerativeClustering
+
+from .substitution import JukesCantor69
 
 logger = logging.getLogger(__name__)
 
@@ -24,35 +26,6 @@ class CoalescentTimes(dist.TransformedDistribution):
         super().__init__(
             dist.Exponential(torch.ones(L - 1)).to_event(1),
             dist.transforms.AffineTransform(0., -1.))
-
-
-class GTRSubstitutionModel(PyroModule):
-    """
-    Generalized time-reversible substitution model among ``dim``-many states.
-    """
-    def __init__(self, dim=4):
-        super().__init__()
-        self.dim = dim
-        self.stationary = PyroSample(dist.Dirichlet(torch.full((dim,), 2.)))
-        self.rates = PyroSample(
-            dist.Exponential(torch.ones(dim * (dim - 1) // 2)).to_event(1))
-        i = torch.arange(dim)
-        self._index = (i > i[:, None]).nonzero(as_tuple=False).T
-
-    @property
-    def transition(self):
-        p = self.stationary
-        i, j = self._index
-        m = torch.zeros(self.dim, self.dim)
-        m[i, j] = self.rates
-        m = m + m.T * (p / p[:, None])
-        m = m - m.sum(dim=-1).diag_embed()
-        return m
-
-    def forward(self, times, states):
-        m = self.transition
-        times = times.abs()
-        return states @ (m * times[..., None]).matrix_exp().transpose(-1, -2)
 
 
 class KirchhoffModel(PyroModule):
@@ -74,7 +47,7 @@ class KirchhoffModel(PyroModule):
 
         self.leaf_times = leaf_times
         self.leaf_states = torch.zeros(L, C, D).scatter_(-1, leaf_data[..., None], 1)
-        self.subs_model = GTRSubstitutionModel(dim=D)
+        self.subs_model = JukesCantor69(dim=D)
         self.temperature = torch.tensor(float(temperature))
         self.leaf_mask = leaf_mask
         self.is_latent = torch.cat([~leaf_mask, leaf_mask.new_ones(L - 1, C)], dim=0)
@@ -101,17 +74,18 @@ class KirchhoffModel(PyroModule):
 
         # Sample times of internal nodes.
         internal_times = pyro.sample("internal_times", CoalescentTimes(self.leaf_times))
-        times = torch.cat([self.leaf_times, internal_times])
+        times = pyro.deterministic("times", torch.cat([self.leaf_times, internal_times]))
 
         # Account for random tree structure.
         edge_logits = self.kernel(states, times)
-        tree_dist = dist.SpanningTree(edge_logits, {"backend": "cpp"})
+        # tree_dist = dist.SpanningTree(edge_logits, {"backend": "cpp"})
+        tree_dist = dist.SpanningTree(edge_logits, {"backend": "python"})  # DEBUG
         if not sample_tree:
             # During training, analytically marginalize over trees.
             pyro.factor("tree_likelihood", tree_dist.log_partition_function)
         else:
             # During prediction, simply sample a tree.
-            return pyro.sample("tree", tree_dist)
+            pyro.sample("tree", tree_dist)
 
     def kernel(self, states, times):
         """
@@ -136,7 +110,7 @@ class KirchhoffModel(PyroModule):
         x0 = states[v0]
         x1 = states[v1]
         dt = times[v1] - times[v0] + 1e-6
-        m = self.subs_model.transition.float()
+        m = self.subs_model().float()
 
         # There are multiple ways to extend the mutation likelihood function to
         # the interior of the relaxed space.
@@ -198,7 +172,8 @@ class KirchhoffModel(PyroModule):
             return 0.1 + 0.8 * self.init_states
         if site["name"] == "internal_times":
             return self.init_internal_times
-        if site["name"].endswith("subs_model.rates"):
+        if site["name"].endswith("subs_model.rate") or \
+                site["name"].endswith("subs_model.rates"):
             # Initialize to low mutation rate.
             return torch.full(site["fn"].shape(), 0.1)
         if site["name"].endswith("subs_model.stationary"):
