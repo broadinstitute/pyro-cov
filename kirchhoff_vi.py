@@ -22,6 +22,7 @@ import pyro
 import pyro.poutine as poutine
 import setuptools  # noqa F401
 import torch
+import torch.multiprocessing as mp
 from Bio import AlignIO
 from pyro.infer import SVI, Trace_ELBO
 from pyro.infer.autoguide import AutoLowRankMultivariateNormal, AutoNormal
@@ -96,43 +97,58 @@ def train_guide(args, model):
         losses.append(loss)
 
 
-@torch.no_grad()
-def predict(args, model, guide):
-    logger.info(f"Drawing {args.num_samples} posterior samples")
-    num_edges = model.num_nodes - 1
-    times = torch.empty((args.num_samples, model.num_nodes))
-    trees = torch.empty((args.num_samples, num_edges, 2), dtype=torch.long)
-    for i in range(args.num_samples):
-        guide_trace = poutine.trace(guide).get_trace()
-        with poutine.replay(trace=guide_trace):
-            trace = poutine.trace(model).get_trace(sample_tree=True)
-            times[i] = trace.nodes["times"]["value"]
-            trees[i] = trace.nodes["tree"]["value"]
-            del trace
-        if i % args.log_every == 0:
-            sys.stdout.write(".")
-            sys.stdout.flush()
+def _predict_task(args):
+    args, model, guide, i = args
+    torch.set_default_dtype(torch.double)
+    pyro.set_rng_seed(args.seed + i)
+    pyro.enable_validation(__debug__)
+
+    guide_trace = poutine.trace(guide).get_trace()
+    with poutine.replay(trace=guide_trace):
+        trace = poutine.trace(model).get_trace(sample_tree=True)
+        times = trace.nodes["times"]["value"]
+        trees = trace.nodes["tree"]["value"]
+    if i % args.log_every == 0:
+        sys.stderr.write(".")
+        sys.stderr.flush()
     return times, trees
 
 
-def make_tree(time, tree):
+@torch.no_grad()
+def predict(args, model, guide):
+    logger.info(f"Drawing {args.num_samples} posterior samples")
+    map_ = mp.Pool().map if args.parallel else map
+    samples = list(map_(_predict_task, [
+        (args, model, guide, i)
+        for i in range(args.num_samples)
+    ]))
+    times = torch.stack([sample[0] for sample in samples])
+    trees = torch.stack([sample[1] for sample in samples])
+    return times, trees
+
+
+def binarize_tree(time, tree):
     """
-    Convert an edge list to a nested frozenset of leaf ids.
+    Convert an edge list to a nested binary frozenset of leaf ids.
     """
     assert time.dim() == 1
     N = time.size(0)
     assert tree.shape == (N - 1, 2)
     L = (N + 1) // 2
 
-    children = defaultdict(list)
+    # Initialize child and parent pointers.
+    children = defaultdict(set)
     for u, v in tree.tolist():
         if time[u] < time[v]:
-            children[u].append(v)
+            children[u].add(v)
         else:
-            children[v].append(u)
+            children[v].add(u)
+    assert all(v > L for v in children)
+    assert len(children) <= N - L
     parents = {c: p for p, cs in children.items() for c in cs}
+    assert len(parents) == N - 1
 
-    # Remove internal nodes with zero or one child.
+    # Prune internal nodes with zero or one child.
     pruned = set()
     changed = True
     while changed:
@@ -140,29 +156,32 @@ def make_tree(time, tree):
         for v in range(L, N):
             if v in pruned:
                 continue
-            if len(children[v]) == 0:
-                changed = True
-                pruned.add(v)
-                del children[v]
-            elif len(children[v]) == 1:
-                changed = True
-                pruned.add(v)
-                c, = children.pop(v)
-                if v in parents:
-                    p = parents.pop(v)
-                    parents[c] = p
-                    children[p].append(c)
-        children = {v: [c for c in cs if c not in pruned]
-                    for v, cs in children.items()}
+            cs = children[v]
+            if len(cs) >= 2:
+                continue
+            changed = True
+            pruned.add(v)
+            del children[v]
+            p = parents.pop(v, None)
+            if not cs:
+                continue
+            c, = cs
+            del parents[c]
+            if p is None:
+                continue
+            children[p].remove(v)
+            children[p].add(c)
+            parents[c] = p
+    del parents
 
     # Replace multi-ary nodes with binary nodes.
     for v, cs in list(children.items()):
-        cs.sort()
         assert len(cs) >= 2
         while len(cs) > 2:
-            u = pruned.pop()
-            children[u] = [cs.pop(), cs.pop()]
-            cs.append(u)
+            c = pruned.pop()
+            children[c] = {cs.pop(), cs.pop()}
+            cs.add(c)
+    assert not pruned
 
     result = [None] * N
     for v in time.sort(-1, descending=True).indices.tolist():
@@ -185,7 +204,7 @@ def evaluate(args, times, trees):
     #     http://proceedings.mlr.press/v70/dinh17a.html
     counts = Counter()
     for time, tree in zip(times, trees):
-        counts[make_tree(time, tree)] += 1
+        counts[binarize_tree(time, tree)] += 1
     top_k = counts.most_common(args.top_k)
     logger.info("Estimated posterior distribution for the top {} trees:\n{}"
                 .format(args.top_k,
@@ -194,6 +213,7 @@ def evaluate(args, times, trees):
 
 
 def main(args):
+    mp.set_start_method("spawn")
     torch.set_default_dtype(torch.double)
     pyro.set_rng_seed(args.seed)
     pyro.enable_validation(__debug__)
@@ -219,8 +239,16 @@ if __name__ == "__main__":
     parser.add_argument("-lr", "--learning-rate", default=0.2, type=float)
     parser.add_argument("-lrd", "--learning-rate-decay", default=0.1, type=float)
     parser.add_argument("-s", "--num-samples", default=1000, type=int)
+    parser.add_argument("--parallel", default=True, action="store_true")
+    parser.add_argument("--sequential", action="store_false", dest="parallel")
     parser.add_argument("--top-k", default=10, type=int)
     parser.add_argument("--seed", default=20201103, type=int)
     parser.add_argument("-l", "--log-every", default=1, type=int)
     args = parser.parse_args()
+
+    # Disable multiprocessing when running under pdb.
+    main_module = sys.modules["__main__"]
+    if not hasattr(main_module, "__spec__"):
+        args.parallel = False
+
     main(args)

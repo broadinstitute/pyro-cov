@@ -174,7 +174,7 @@ class KirchhoffModel(PyroModule):
         times[:L] = self.leaf_times
         states[:L] = self.leaf_states * 0.99 + 0.01 / D
         for p, (c1, c2) in enumerate(children):
-            times[L + p] = min(times[c1], times[c2]) - 1
+            times[L + p] = min(times[c1], times[c2]) - 1 - torch.rand(()) * 0.1
             states[L + p] = (states[c1] + states[c2]) / 2
         assert times.isfinite().all()
         assert states.isfinite().all()
