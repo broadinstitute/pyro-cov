@@ -28,7 +28,7 @@ from pyro.infer import SVI, Trace_ELBO
 from pyro.infer.autoguide import AutoLowRankMultivariateNormal, AutoNormal
 from pyro.optim import ClippedAdam
 
-from pyrophylo.kirchhoff import KirchhoffModel
+from pyrophylo.bethe import BetheModel
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(format="%(relativeCreated) 9d %(message)s", level=logging.DEBUG)
@@ -219,8 +219,8 @@ def main(args):
     pyro.enable_validation(__debug__)
 
     leaf_times, leaf_data, leaf_mask = load_data(args)
-    model = KirchhoffModel(leaf_times, leaf_data, leaf_mask,
-                           embedding_dim=args.embedding_dim)
+    model = BetheModel(leaf_times, leaf_data, leaf_mask,
+                       embedding_dim=args.embedding_dim)
     guide = train_guide(args, model)
     times, trees = predict(args, model, guide)
     evaluate(args, times, trees)

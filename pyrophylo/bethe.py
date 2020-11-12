@@ -40,7 +40,7 @@ class Decoder(nn.Module):
         return logits.div(temperature).softmax(dim=-1)
 
 
-class KirchhoffModel(PyroModule):
+class BetheModel(PyroModule):
     """
     A phylogenetic tree model that marginalizes over tree structure and relaxes
     over the states of internal nodes.
@@ -96,11 +96,12 @@ class KirchhoffModel(PyroModule):
                                    torch.cat([self.leaf_times, internal_times]))
 
         # Account for random tree structure.
-        edge_logits = self.kernel(states, times)
-        tree_dist = dist.SpanningTree(edge_logits, {"backend": "cpp"})
+        logits = self.kernel(states.float(), times.float())
+        tree_dist = dist.OneTwoMatching(logits, bp_iters=10)
         if not sample_tree:
             # During training, analytically marginalize over trees.
-            pyro.factor("tree_likelihood", tree_dist.log_partition_function)
+            pyro.factor("tree_likelihood",
+                        tree_dist.log_partition_function.to(times.dtype))
         else:
             # During prediction, simply sample a tree.
             pyro.sample("tree", tree_dist)
@@ -119,16 +120,13 @@ class KirchhoffModel(PyroModule):
         with torch.no_grad():
             feasible = times[:, None] < times
             feasible[:L] = False  # Leaves are terminal.
-            v0, v1 = feasible.nonzero(as_tuple=False).unbind(-1)
+            v0, v1 = feasible.nonzero(as_tuple=True)
 
-        # Convert dense square float64 -> sparse float32.
-        dtype = states.dtype
-        states = states.float()
-        times = times.float()
+        # Convert dense square -> sparse.
         x0 = states[v0]
         x1 = states[v1]
         dt = times[v1] - times[v0] + 1e-6
-        m = self.subs_model().float()
+        m = self.subs_model().to(states.dtype)
 
         # There are multiple ways to extend the mutation likelihood function to
         # the interior of the relaxed space.
@@ -144,13 +142,18 @@ class KirchhoffModel(PyroModule):
                                          (exp_mt + 1e-6).log(), stats)
         assert sparse_logits.isfinite().all()
 
-        # Convert sparse float32 -> dense triangular float64.
-        v0, v1 = torch.min(v0, v1), torch.max(v0, v1)
-        k = v0 + v1 * (v1 - 1) // 2  # SpanningTree canonical ordering.
-        K = N * (N - 1) // 2         # Number of edges in complete graph.
-        edge_logits = sparse_logits.new_full((K,), -math.inf)
-        edge_logits[k] = sparse_logits
-        return edge_logits.to(dtype)
+        # Convert sparse -> dense matching.
+        num_sources = N - 1  # Everything but the root.
+        num_destins = N - L  # All internal nodes.
+        assert num_sources == 2 * num_destins
+        root = times.min(0).indices.item()
+        source_id = torch.arange(N)
+        source_id[root] = N
+        source_id[root + 1:] -= 1
+        destin_id = torch.cat([torch.full((L,), N), torch.arange(N - L)])
+        logits = sparse_logits.new_full((num_sources, num_destins), -math.inf)
+        logits[source_id[v1], destin_id[v0]] = sparse_logits
+        return logits
 
     def _initialize(self):
         logger.info("Initializing via agglomerative clustering")
