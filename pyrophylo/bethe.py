@@ -46,7 +46,7 @@ class BetheModel(PyroModule):
     over the states of internal nodes.
     """
     def __init__(self, leaf_times, leaf_data, leaf_mask, *,
-                 embedding_dim=20, temperature=1.):
+                 embedding_dim=20, temperature=1., bp_iters=30):
         super().__init__()
         assert leaf_times.dim() == 1
         assert (leaf_times[:-1] <= leaf_times[1:]).all()
@@ -64,6 +64,7 @@ class BetheModel(PyroModule):
         self.leaf_states = torch.zeros(L, C, D).scatter_(-1, leaf_data[..., None], 1)
         self.subs_model = JukesCantor69(dim=D)
         self.temperature = torch.tensor(float(temperature))
+        self.bp_iters = bp_iters
         self.num_nodes = 2 * L - 1
         self.decoder = Decoder(embedding_dim, (C, D))
 
@@ -97,7 +98,7 @@ class BetheModel(PyroModule):
 
         # Account for random tree structure.
         logits = self.kernel(states.float(), times.float())
-        tree_dist = dist.OneTwoMatching(logits, bp_iters=10)
+        tree_dist = dist.OneTwoMatching(logits, bp_iters=self.bp_iters)
         if not sample_tree:
             # During training, analytically marginalize over trees.
             pyro.factor("tree_likelihood",

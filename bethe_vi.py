@@ -220,7 +220,8 @@ def main(args):
 
     leaf_times, leaf_data, leaf_mask = load_data(args)
     model = BetheModel(leaf_times, leaf_data, leaf_mask,
-                       embedding_dim=args.embedding_dim)
+                       embedding_dim=args.embedding_dim,
+                       bp_iters=args.bp_iters)
     guide = train_guide(args, model)
     times, trees = predict(args, model, guide)
     evaluate(args, times, trees)
@@ -235,6 +236,7 @@ if __name__ == "__main__":
     parser.add_argument("--guide-rank", default=0, type=int)
     parser.add_argument("-t0", "--init-temperature", default=1.0, type=float)
     parser.add_argument("-t1", "--final-temperature", default=0.01, type=float)
+    parser.add_argument("-bp", "--bp-iters", default=30, type=int)
     parser.add_argument("-n", "--num-steps", default=501, type=int)
     parser.add_argument("-lr", "--learning-rate", default=0.2, type=float)
     parser.add_argument("-lrd", "--learning-rate-decay", default=0.1, type=float)
