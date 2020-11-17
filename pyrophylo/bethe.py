@@ -10,6 +10,7 @@ from pyro.distributions import constraints
 from pyro.nn import PyroModule
 from sklearn.cluster import AgglomerativeClustering
 
+from .phylo import Phylogeny
 from .substitution import JukesCantor69
 
 logger = logging.getLogger(__name__)
@@ -97,7 +98,7 @@ class BetheModel(PyroModule):
                                    torch.cat([self.leaf_times, internal_times]))
 
         # Account for random tree structure.
-        logits = self.kernel(states.float(), times.float())
+        logits, sources, destins = self.kernel(states.float(), times.float())
         tree_dist = dist.OneTwoMatching(logits, bp_iters=self.bp_iters)
         if not sample_tree:
             # During training, analytically marginalize over trees.
@@ -105,7 +106,15 @@ class BetheModel(PyroModule):
                         tree_dist.log_partition_function.to(times.dtype))
         else:
             # During prediction, simply sample a tree.
-            pyro.sample("tree", tree_dist)
+            # TODO implement OneTwoMatching.sample(); until then use .mode().
+            tree_dist = dist.Delta(tree_dist.mode(), event_dim=1)
+            tree = pyro.sample("tree", tree_dist)
+
+            # Convert sparse matching to phylogeny.
+            parents = tree.new_full((N,), -1)
+            parents[sources] = destins[tree]
+            leaves = torch.arange(L)
+            return Phylogeny.from_unsorted(times, parents, leaves)
 
     def kernel(self, states, times):
         """
@@ -148,13 +157,14 @@ class BetheModel(PyroModule):
         num_destins = N - L  # All internal nodes.
         assert num_sources == 2 * num_destins
         root = times.min(0).indices.item()
-        source_id = torch.arange(N)
-        source_id[root] = N
-        source_id[root + 1:] -= 1
-        destin_id = torch.cat([torch.full((L,), N), torch.arange(N - L)])
+        decode_source = torch.cat([torch.arange(root), torch.arange(root + 1, N)])
+        decode_destin = torch.arange(L, N)
+        encode = torch.full((2, N), N)
+        encode[0, decode_source] = torch.arange(N - 1)
+        encode[1, decode_destin] = torch.arange(N - L)
         logits = sparse_logits.new_full((num_sources, num_destins), -math.inf)
-        logits[source_id[v1], destin_id[v0]] = sparse_logits
-        return logits
+        logits[encode[0, v1], encode[1, v0]] = sparse_logits
+        return logits, decode_source, decode_destin
 
     def _initialize(self):
         logger.info("Initializing via agglomerative clustering")

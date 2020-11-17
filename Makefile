@@ -16,7 +16,7 @@ test: lint data FORCE
 profile: lint
 	python -O -m cProfile -s tottime -o profile_svi.prof profile_svi.py
 
-profile_kvi.prof: lint
-	python -O -m cProfile -s tottime -o profile_kvi.prof bethe_vi.py -n 100 --log-every=1
+profile_bvi.prof: lint
+	python -O -m cProfile -s tottime -o profile_bvi.prof bethe_vi.py -n 100 --log-every=1
 
 FORCE:

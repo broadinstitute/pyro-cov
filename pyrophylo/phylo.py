@@ -1,3 +1,4 @@
+from collections import defaultdict
 import logging
 
 import numpy as np
@@ -75,6 +76,16 @@ class Phylogeny:
         sign = torch.ones_like(self.parents).scatter_(-1, _parents, -1.)
         num_lineages = sign.flip(-1).cumsum(-1).flip(-1)
         return num_lineages
+
+    def hash_topology(self):
+        if self.batch_shape:
+            return tuple(p.hash_topology() for p in self)
+        trees = defaultdict(frozenset)
+        for leaf, v in enumerate(self.leaves.tolist()):
+            trees[v] = leaf
+        for v, parent in reversed(list(enumerate(self.parents[1:].tolist()))):
+            trees[parent] |= {trees[v]}
+        return trees[0]
 
     @staticmethod
     def stack(phylogenies):
