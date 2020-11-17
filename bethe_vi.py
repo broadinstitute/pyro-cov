@@ -125,6 +125,13 @@ def predict(args, model, guide):
     return trees
 
 
+def pretty_tree(t):
+    if isinstance(t, frozenset):
+        x, y = sorted(map(pretty_tree, t))
+        return f"({x} {y})"
+    return str(t)
+
+
 @torch.no_grad()
 def evaluate(args, trees):
     # Compute histogram over top k trees.
@@ -138,6 +145,8 @@ def evaluate(args, trees):
                 .format(args.top_k,
                         ", ".join("{:0.3g}".format(count / args.num_samples)
                                   for key, count in top_k)))
+    best = top_k[0][0]
+    logger.info(f"Best tree:\n{pretty_tree(best)}")
 
 
 def main(args):

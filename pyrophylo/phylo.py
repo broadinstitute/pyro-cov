@@ -80,12 +80,19 @@ class Phylogeny:
     def hash_topology(self):
         if self.batch_shape:
             return tuple(p.hash_topology() for p in self)
-        trees = defaultdict(frozenset)
+        trees = defaultdict(list)
         for leaf, v in enumerate(self.leaves.tolist()):
             trees[v] = leaf
-        for v, parent in reversed(list(enumerate(self.parents[1:].tolist()))):
-            trees[parent] |= {trees[v]}
-        return trees[0]
+        for v, parent in enumerate(self.parents[1:].tolist()):
+            trees[parent].append(trees[v + 1])
+
+        def freeze(x):
+            if isinstance(x, int):
+                return x
+            assert len(x) == 2
+            return frozenset(map(freeze, x))
+
+        return freeze(trees[0])
 
     @staticmethod
     def stack(phylogenies):
