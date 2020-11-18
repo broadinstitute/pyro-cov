@@ -212,7 +212,7 @@ if __name__ == "__main__":
     parser.add_argument("-e", "--embedding-dim", default=10, type=int)
     parser.add_argument("-r", "--guide-rank", default=0, type=int)
     parser.add_argument("-t0", "--init-temperature", default=1.0, type=float)
-    parser.add_argument("-t1", "--final-temperature", default=0.01, type=float)
+    parser.add_argument("-t1", "--final-temperature", default=0.1, type=float)
     parser.add_argument("-bp", "--bp-iters", default=30, type=int)
     parser.add_argument("-n", "--num-steps", default=501, type=int)
     parser.add_argument("-lr", "--learning-rate", default=0.2, type=float)

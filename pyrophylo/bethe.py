@@ -38,7 +38,7 @@ class Decoder(nn.Module):
     def forward(self, code, temperature):
         logits = self.linear(code)
         logits = logits.reshape(code.shape[:-1] + self.shape)
-        return logits.div(temperature).softmax(dim=-1)
+        return logits.mul(1 / temperature).softmax(dim=-1)
 
 
 class BetheModel(PyroModule):
@@ -136,22 +136,12 @@ class BetheModel(PyroModule):
             v0, v1 = feasible.nonzero(as_tuple=True)
 
         # Convert dense square -> sparse.
-        x0 = states[v0]
-        x1 = states[v1]
         dt = times[v1] - times[v0] + 1e-6
         m = self.subs_model().to(states.dtype)
-
-        # There are multiple ways to extend the mutation likelihood function to
-        # the interior of the relaxed space.
         exp_mt = (dt[:, None, None] * m).matrix_exp()
-        kernel_version = 1
-        if kernel_version == 0:  # Slower.
-            sparse_logits = torch.einsum("fcd,fce,fde->fc",
-                                         x0, x1, exp_mt).log().sum(-1)
-        elif kernel_version == 1:  # Faster, better elbo.
-            # Accumulate sufficient statistics over characters.
-            stats = torch.einsum("fcd,fce->fde", x0, x1)
-            sparse_logits = torch.einsum("fde,fde->f", exp_mt.log(), stats)
+        # Accumulate sufficient statistics over characters.
+        stats = torch.einsum("icd,jce->ijde", states, states)[v0, v1]
+        sparse_logits = torch.einsum("fde,fde->f", exp_mt.log(), stats)
         assert sparse_logits.isfinite().all()
 
         # Convert sparse -> dense matching.
