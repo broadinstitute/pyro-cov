@@ -25,7 +25,7 @@ import torch
 import torch.multiprocessing as mp
 from Bio import AlignIO
 from pyro.infer import SVI, Trace_ELBO
-from pyro.infer.autoguide import AutoDelta, AutoLowRankMultivariateNormal, AutoNormal
+from pyro.infer.autoguide import AutoLowRankMultivariateNormal, AutoNormal
 from pyro.optim import ClippedAdam
 
 from pyrophylo.bethe import BetheModel
@@ -73,15 +73,12 @@ def train_guide(args, model):
     logger.info("Training via SVI")
 
     # Configure a guide.
-    guide_config = {"init_loc_fn": model.init_loc_fn}
-    if args.guide_map:
-        guide = AutoDelta(model, **guide_config)
-    elif args.guide_rank == 0:
-        guide_config["init_scale"] = 0.01
+    # Note AutoDelta guides fail due to EM-style mode collapse.
+    guide_config = {"init_loc_fn": model.init_loc_fn, "init_scale": 0.01}
+    if args.guide_rank == 0:
         guide = AutoNormal(model, **guide_config)
     else:
         guide_config["rank"] = args.guide_rank
-        guide_config["init_scale"] = 0.01
         guide = AutoLowRankMultivariateNormal(model, **guide_config)
 
     # Train the guide via SVI.
@@ -102,7 +99,6 @@ def train_guide(args, model):
             logger.info(f"step {step: >4} loss = {loss:0.4g}")
         assert math.isfinite(loss)
         losses.append(loss)
-    guide.requires_grad_(False)
 
     # Log diagnostics.
     median = guide.median()
@@ -120,6 +116,7 @@ def train_guide(args, model):
     return guide, losses
 
 
+@torch.no_grad()
 def _predict_task(args):
     args, model, guide, i = args
     torch.set_default_dtype(torch.double)
@@ -135,7 +132,6 @@ def _predict_task(args):
     return tree, codes
 
 
-@torch.no_grad()
 def predict(args, model, guide):
     logger.info(f"Drawing {args.num_samples} posterior samples")
     map_ = mp.Pool().map if args.parallel else map
@@ -213,9 +209,8 @@ if __name__ == "__main__":
     parser.add_argument("--outfile", default="results/bethe_vi.pt")
     parser.add_argument("--max-taxa", default=int(1e6), type=int)
     parser.add_argument("--max-characters", default=int(1e6), type=int)
-    parser.add_argument("-e", "--embedding-dim", default=20, type=int)
-    parser.add_argument("-map", "--guide-map", action="store_true")
-    parser.add_argument("--guide-rank", default=0, type=int)
+    parser.add_argument("-e", "--embedding-dim", default=10, type=int)
+    parser.add_argument("-r", "--guide-rank", default=0, type=int)
     parser.add_argument("-t0", "--init-temperature", default=1.0, type=float)
     parser.add_argument("-t1", "--final-temperature", default=0.01, type=float)
     parser.add_argument("-bp", "--bp-iters", default=30, type=int)

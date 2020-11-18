@@ -171,11 +171,11 @@ class BetheModel(PyroModule):
     def _initialize(self):
         logger.info("Initializing via PCA + agglomerative clustering")
 
-        # Deterministically impute, only used by initialization.
+        # Deterministically impute, used  onlyby initialization.
         missing = ~self.leaf_mask
         self.leaf_states[missing] = 1. / self.subs_model.dim
 
-        # Heuristically initialize codes via PCA.
+        # Heuristically initialize leaf codes via PCA.
         L = self.leaf_states.size(0)
         N = 2 * L - 1
         E = self.embedding_dim
@@ -187,7 +187,7 @@ class BetheModel(PyroModule):
         children = clustering.children_
         assert children.shape == (L - 1, 2)
 
-        # Heuristically initialize times and codes.
+        # Heuristically initialize internal times and codes.
         times = torch.full((N,), math.nan)
         codes = torch.full((N, E), math.nan)
         times[:L] = self.leaf_times
