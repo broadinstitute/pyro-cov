@@ -69,8 +69,10 @@ def load_data(args):
     return times, data, mask
 
 
-def train_guide(args, model):
-    logger.info("Training via SVI")
+def pretrain_model(args, model):
+    logger.info("Pretraining model via SVI")
+    logger.info("model has {} parameters".format(
+        sum(p.numel() for p in model.parameters())))
 
     # Pretrain the model via SVI with an AutoDelta guide.
     optim = ClippedAdam({"lr": args.learning_rate})
@@ -83,9 +85,14 @@ def train_guide(args, model):
         svi.step(pretrain=True)
         loss = svi.step(pretrain=True) / num_observations
         if step % args.log_every == 0:
-            logger.info(f"pre {step: >4} loss = {loss:0.4g}")
+            logger.info(f"step {step: >4} loss = {loss:0.4g}")
         assert math.isfinite(loss)
         losses.append(loss)
+    return losses
+
+
+def train_guide(args, model):
+    logger.info("Training model+guide via SVI")
 
     # Configure a guide.
     # Note AutoDelta guides fail due to EM-style mode collapse.
@@ -105,6 +112,8 @@ def train_guide(args, model):
     svi = SVI(model, guide, optim, Trace_ELBO())
     t0 = args.init_temperature
     t1 = args.final_temperature
+    num_observations = model.leaf_mask.sum()
+    losses = []
     for step in range(args.num_steps):
         model.temperature = t0 * (t1 / t0) ** (step / (args.num_steps - 1))
         loss = svi.step() / num_observations
@@ -192,8 +201,10 @@ def main(args):
     leaf_times, leaf_data, leaf_mask = load_data(args)
     model = BetheModel(leaf_times, leaf_data, leaf_mask,
                        embedding_dim=args.embedding_dim,
+                       temperature=args.init_temperature,
                        bp_iters=args.bp_iters)
-    guide, losses = train_guide(args, model)
+    model_losses = pretrain_model(args, model)
+    guide, guide_losses = train_guide(args, model)
     trees, codes = predict(args, model, guide)
     evaluate(args, trees)
 
@@ -201,6 +212,7 @@ def main(args):
     if args.outfile:
         logger.info(f"saving to {args.outfile}")
         results = {
+            "args": args,
             "data": {
                 "leaf_times": leaf_times,
                 "leaf_data": leaf_data,
@@ -208,7 +220,7 @@ def main(args):
             },
             "model": model,
             "guide": guide,
-            "losses": losses,
+            "losses": model_losses + guide_losses,
             "samples": {
                 "trees": trees,
                 "codes": codes,
@@ -229,8 +241,8 @@ if __name__ == "__main__":
     parser.add_argument("-t1", "--final-temperature", default=0.01, type=float)
     parser.add_argument("-bp", "--bp-iters", default=30, type=int)
     parser.add_argument("-n0", "--pre-steps", default=20, type=int)
-    parser.add_argument("-n", "--num-steps", default=201, type=int)
-    parser.add_argument("-lr", "--learning-rate", default=0.1, type=float)
+    parser.add_argument("-n", "--num-steps", default=1000, type=int)
+    parser.add_argument("-lr", "--learning-rate", default=0.2, type=float)
     parser.add_argument("-lrd", "--learning-rate-decay", default=0.1, type=float)
     parser.add_argument("-s", "--num-samples", default=200, type=int)
     parser.add_argument("--double", default=True, action="store_true")
