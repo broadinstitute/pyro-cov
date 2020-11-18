@@ -67,6 +67,7 @@ class BetheModel(PyroModule):
         self.temperature = torch.tensor(float(temperature))
         self.bp_iters = bp_iters
         self.num_nodes = 2 * L - 1
+        self.embedding_dim = embedding_dim
         self.decoder = Decoder(embedding_dim, (C, D))
 
         self._initialize()
@@ -77,7 +78,7 @@ class BetheModel(PyroModule):
 
         # Sample genetic sequences of all nodes, leaves + internal.
         with pyro.plate("nodes", N, dim=-2), \
-             pyro.plate("code_plate", 20, dim=-1):
+             pyro.plate("code_plate", self.embedding_dim, dim=-1):
             codes = pyro.sample("codes", dist.Normal(0, 1))
         states = self.decoder(codes, self.temperature)
 
@@ -114,7 +115,9 @@ class BetheModel(PyroModule):
             parents = tree.new_full((N,), -1)
             parents[sources] = destins[tree]
             leaves = torch.arange(L)
-            return Phylogeny.from_unsorted(times, parents, leaves)
+            phylo, old2new, new2old = Phylogeny.sort(times, parents, leaves)
+            codes = codes[new2old]
+            return phylo, codes
 
     def kernel(self, states, times):
         """
@@ -142,14 +145,13 @@ class BetheModel(PyroModule):
         # the interior of the relaxed space.
         exp_mt = (dt[:, None, None] * m).matrix_exp()
         kernel_version = 1
-        if kernel_version == 0:
+        if kernel_version == 0:  # Slower.
             sparse_logits = torch.einsum("fcd,fce,fde->fc",
                                          x0, x1, exp_mt).log().sum(-1)
-        elif kernel_version == 1:
+        elif kernel_version == 1:  # Faster, better elbo.
             # Accumulate sufficient statistics over characters.
             stats = torch.einsum("fcd,fce->fde", x0, x1)
-            sparse_logits = torch.einsum("fde,fde->f",
-                                         (exp_mt + 1e-6).log(), stats)
+            sparse_logits = torch.einsum("fde,fde->f", exp_mt.log(), stats)
         assert sparse_logits.isfinite().all()
 
         # Convert sparse -> dense matching.
@@ -167,45 +169,45 @@ class BetheModel(PyroModule):
         return logits, decode_source, decode_destin
 
     def _initialize(self):
-        logger.info("Initializing via agglomerative clustering")
+        logger.info("Initializing via PCA + agglomerative clustering")
 
         # Deterministically impute, only used by initialization.
         missing = ~self.leaf_mask
         self.leaf_states[missing] = 1. / self.subs_model.dim
 
-        # Heuristically initialize hierarchy.
-        L, C, D = self.leaf_states.shape
+        # Heuristically initialize codes via PCA.
+        L = self.leaf_states.size(0)
         N = 2 * L - 1
-        data = self.leaf_states.reshape(L, C * D)
+        E = self.embedding_dim
+        leaf_codes = torch.pca_lowrank(self.leaf_states.reshape(L, -1), E)[0]
+
+        # Heuristically initialize hierarchy.
         clustering = AgglomerativeClustering(
-            distance_threshold=0, n_clusters=None).fit(data)
+            distance_threshold=0, n_clusters=None).fit(leaf_codes)
         children = clustering.children_
         assert children.shape == (L - 1, 2)
 
-        # Heuristically initialize times and states.
+        # Heuristically initialize times and codes.
         times = torch.full((N,), math.nan)
-        states = torch.full((N, C, D), math.nan)
+        codes = torch.full((N, E), math.nan)
         times[:L] = self.leaf_times
-        states[:L] = self.leaf_states * 0.99 + 0.01 / D
+        codes[:L] = leaf_codes + torch.randn(L, E) * 0.1
         for p, (c1, c2) in enumerate(children):
-            times[L + p] = min(times[c1], times[c2]) - 1 - torch.rand(()) * 0.1
-            states[L + p] = (states[c1] + states[c2]) / 2
+            times[L + p] = min(times[c1], times[c2]) - 0.1 - torch.rand(())
+            codes[L + p] = (codes[c1] + codes[c2]) / 2 + torch.randn(E) * 0.1
         assert times.isfinite().all()
-        assert states.isfinite().all()
+        assert codes.isfinite().all()
         self.init_internal_times = times[L:].clone()
-        self.init_states = states
+        self.init_codes = codes
 
     def init_loc_fn(self, site):
         """
         Heuristic initialization for guides.
         """
-        if site["name"] == "states":
-            return self.init_states
-        if site["name"] == "states_uniform":
-            # This is the GumbelSoftmaxReparam latent variable.
-            return 0.1 + 0.8 * self.init_states
         if site["name"] == "internal_times":
             return self.init_internal_times
+        if site["name"] == "codes":
+            return self.init_codes
         if site["name"].endswith("subs_model.rate") or \
                 site["name"].endswith("subs_model.rates"):
             # Initialize to low mutation rate.
@@ -213,6 +215,4 @@ class BetheModel(PyroModule):
         if site["name"].endswith("subs_model.stationary"):
             D, = site["fn"].event_shape
             return torch.ones(D) / D
-        if site["name"] == "codes":
-            return torch.randn(site["fn"].shape())
         raise ValueError("unknown site {}".format(site["name"]))

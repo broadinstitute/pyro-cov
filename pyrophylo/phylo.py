@@ -171,7 +171,7 @@ class Phylogeny:
         return Phylogeny.from_unsorted(times, parents, leaves)
 
     @staticmethod
-    def from_unsorted(times, parents, leaves):
+    def sort(times, parents, leaves):
         num_nodes = times.size(-1)
         times, new2old = times.sort()
         old2new = torch.empty(num_nodes, dtype=torch.long)
@@ -179,4 +179,8 @@ class Phylogeny:
         leaves = old2new[leaves]
         parents = old2new[parents[new2old]]
         parents[0] = -1
-        return Phylogeny(times, parents, leaves)
+        return Phylogeny(times, parents, leaves), old2new, new2old
+
+    @staticmethod
+    def from_unsorted(times, parents, leaves):
+        return Phylogeny.sort(times, parents, leaves)[0]

@@ -25,7 +25,7 @@ import torch
 import torch.multiprocessing as mp
 from Bio import AlignIO
 from pyro.infer import SVI, Trace_ELBO
-from pyro.infer.autoguide import AutoLowRankMultivariateNormal, AutoNormal
+from pyro.infer.autoguide import AutoDelta, AutoLowRankMultivariateNormal, AutoNormal
 from pyro.optim import ClippedAdam
 
 from pyrophylo.bethe import BetheModel
@@ -72,13 +72,19 @@ def load_data(args):
 def train_guide(args, model):
     logger.info("Training via SVI")
 
-    guide_config = {"init_loc_fn": model.init_loc_fn, "init_scale": 0.01}
-    if args.guide_rank == 0:
+    # Configure a guide.
+    guide_config = {"init_loc_fn": model.init_loc_fn}
+    if args.guide_map:
+        guide = AutoDelta(model, **guide_config)
+    elif args.guide_rank == 0:
+        guide_config["init_scale"] = 0.01
         guide = AutoNormal(model, **guide_config)
     else:
         guide_config["rank"] = args.guide_rank
+        guide_config["init_scale"] = 0.01
         guide = AutoLowRankMultivariateNormal(model, **guide_config)
 
+    # Train the guide via SVI.
     optim = ClippedAdam({"lr": args.learning_rate,
                          "lrd": args.learning_rate_decay ** (1 / args.num_steps)})
     svi = SVI(model, guide, optim, Trace_ELBO())
@@ -96,6 +102,22 @@ def train_guide(args, model):
             logger.info(f"step {step: >4} loss = {loss:0.4g}")
         assert math.isfinite(loss)
         losses.append(loss)
+    guide.requires_grad_(False)
+
+    # Log diagnostics.
+    median = guide.median()
+    message = ["median latent variables:"]
+    for name, value in sorted(median.items()):
+        if value.numel() == 1:
+            message.append(f"{name} = {value:0.3g}")
+        else:
+            message.append(f"{name}.shape:{tuple(value.shape)}, "
+                           f"lb mean ub: {value.min().item():0.3g} "
+                           f"{value.mean().item():0.3g} "
+                           f"{value.max().item():0.3g}")
+    logger.info("\n".join(message))
+
+    return guide, losses
 
 
 def _predict_task(args):
@@ -106,23 +128,24 @@ def _predict_task(args):
 
     guide_trace = poutine.trace(guide).get_trace()
     with poutine.replay(trace=guide_trace):
-        tree = model(sample_tree=True)
+        tree, codes = model(sample_tree=True)
     if i % args.log_every == 0:
         sys.stderr.write(".")
         sys.stderr.flush()
-    return tree
+    return tree, codes
 
 
 @torch.no_grad()
 def predict(args, model, guide):
     logger.info(f"Drawing {args.num_samples} posterior samples")
     map_ = mp.Pool().map if args.parallel else map
-    trees = list(map_(_predict_task, [
+    samples = list(map_(_predict_task, [
         (args, model, guide, i)
         for i in range(args.num_samples)
     ]))
-    trees = Phylogeny.stack(trees)
-    return trees
+    trees = Phylogeny.stack([tree for tree, _ in samples])
+    codes = torch.stack([code for _, code in samples])
+    return trees, codes
 
 
 def pretty_tree(t):
@@ -145,31 +168,53 @@ def evaluate(args, trees):
                 .format(args.top_k,
                         ", ".join("{:0.3g}".format(count / args.num_samples)
                                   for key, count in top_k)))
-    best = top_k[0][0]
-    logger.info(f"Best tree:\n{pretty_tree(best)}")
+    for i, (tree, count) in enumerate(top_k):
+        logger.info(f"Tree {i}:\n{pretty_tree(tree)}")
 
 
 def main(args):
     mp.set_start_method("spawn")
-    torch.set_default_dtype(torch.double)
+    torch.set_default_dtype(torch.double if args.double else torch.float)
     pyro.set_rng_seed(args.seed)
     pyro.enable_validation(__debug__)
 
+    # Run the pipeline.
     leaf_times, leaf_data, leaf_mask = load_data(args)
     model = BetheModel(leaf_times, leaf_data, leaf_mask,
                        embedding_dim=args.embedding_dim,
                        bp_iters=args.bp_iters)
-    guide = train_guide(args, model)
-    trees = predict(args, model, guide)
+    guide, losses = train_guide(args, model)
+    trees, codes = predict(args, model, guide)
     evaluate(args, trees)
+
+    # Save results for bethe_vi.ipynb.
+    if args.outfile:
+        logger.info(f"saving to {args.outfile}")
+        results = {
+            "data": {
+                "leaf_times": leaf_times,
+                "leaf_data": leaf_data,
+                "leaf_mask": leaf_mask,
+            },
+            "model": model,
+            "guide": guide,
+            "losses": losses,
+            "samples": {
+                "trees": trees,
+                "codes": codes,
+            },
+        }
+        torch.save(results, args.outfile)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Tree learning experiment")
     parser.add_argument("--nexus-infile", default="data/treebase/M487.nex")
+    parser.add_argument("--outfile", default="results/bethe_vi.pt")
     parser.add_argument("--max-taxa", default=int(1e6), type=int)
     parser.add_argument("--max-characters", default=int(1e6), type=int)
-    parser.add_argument("-d", "--embedding-dim", default=20, type=int)
+    parser.add_argument("-e", "--embedding-dim", default=20, type=int)
+    parser.add_argument("-map", "--guide-map", action="store_true")
     parser.add_argument("--guide-rank", default=0, type=int)
     parser.add_argument("-t0", "--init-temperature", default=1.0, type=float)
     parser.add_argument("-t1", "--final-temperature", default=0.01, type=float)
@@ -178,6 +223,8 @@ if __name__ == "__main__":
     parser.add_argument("-lr", "--learning-rate", default=0.2, type=float)
     parser.add_argument("-lrd", "--learning-rate-decay", default=0.1, type=float)
     parser.add_argument("-s", "--num-samples", default=1000, type=int)
+    parser.add_argument("--double", default=True, action="store_true")
+    parser.add_argument("--single", action="store_false", dest="double")
     parser.add_argument("--parallel", default=True, action="store_true")
     parser.add_argument("--sequential", action="store_false", dest="parallel")
     parser.add_argument("--top-k", default=10, type=int)
