@@ -25,7 +25,7 @@ import torch
 import torch.multiprocessing as mp
 from Bio import AlignIO
 from pyro.infer import SVI, Trace_ELBO
-from pyro.infer.autoguide import AutoLowRankMultivariateNormal, AutoNormal
+from pyro.infer.autoguide import AutoDelta, AutoLowRankMultivariateNormal, AutoNormal
 from pyro.optim import ClippedAdam
 
 from pyrophylo.bethe import BetheModel
@@ -72,6 +72,21 @@ def load_data(args):
 def train_guide(args, model):
     logger.info("Training via SVI")
 
+    # Pretrain the model via SVI with an AutoDelta guide.
+    optim = ClippedAdam({"lr": args.learning_rate})
+    guide = AutoDelta(model, init_loc_fn=model.init_loc_fn)
+    guide = poutine.block(guide, hide_types=["param"])
+    svi = SVI(model, guide, optim, Trace_ELBO())
+    num_observations = model.leaf_mask.sum()
+    losses = []
+    for step in range(args.pre_steps):
+        svi.step(pretrain=True)
+        loss = svi.step(pretrain=True) / num_observations
+        if step % args.log_every == 0:
+            logger.info(f"pre {step: >4} loss = {loss:0.4g}")
+        assert math.isfinite(loss)
+        losses.append(loss)
+
     # Configure a guide.
     # Note AutoDelta guides fail due to EM-style mode collapse.
     guide_config = {"init_loc_fn": model.init_loc_fn, "init_scale": 0.01}
@@ -80,6 +95,9 @@ def train_guide(args, model):
     else:
         guide_config["rank"] = args.guide_rank
         guide = AutoLowRankMultivariateNormal(model, **guide_config)
+    guide()
+    logger.info("guide has {} parameters".format(
+        sum(p.numel() for p in guide.parameters())))
 
     # Train the guide via SVI.
     optim = ClippedAdam({"lr": args.learning_rate,
@@ -87,16 +105,11 @@ def train_guide(args, model):
     svi = SVI(model, guide, optim, Trace_ELBO())
     t0 = args.init_temperature
     t1 = args.final_temperature
-    num_observations = model.leaf_mask.sum()
-    losses = []
     for step in range(args.num_steps):
         model.temperature = t0 * (t1 / t0) ** (step / (args.num_steps - 1))
         loss = svi.step() / num_observations
-        if step == 0:
-            logger.info("guide has {} parameters".format(
-                sum(p.numel() for p in guide.parameters())))
         if step % args.log_every == 0:
-            logger.info(f"step {step: >4} loss = {loss:0.4g}")
+            logger.info(f"step {step: >4} loss = {loss:0.4g},\ttemperature = {model.temperature:0.2g}")
         assert math.isfinite(loss)
         losses.append(loss)
 
@@ -164,8 +177,9 @@ def evaluate(args, trees):
                 .format(args.top_k,
                         ", ".join("{:0.3g}".format(count / args.num_samples)
                                   for key, count in top_k)))
-    for i, (tree, count) in enumerate(top_k):
-        logger.info(f"Tree {i}:\n{pretty_tree(tree)}")
+    if args.print_trees:
+        for i, (tree, count) in enumerate(top_k):
+            logger.info(f"Tree {i}:\n{pretty_tree(tree)}")
 
 
 def main(args):
@@ -209,20 +223,22 @@ if __name__ == "__main__":
     parser.add_argument("--outfile", default="results/bethe_vi.pt")
     parser.add_argument("--max-taxa", default=int(1e6), type=int)
     parser.add_argument("--max-characters", default=int(1e6), type=int)
-    parser.add_argument("-e", "--embedding-dim", default=10, type=int)
-    parser.add_argument("-r", "--guide-rank", default=0, type=int)
+    parser.add_argument("-e", "--embedding-dim", default=20, type=int)
+    parser.add_argument("-r", "--guide-rank", default=20, type=int)
     parser.add_argument("-t0", "--init-temperature", default=1.0, type=float)
-    parser.add_argument("-t1", "--final-temperature", default=0.1, type=float)
+    parser.add_argument("-t1", "--final-temperature", default=0.01, type=float)
     parser.add_argument("-bp", "--bp-iters", default=30, type=int)
-    parser.add_argument("-n", "--num-steps", default=501, type=int)
-    parser.add_argument("-lr", "--learning-rate", default=0.2, type=float)
+    parser.add_argument("-n0", "--pre-steps", default=20, type=int)
+    parser.add_argument("-n", "--num-steps", default=201, type=int)
+    parser.add_argument("-lr", "--learning-rate", default=0.1, type=float)
     parser.add_argument("-lrd", "--learning-rate-decay", default=0.1, type=float)
-    parser.add_argument("-s", "--num-samples", default=1000, type=int)
+    parser.add_argument("-s", "--num-samples", default=200, type=int)
     parser.add_argument("--double", default=True, action="store_true")
     parser.add_argument("--single", action="store_false", dest="double")
     parser.add_argument("--parallel", default=True, action="store_true")
     parser.add_argument("--sequential", action="store_false", dest="parallel")
     parser.add_argument("--top-k", default=10, type=int)
+    parser.add_argument("-p", "--print-trees", action="store_true")
     parser.add_argument("--seed", default=20201103, type=int)
     parser.add_argument("-l", "--log-every", default=1, type=int)
     args = parser.parse_args()

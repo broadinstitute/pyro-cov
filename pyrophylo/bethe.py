@@ -72,7 +72,7 @@ class BetheModel(PyroModule):
 
         self._initialize()
 
-    def forward(self, sample_tree=False):
+    def forward(self, pretrain=False, sample_tree=False):
         L, C, D = self.leaf_states.shape
         N = 2 * L - 1
 
@@ -88,6 +88,8 @@ class BetheModel(PyroModule):
              poutine.mask(mask=self.leaf_mask):
             pyro.sample("leaf_likelihood", dist.Categorical(states[:L]),
                         obs=self.leaf_data)
+        if pretrain:
+            return
         imputed_leaf_states = torch.where(self.leaf_mask[..., None],
                                           self.leaf_states, states[:L])
         states = torch.cat([imputed_leaf_states, states[L:]], dim=0)
@@ -136,7 +138,7 @@ class BetheModel(PyroModule):
             v0, v1 = feasible.nonzero(as_tuple=True)
 
         # Convert dense square -> sparse.
-        dt = times[v1] - times[v0] + 1e-6
+        dt = times[v1] - times[v0]
         m = self.subs_model().to(states.dtype)
         exp_mt = (dt[:, None, None] * m).matrix_exp()
         # Accumulate sufficient statistics over characters.
