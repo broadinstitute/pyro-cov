@@ -84,10 +84,12 @@ class BetheModel(PyroModule):
         with pyro.plate("leaves", L, dim=-2), \
              pyro.plate("characters", C, dim=-1), \
              poutine.mask(mask=self.leaf_mask):
+            # We could account for sequencing errors here by multiplying by a
+            # confusion matrix, possibly depending on site or batch.
             pyro.sample("leaf_likelihood", dist.Categorical(states[:L]),
                         obs=self.leaf_data)
-        if pretrain:
-            return
+        if pretrain:  # If we're training only self.decoder,
+            return    # then we can ignore the rest of the model.
         imputed_leaf_states = torch.where(self.leaf_mask[..., None],
                                           self.leaf_states, states[:L])
         states = torch.cat([imputed_leaf_states, states[L:]], dim=0)
