@@ -110,15 +110,12 @@ def train_guide(args, model):
     optim = ClippedAdam({"lr": args.learning_rate,
                          "lrd": args.learning_rate_decay ** (1 / args.num_steps)})
     svi = SVI(model, guide, optim, Trace_ELBO())
-    t0 = args.init_temperature
-    t1 = args.final_temperature
     num_observations = model.leaf_mask.sum()
     losses = []
     for step in range(args.num_steps):
-        model.temperature = t0 * (t1 / t0) ** (step / (args.num_steps - 1))
         loss = svi.step() / num_observations
         if step % args.log_every == 0:
-            logger.info(f"step {step: >4} loss = {loss:0.4g},\ttemperature = {model.temperature:0.2g}")
+            logger.info(f"step {step: >4} loss = {loss:0.4g}")
         assert math.isfinite(loss)
         losses.append(loss)
 
@@ -201,7 +198,6 @@ def main(args):
     leaf_times, leaf_data, leaf_mask = load_data(args)
     model = BetheModel(leaf_times, leaf_data, leaf_mask,
                        embedding_dim=args.embedding_dim,
-                       temperature=args.init_temperature,
                        bp_iters=args.bp_iters)
     model_losses = pretrain_model(args, model)
     guide, guide_losses = train_guide(args, model)
@@ -237,11 +233,9 @@ if __name__ == "__main__":
     parser.add_argument("--max-characters", default=int(1e6), type=int)
     parser.add_argument("-e", "--embedding-dim", default=20, type=int)
     parser.add_argument("-r", "--guide-rank", default=20, type=int)
-    parser.add_argument("-t0", "--init-temperature", default=1.0, type=float)
-    parser.add_argument("-t1", "--final-temperature", default=0.01, type=float)
     parser.add_argument("-bp", "--bp-iters", default=30, type=int)
-    parser.add_argument("-n0", "--pre-steps", default=20, type=int)
-    parser.add_argument("-n", "--num-steps", default=1000, type=int)
+    parser.add_argument("-n0", "--pre-steps", default=21, type=int)
+    parser.add_argument("-n", "--num-steps", default=1001, type=int)
     parser.add_argument("-lr", "--learning-rate", default=0.2, type=float)
     parser.add_argument("-lrd", "--learning-rate-decay", default=0.1, type=float)
     parser.add_argument("-s", "--num-samples", default=200, type=int)
@@ -252,7 +246,7 @@ if __name__ == "__main__":
     parser.add_argument("--top-k", default=10, type=int)
     parser.add_argument("-p", "--print-trees", action="store_true")
     parser.add_argument("--seed", default=20201103, type=int)
-    parser.add_argument("-l", "--log-every", default=1, type=int)
+    parser.add_argument("-l", "--log-every", default=10, type=int)
     args = parser.parse_args()
 
     # Disable multiprocessing when running under pdb.

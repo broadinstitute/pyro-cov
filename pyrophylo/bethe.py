@@ -35,10 +35,10 @@ class Decoder(nn.Module):
         self.shape = torch.Size(output_shape)
         self.linear = torch.nn.Linear(input_dim, self.shape.numel())
 
-    def forward(self, code, temperature):
+    def forward(self, code):
         logits = self.linear(code)
         logits = logits.reshape(code.shape[:-1] + self.shape)
-        return logits.mul(1 / temperature).softmax(dim=-1)
+        return logits.softmax(dim=-1)
 
 
 class BetheModel(PyroModule):
@@ -47,7 +47,7 @@ class BetheModel(PyroModule):
     over the states of internal nodes.
     """
     def __init__(self, leaf_times, leaf_data, leaf_mask, *,
-                 embedding_dim=20, temperature=1., bp_iters=30):
+                 embedding_dim=20, bp_iters=30):
         super().__init__()
         assert leaf_times.dim() == 1
         assert (leaf_times[:-1] <= leaf_times[1:]).all()
@@ -55,7 +55,6 @@ class BetheModel(PyroModule):
         assert leaf_mask.shape == leaf_data.shape
         assert leaf_data.shape[:1] == leaf_times.shape
         assert isinstance(embedding_dim, int) and embedding_dim > 0
-        assert temperature > 0
         L, C = leaf_data.shape
         D = 1 + leaf_data.max().item() - leaf_data.min().item()
 
@@ -64,7 +63,6 @@ class BetheModel(PyroModule):
         self.leaf_mask = leaf_mask
         self.leaf_states = torch.zeros(L, C, D).scatter_(-1, leaf_data[..., None], 1)
         self.subs_model = JukesCantor69(dim=D)
-        self.temperature = torch.tensor(float(temperature))
         self.bp_iters = bp_iters
         self.num_nodes = 2 * L - 1
         self.embedding_dim = embedding_dim
@@ -80,7 +78,7 @@ class BetheModel(PyroModule):
         with pyro.plate("nodes", N, dim=-2), \
              pyro.plate("code_plate", self.embedding_dim, dim=-1):
             codes = pyro.sample("codes", dist.Normal(0, 1))
-        states = self.decoder(codes, self.temperature)
+        states = self.decoder(codes)
 
         # Interleave samples with observations.
         with pyro.plate("leaves", L, dim=-2), \
@@ -163,7 +161,7 @@ class BetheModel(PyroModule):
     def _initialize(self):
         logger.info("Initializing via PCA + agglomerative clustering")
 
-        # Deterministically impute, used  onlyby initialization.
+        # Deterministically impute, used only by initialization.
         missing = ~self.leaf_mask
         self.leaf_states[missing] = 1. / self.subs_model.dim
 
