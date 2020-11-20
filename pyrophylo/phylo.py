@@ -78,6 +78,9 @@ class Phylogeny:
         return num_lineages
 
     def hash_topology(self):
+        """
+        Returns a hashable binary tree represented as nested frozensets.
+        """
         if self.batch_shape:
             return tuple(p.hash_topology() for p in self)
         trees = defaultdict(list)
@@ -93,6 +96,30 @@ class Phylogeny:
             return frozenset(map(freeze, x))
 
         return freeze(trees[0])
+
+    def time_mrca(self):
+        """
+        Computes all-pairs time to most recent common ancestor.
+        """
+        if self.batch_shape:
+            return torch.stack([p.time_mrca() for p in self])
+        descendents = torch.eye(self.num_nodes, dtype=torch.bool)
+        children = defaultdict(list)
+        result = self.times.new_zeros(descendents.shape)
+        result.diagonal()[:] = self.times
+        for c in range(self.num_nodes - 1, 0, -1):
+            p = self.parents[c].item()
+            descendents[p] |= descendents[c]
+            children[p].append(c)
+            if len(children[p]) == 2:
+                c1, c2 = children[p]
+                d1 = descendents[c1]
+                d2 = descendents[c2]
+                mask = d1 & d2[:, None]
+                mask[p] |= d1 | d2
+                mask |= mask.T
+                result[mask] = self.times[p]
+        return result
 
     @staticmethod
     def stack(phylogenies):
