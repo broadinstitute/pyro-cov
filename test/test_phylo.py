@@ -33,6 +33,7 @@ def test_time_mrca():
     parents = torch.tensor([-1, 0, 0, 1, 1, 2, 2, 5, 5])
     leaves = torch.tensor([3, 4, 6, 7, 8])
     phylo = Phylogeny(times, parents, leaves)
+
     actual = phylo.time_mrca()
     expected = torch.tensor([
         [0., 0., 0., 0., 0., 0., 0., 0., 0.],
@@ -44,5 +45,15 @@ def test_time_mrca():
         [0., 0., 2., 0., 0., 2., 5., 2., 2.],
         [0., 0., 2., 0., 0., 4., 2., 6., 4.],
         [0., 0., 2., 0., 0., 4., 2., 4., 6.],
+    ])
+    assert (actual == expected).all()
+
+    actual = phylo.leaf_time_mrca()
+    expected = torch.tensor([
+        [3., 1., 0., 0., 0.],
+        [1., 3., 0., 0., 0.],
+        [0., 0., 5., 2., 2.],
+        [0., 0., 2., 6., 4.],
+        [0., 0., 2., 4., 6.],
     ])
     assert (actual == expected).all()

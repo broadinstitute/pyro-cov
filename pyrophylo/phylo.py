@@ -99,7 +99,7 @@ class Phylogeny:
 
     def time_mrca(self):
         """
-        Computes all-pairs time to most recent common ancestor.
+        Computes all-pairs times to most recent common ancestor.
         """
         if self.batch_shape:
             return torch.stack([p.time_mrca() for p in self])
@@ -120,6 +120,17 @@ class Phylogeny:
                 mask |= mask.T
                 result[mask] = self.times[p]
         return result
+
+    def leaf_time_mrca(self):
+        """
+        Computes times to most recent common ancestors for all leaves.
+        For phylogenies whose leaves are all at time 0, the result is an
+        ultrametric.
+        """
+        if self.batch_shape:
+            return torch.stack([p.leaf_time_mrca() for p in self])
+        result = self.time_mrca()
+        return result[self.leaves[..., None], self.leaves]
 
     @staticmethod
     def stack(phylogenies):
