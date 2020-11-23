@@ -184,9 +184,10 @@ class BetheModel(PyroModule):
         codes = torch.full((N, E), math.nan)
         times[:L] = self.leaf_times
         codes[:L] = leaf_codes + torch.randn(L, E) * 0.1
+        timescale = 0.1
         for p, (c1, c2) in enumerate(children):
-            times[L + p] = min(times[c1], times[c2]) - 0.1 - torch.rand(())
-            codes[L + p] = (codes[c1] + codes[c2]) / 2 + torch.randn(E) * 0.1
+            times[L + p] = min(times[c1], times[c2]) - timescale * (0.5 + torch.rand(()))
+            codes[L + p] = (codes[c1] + codes[c2]) / 2 + torch.randn(E) * 0.01
         assert times.isfinite().all()
         assert codes.isfinite().all()
         self.init_internal_times = times[L:].clone()
@@ -202,8 +203,8 @@ class BetheModel(PyroModule):
             return self.init_codes
         if site["name"].endswith("subs_model.rate") or \
                 site["name"].endswith("subs_model.rates"):
-            # Initialize to low mutation rate.
-            return torch.full(site["fn"].shape(), 0.1)
+            # Initialize to unit mutation rate.
+            return torch.full(site["fn"].shape(), 1.0)
         if site["name"].endswith("subs_model.stationary"):
             D, = site["fn"].event_shape
             return torch.ones(D) / D

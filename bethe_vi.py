@@ -75,7 +75,8 @@ def pretrain_model(args, model):
         sum(p.numel() for p in model.parameters())))
 
     # Pretrain the model via SVI with an AutoDelta guide.
-    optim = ClippedAdam({"lr": args.learning_rate})
+    optim = ClippedAdam({"lr": args.learning_rate,
+                         "clip_norm": args.clip_norm})
     guide = AutoDelta(model, init_loc_fn=model.init_loc_fn)
     guide = poutine.block(guide, hide_types=["param"])
     svi = SVI(model, guide, optim, Trace_ELBO())
@@ -105,6 +106,11 @@ def train_guide(args, model):
     guide()
     logger.info("guide has {} parameters".format(
         sum(p.numel() for p in guide.parameters())))
+    if args.debug_grads:
+        for name, param in guide.named_parameters():
+            @param.register_hook
+            def print_grad_norm(grad, name=name, param=param):
+                print(f"{name}: [{grad.data.min().item():0.3g}, {grad.data.max().item():0.3g}]")
 
     # Train the guide via SVI.
     optim = ClippedAdam({"lr": args.learning_rate,
@@ -199,6 +205,8 @@ def main(args):
     model = BetheModel(leaf_times, leaf_data, leaf_mask,
                        embedding_dim=args.embedding_dim,
                        bp_iters=args.bp_iters)
+    if args.subs_rate is not None:
+        model.subs_model.rate = args.subs_rate
     model_losses = pretrain_model(args, model)
     guide, guide_losses = train_guide(args, model)
     trees, codes = predict(args, model, guide)
@@ -231,13 +239,15 @@ if __name__ == "__main__":
     parser.add_argument("--outfile", default="results/bethe_vi.pt")
     parser.add_argument("--max-taxa", default=int(1e6), type=int)
     parser.add_argument("--max-characters", default=int(1e6), type=int)
+    parser.add_argument("--subs-rate", type=float)
     parser.add_argument("-e", "--embedding-dim", default=20, type=int)
     parser.add_argument("-r", "--guide-rank", default=20, type=int)
     parser.add_argument("-bp", "--bp-iters", default=30, type=int)
     parser.add_argument("-n0", "--pre-steps", default=21, type=int)
     parser.add_argument("-n", "--num-steps", default=1001, type=int)
-    parser.add_argument("-lr", "--learning-rate", default=0.2, type=float)
+    parser.add_argument("-lr", "--learning-rate", default=0.02, type=float)
     parser.add_argument("-lrd", "--learning-rate-decay", default=0.1, type=float)
+    parser.add_argument("-cn", "--clip-norm", default=1e6, type=float)
     parser.add_argument("-s", "--num-samples", default=200, type=int)
     parser.add_argument("--double", default=True, action="store_true")
     parser.add_argument("--single", action="store_false", dest="double")
@@ -247,6 +257,7 @@ if __name__ == "__main__":
     parser.add_argument("-p", "--print-trees", action="store_true")
     parser.add_argument("--seed", default=20201103, type=int)
     parser.add_argument("-l", "--log-every", default=10, type=int)
+    parser.add_argument("-dg", "--debug-grads", action="store_true")
     args = parser.parse_args()
 
     # Disable multiprocessing when running under pdb.
