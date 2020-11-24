@@ -97,8 +97,11 @@ def train_guide(args, model):
 
     # Configure a guide.
     # Note AutoDelta guides fail due to EM-style mode collapse.
-    guide_config = {"init_loc_fn": model.init_loc_fn, "init_scale": 0.01}
-    if args.guide_rank == 0:
+    guide_config = {"init_loc_fn": model.init_loc_fn,
+                    "init_scale": args.init_scale}
+    if args.guide_map:
+        guide = AutoDelta(model, init_loc_fn=model.init_loc_fn)
+    elif args.guide_rank == 0:
         guide = AutoNormal(model, **guide_config)
     else:
         guide_config["rank"] = args.guide_rank
@@ -202,6 +205,7 @@ def main(args):
 
     # Run the pipeline.
     leaf_times, leaf_data, leaf_mask = load_data(args)
+    args.embedding_dim = min(args.embedding_dim, len(leaf_times))
     model = BetheModel(leaf_times, leaf_data, leaf_mask,
                        embedding_dim=args.embedding_dim,
                        bp_iters=args.bp_iters)
@@ -241,11 +245,13 @@ if __name__ == "__main__":
     parser.add_argument("--max-characters", default=int(1e6), type=int)
     parser.add_argument("--subs-rate", type=float)
     parser.add_argument("-e", "--embedding-dim", default=20, type=int)
+    parser.add_argument("-map", "--guide-map", action="store_true")
     parser.add_argument("-r", "--guide-rank", default=20, type=int)
+    parser.add_argument("-is", "--init-scale", default=0.01, type=float)
     parser.add_argument("-bp", "--bp-iters", default=30, type=int)
-    parser.add_argument("-n0", "--pre-steps", default=21, type=int)
+    parser.add_argument("-n0", "--pre-steps", default=51, type=int)
     parser.add_argument("-n", "--num-steps", default=1001, type=int)
-    parser.add_argument("-lr", "--learning-rate", default=0.02, type=float)
+    parser.add_argument("-lr", "--learning-rate", default=0.01, type=float)
     parser.add_argument("-lrd", "--learning-rate-decay", default=0.1, type=float)
     parser.add_argument("-cn", "--clip-norm", default=1e6, type=float)
     parser.add_argument("-s", "--num-samples", default=200, type=int)

@@ -73,17 +73,18 @@ class BetheModel(PyroModule):
     def forward(self, pretrain=False, sample_tree=False):
         L, C, D = self.leaf_states.shape
         N = 2 * L - 1
+        leaf_plate = pyro.plate("leaf_plate", L, dim=-2)
+        node_plate = pyro.plate("node_plate", N, dim=-2)
+        code_plate = pyro.plate("code_plate", self.embedding_dim, dim=-1)
+        character_plate = pyro.plate("character_plate", C, dim=-1)
 
         # Sample genetic sequences of all nodes, leaves + internal.
-        with pyro.plate("nodes", N, dim=-2), \
-             pyro.plate("code_plate", self.embedding_dim, dim=-1):
+        with node_plate, code_plate:
             codes = pyro.sample("codes", dist.Normal(0, 1))
         states = self.decoder(codes)
 
         # Interleave samples with observations.
-        with pyro.plate("leaves", L, dim=-2), \
-             pyro.plate("characters", C, dim=-1), \
-             poutine.mask(mask=self.leaf_mask):
+        with leaf_plate, character_plate, poutine.mask(mask=self.leaf_mask):
             # We could account for sequencing errors here by multiplying by a
             # confusion matrix, possibly depending on site or batch.
             pyro.sample("leaf_likelihood", dist.Categorical(states[:L]),
@@ -183,7 +184,7 @@ class BetheModel(PyroModule):
         times = torch.full((N,), math.nan)
         codes = torch.full((N, E), math.nan)
         times[:L] = self.leaf_times
-        codes[:L] = leaf_codes + torch.randn(L, E) * 0.1
+        codes[:L] = leaf_codes + torch.randn(L, E) * 0.01
         timescale = 0.1
         for p, (c1, c2) in enumerate(children):
             times[L + p] = min(times[c1], times[c2]) - timescale * (0.5 + torch.rand(()))
