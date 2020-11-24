@@ -1,10 +1,12 @@
-from collections import defaultdict
 import logging
+from collections import defaultdict, namedtuple
 
 import numpy as np
 import torch
 
 logger = logging.getLogger(__name__)
+
+_SubClade = namedtuple("SubClade", ("clade", "name"))
 
 
 class Phylogeny:
@@ -163,14 +165,31 @@ class Phylogeny:
         clades = list(tree.find_clades())
         clade_to_time = {tree.root: get_branch_length(tree.root)}
         clade_to_parent = {}
+        clade_to_children = defaultdict(list)
         for clade in clades:
             time = clade_to_time[clade]
             for child in clade:
                 clade_to_time[child] = time + get_branch_length(child)
                 clade_to_parent[child] = clade
-        clades.sort(key=lambda c: (clade_to_time[c], c.name))
+                clade_to_children[clade].append(child)
+
+        # Binarize the tree.
+        for parent, children in clade_to_children.items():
+            while len(children) > 2:
+                c1 = children.pop()
+                c2 = children.pop()
+                c12 = _SubClade(parent, f"{parent.name}.{len(children):0>4d}")
+                clades.append(c12)
+                children.append(c12)
+                clade_to_time[c12] = clade_to_time[parent]
+                clade_to_parent[c1] = c12
+                clade_to_parent[c2] = c12
+                clade_to_parent[c12] = parent
+        del clade_to_children
+
+        # Serialize clades.
+        clades.sort(key=lambda c: (clade_to_time[c], str(c.name)))
         assert clades[0] not in clade_to_parent, "invalid root"
-        # TODO binarize the tree
         clade_to_id = {clade: i for i, clade in enumerate(clades)}
         times = torch.tensor([float(clade_to_time[clade]) for clade in clades])
         parents = torch.tensor([-1] + [clade_to_id[clade_to_parent[clade]]
