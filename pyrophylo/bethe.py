@@ -120,8 +120,6 @@ class BetheModel(PyroModule):
                                      CoalescentTimes(self.leaf_times))
         times = pyro.deterministic("times",
                                    torch.cat([self.leaf_times, internal_times]))
-        # print(f"DEBUG code = {codes.mean():0.3g} += {codes.std():0.2g}, "
-        #       f" time = {times.mean():0.3g} += {times.std():0.2g}")
 
         # Account for random tree structure.
         logits, sources, destins = self.kernel(states.float(), times.float())

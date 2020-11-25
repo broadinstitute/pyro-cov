@@ -116,7 +116,7 @@ def train_guide(args, model):
     # Train the guide via SVI.
     optim = ClippedAdam({"lr": args.learning_rate,
                          "lrd": args.learning_rate_decay ** (1 / args.num_steps),
-                         # "clip_norm": args.clip_norm,  # TODO test this
+                         "clip_norm": args.clip_norm,
                          })
     svi = SVI(model, guide, optim, Trace_ELBO())
     num_observations = model.leaf_mask.sum()
@@ -306,7 +306,7 @@ if __name__ == "__main__":
     parser.add_argument("-n", "--num-steps", default=1001, type=int)
     parser.add_argument("-lr", "--learning-rate", default=0.01, type=float)
     parser.add_argument("-lrd", "--learning-rate-decay", default=0.1, type=float)
-    parser.add_argument("-cn", "--clip-norm", default=1e6, type=float)
+    parser.add_argument("-cn", "--clip-norm", default=1e2, type=float)
     parser.add_argument("-mcmc", action="store_true")
     parser.add_argument("-mtd", "--max-tree-depth", default=5, type=int)
     parser.add_argument("--full-mass", action="store_true")
