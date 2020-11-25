@@ -265,7 +265,7 @@ def main(args):
         trees, codes = predict(args, model, guide)
     evaluate(args, trees)
 
-    # Save results for bethe_vi.ipynb.
+    # Save results for bethe.ipynb.
     if args.outfile:
         logger.info(f"saving to {args.outfile}")
         results = {
@@ -289,7 +289,7 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Tree learning experiment")
     parser.add_argument("--nexus-infile", default="data/treebase/M487.nex")
-    parser.add_argument("--outfile", default="results/bethe_vi.pt")
+    parser.add_argument("--outfile", default="results/bethe.pt")
     parser.add_argument("--max-taxa", default=int(1e6), type=int)
     parser.add_argument("--max-characters", default=int(1e6), type=int)
     parser.add_argument("--subs-rate", type=float)
