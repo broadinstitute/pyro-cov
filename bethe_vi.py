@@ -24,7 +24,7 @@ import setuptools  # noqa F401
 import torch
 import torch.multiprocessing as mp
 from Bio import AlignIO
-from pyro.infer import SVI, Trace_ELBO
+from pyro.infer import MCMC, NUTS, SVI, Predictive, Trace_ELBO
 from pyro.infer.autoguide import AutoDelta, AutoLowRankMultivariateNormal, AutoNormal
 from pyro.optim import ClippedAdam
 
@@ -75,10 +75,9 @@ def pretrain_model(args, model):
         sum(p.numel() for p in model.parameters())))
 
     # Pretrain the model via SVI with an AutoDelta guide.
-    optim = ClippedAdam({"lr": args.learning_rate,
-                         "clip_norm": args.clip_norm})
+    optim = ClippedAdam({"lr": args.pre_learning_rate})
     guide = AutoDelta(model, init_loc_fn=model.init_loc_fn)
-    guide = poutine.block(guide, hide_types=["param"])
+    guide = poutine.block(guide, hide_types=["param"])  # Keep leaf codes fixed.
     svi = SVI(model, guide, optim, Trace_ELBO())
     num_observations = model.leaf_mask.sum()
     losses = []
@@ -96,7 +95,6 @@ def train_guide(args, model):
     logger.info("Training model+guide via SVI")
 
     # Configure a guide.
-    # Note AutoDelta guides fail due to EM-style mode collapse.
     guide_config = {"init_loc_fn": model.init_loc_fn,
                     "init_scale": args.init_scale}
     if args.guide_map:
@@ -113,11 +111,13 @@ def train_guide(args, model):
         for name, param in guide.named_parameters():
             @param.register_hook
             def print_grad_norm(grad, name=name, param=param):
-                print(f"{name}: [{grad.data.min().item():0.3g}, {grad.data.max().item():0.3g}]")
+                print(f"{name}: [{grad.data.min():0.3g}, {grad.data.max():0.3g}]")
 
     # Train the guide via SVI.
     optim = ClippedAdam({"lr": args.learning_rate,
-                         "lrd": args.learning_rate_decay ** (1 / args.num_steps)})
+                         "lrd": args.learning_rate_decay ** (1 / args.num_steps),
+                         # "clip_norm": args.clip_norm,  # TODO test this
+                         })
     svi = SVI(model, guide, optim, Trace_ELBO())
     num_observations = model.leaf_mask.sum()
     losses = []
@@ -153,7 +153,13 @@ def _predict_task(args):
 
     guide_trace = poutine.trace(guide).get_trace()
     with poutine.replay(trace=guide_trace):
-        tree, codes = model(sample_tree=True)
+        codes, times, parents = model(sample_tree=True)
+
+    # Convert to Phylogeny objects.
+    leaves = torch.arange(model.num_leaves)
+    tree, old2new, new2old = Phylogeny.sort(times, parents, leaves)
+    codes = codes[new2old]
+
     if i % args.log_every == 0:
         sys.stderr.write(".")
         sys.stderr.flush()
@@ -168,8 +174,43 @@ def predict(args, model, guide):
         for i in range(args.num_samples)
     ]))
     trees = Phylogeny.stack([tree for tree, _ in samples])
-    codes = torch.stack([code for _, code in samples])
+    codes = torch.stack([codes for _, codes in samples])
     return trees, codes
+
+
+def sample_model_mcmc(args, model):
+    # Freeze the decoder neural network.
+    frozen_model = poutine.block(model, hide_fn=lambda msg: "decoder." in msg["name"])
+
+    # Run mcmc.
+    kernel = NUTS(frozen_model,
+                  step_size=args.init_scale,
+                  full_mass=[("internal_times", "subs_model.rate")],
+                  init_strategy=model.init_loc_fn,
+                  max_plate_nesting=model.max_plate_nesting,
+                  max_tree_depth=args.max_tree_depth)
+    mcmc = MCMC(kernel,
+                num_samples=args.num_samples,
+                num_chains=args.num_chains)
+    mcmc.run()
+    samples = mcmc.get_samples()
+    with torch.no_grad():
+        predictive = Predictive(model, samples,
+                                return_sites=["codes", "times", "parents"])
+        samples = predictive(sample_tree=True)
+
+        # Convert to a stacked Phylogeny object.
+        trees = []
+        codes = torch.empty_like(samples["codes"])
+        leaves = torch.arange(model.num_leaves)
+        for i in range(args.num_samples):
+            times = samples["times"][i].squeeze()
+            parents = samples["parents"][i].squeeze()
+            tree, old2new, new2old = Phylogeny.sort(times, parents, leaves)
+            trees.append(tree)
+            codes[i] = samples["codes"][i, new2old]
+        trees = Phylogeny.stack(trees)
+        return trees, codes
 
 
 def pretty_tree(t):
@@ -214,9 +255,14 @@ def main(args):
                        entropy_regularize=args.entropy_regularize)
     if args.subs_rate is not None:
         model.subs_model.rate = args.subs_rate
-    model_losses = pretrain_model(args, model)
-    guide, guide_losses = train_guide(args, model)
-    trees, codes = predict(args, model, guide)
+    losses = pretrain_model(args, model)
+    if args.mcmc:
+        guide = None
+        trees, codes = sample_model_mcmc(args, model)
+    else:
+        guide, guide_losses = train_guide(args, model)
+        losses += guide_losses
+        trees, codes = predict(args, model, guide)
     evaluate(args, trees)
 
     # Save results for bethe_vi.ipynb.
@@ -231,7 +277,7 @@ def main(args):
             },
             "model": model,
             "guide": guide,
-            "losses": model_losses + guide_losses,
+            "losses": losses,
             "samples": {
                 "trees": trees,
                 "codes": codes,
@@ -253,6 +299,7 @@ if __name__ == "__main__":
     parser.add_argument("-er", "--entropy-regularize", default=0., type=float)
     parser.add_argument("-bp", "--bp-iters", default=30, type=int)
     parser.add_argument("-n0", "--pre-steps", default=51, type=int)
+    parser.add_argument("-lr0", "--pre-learning-rate", default=0.1, type=float)
     parser.add_argument("-map", "--guide-map", action="store_true")
     parser.add_argument("-r", "--guide-rank", default=20, type=int)
     parser.add_argument("-is", "--init-scale", default=0.01, type=float)
@@ -260,6 +307,10 @@ if __name__ == "__main__":
     parser.add_argument("-lr", "--learning-rate", default=0.01, type=float)
     parser.add_argument("-lrd", "--learning-rate-decay", default=0.1, type=float)
     parser.add_argument("-cn", "--clip-norm", default=1e6, type=float)
+    parser.add_argument("-mcmc", action="store_true")
+    parser.add_argument("-mtd", "--max-tree-depth", default=5, type=int)
+    parser.add_argument("--full-mass", action="store_true")
+    parser.add_argument("--num-chains", default=1, type=int)
     parser.add_argument("-s", "--num-samples", default=200, type=int)
     parser.add_argument("--double", default=True, action="store_true")
     parser.add_argument("--single", action="store_false", dest="double")

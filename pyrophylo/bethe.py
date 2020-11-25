@@ -10,7 +10,6 @@ from pyro.distributions import constraints
 from pyro.nn import PyroModule
 from sklearn.cluster import AgglomerativeClustering
 
-from .phylo import Phylogeny
 from .substitution import JukesCantor69
 
 logger = logging.getLogger(__name__)
@@ -46,6 +45,8 @@ class BetheModel(PyroModule):
     A phylogenetic tree model that marginalizes over tree structure and relaxes
     over the states of internal nodes.
     """
+    max_plate_nesting = 2
+
     def __init__(self, leaf_times, leaf_data, leaf_mask, *,
                  embedding_dim=20, bp_iters=30, min_dt=1e-3,
                  entropy_regularize=0., quantize=False):
@@ -63,6 +64,7 @@ class BetheModel(PyroModule):
         D = 1 + leaf_data.max().item() - leaf_data.min().item()
 
         self.num_nodes = 2 * L - 1
+        self.num_leaves = L
         self.leaf_times = leaf_times
         self.leaf_data = leaf_data
         self.leaf_mask = leaf_mask
@@ -89,36 +91,28 @@ class BetheModel(PyroModule):
         with node_plate, code_plate:
             codes = pyro.sample("codes", dist.Normal(0, 1).mask(False))
         states = self.decoder(codes)
+        assert states.shape == (N, C, D)
 
         # Interleave samples with observations.
-        pyro_supports_masked_obs_statements = False  # TODO
-        if pyro_supports_masked_obs_statements:
-            with leaf_plate, character_plate:
-                states = pyro.sample(
-                    "states",
-                    dist.OneHotCategorical(states, validate_args=False),
-                    obs=torch.cat([self.leaf_states, torch.ones(N - L, C, D)]),
-                    obs_mask=torch.cat([self.leaf_mask,
-                                        torch.zeros(N - L, C, dtype=torch.bool)]))
-        else:
-            with leaf_plate, character_plate, poutine.mask(mask=self.leaf_mask):
-                # We could account for sequencing errors here by multiplying by a
-                # confusion matrix, possibly depending on site or batch.
-                pyro.sample("leaf_likelihood", dist.Categorical(states[:L]),
-                            obs=self.leaf_data)
-            if pretrain:  # If we're training only self.decoder,
-                return    # then we can ignore the rest of the model.
-            if self.quantize:
-                states = pyro.sample("quantize",
-                                     dist.OneHotCategoricalStraightThrough(states))
-            imputed_leaf_states = torch.where(self.leaf_mask[..., None],
-                                              self.leaf_states, states[:L])
-            states = torch.cat([imputed_leaf_states, states[L:]], dim=0)
+        # This is roughly equivalent to a masked observe statement.
+        with leaf_plate, character_plate, poutine.mask(mask=self.leaf_mask):
+            # We could account for sequencing errors here by multiplying by a
+            # confusion matrix, possibly depending on site or batch.
+            pyro.sample("leaf_likelihood", dist.Categorical(states[:L]),
+                        obs=self.leaf_data)
+        if pretrain:  # If we're training only self.decoder,
+            return    # then we can ignore the rest of the model.
+        if self.quantize:
+            states = pyro.sample("quantize",
+                                 dist.OneHotCategoricalStraightThrough(states))
+        imputed_leaf_states = torch.where(self.leaf_mask[..., None],
+                                          self.leaf_states, states[:L])
+        states = torch.cat([imputed_leaf_states, states[L:]], dim=0)
 
         # Optionally regularize by entropy.
         if self.entropy_regularize:
             entropy = dist.Categorical(states).entropy()
-            with node_plate, character_plate, poutine.mask(mask=self.leaf_mask):
+            with node_plate, character_plate:
                 pyro.factor("node_entropy", (-self.entropy_regularize) * entropy)
 
         # Sample times of internal nodes.
@@ -126,6 +120,8 @@ class BetheModel(PyroModule):
                                      CoalescentTimes(self.leaf_times))
         times = pyro.deterministic("times",
                                    torch.cat([self.leaf_times, internal_times]))
+        # print(f"DEBUG code = {codes.mean():0.3g} += {codes.std():0.2g}, "
+        #       f" time = {times.mean():0.3g} += {times.std():0.2g}")
 
         # Account for random tree structure.
         logits, sources, destins = self.kernel(states.float(), times.float())
@@ -143,10 +139,8 @@ class BetheModel(PyroModule):
             # Convert sparse matching to phylogeny.
             parents = tree.new_full((N,), -1)
             parents[sources] = destins[tree]
-            leaves = torch.arange(L)
-            phylo, old2new, new2old = Phylogeny.sort(times, parents, leaves)
-            codes = codes[new2old]
-            return phylo, codes
+            pyro.deterministic("parents", parents)
+            return codes, times, parents
 
     def kernel(self, states, times):
         """
@@ -154,20 +148,22 @@ class BetheModel(PyroModule):
         between every undirected pair of states. This will be -inf for
         infeasible pairs, namely leaf-leaf and internal-after-leaf.
         """
+        finfo = torch.finfo(states.dtype)
         N, C, D = states.shape
         assert times.shape == (N,)
         L = (N + 1) // 2
 
         # Select feasible time-ordered pairs.
-        with torch.no_grad():
-            feasible = times[:, None] < times
-            feasible[:L] = False  # Leaves are terminal.
-            v0, v1 = feasible.nonzero(as_tuple=True)
+        times.data.clamp_(min=-1 / finfo.eps)
+        feasible = times.data[:, None] < times.data
+        feasible[:L] = False  # Leaves are terminal.
+        v0, v1 = feasible.nonzero(as_tuple=True)
 
         # Convert dense square -> sparse.
         dt = times[v1] - times[v0] + self.min_dt
         m = self.subs_model().to(states.dtype)
         exp_mt = (dt[:, None, None] * m).matrix_exp()
+        exp_mt.data.clamp_(min=finfo.eps)
         # Accumulate sufficient statistics over characters.
         stats = torch.einsum("icd,jce->ijde", states, states)[v0, v1]
         sparse_logits = torch.einsum("fde,fde->f", exp_mt.log(), stats)
@@ -192,7 +188,9 @@ class BetheModel(PyroModule):
 
         # Deterministically impute, used only by initialization.
         mask = self.leaf_mask[..., None]
-        mean = (self.leaf_states * mask.type_as(self.leaf_states)).sum(0) / mask.sum(0)
+        numer = (self.leaf_states * mask.type_as(self.leaf_states)).sum(0) + 1
+        denom = mask.type_as(self.leaf_states).sum(0) + self.subs_model.dim
+        mean = numer / denom
         self.leaf_states = torch.where(mask, self.leaf_states, mean)
 
         # Heuristically initialize leaf codes via PCA.
@@ -225,15 +223,15 @@ class BetheModel(PyroModule):
         """
         Heuristic initialization for guides.
         """
-        if site["name"] == "internal_times":
+        name = site["name"]
+        if name == "internal_times":
             return self.init_internal_times
-        if site["name"] == "codes":
+        if name == "codes":
             return self.init_codes
-        if site["name"].endswith("subs_model.rate") or \
-                site["name"].endswith("subs_model.rates"):
+        if name.endswith("subs_model.rate") or name.endswith("subs_model.rates"):
             # Initialize to unit mutation rate.
             return torch.full(site["fn"].shape(), 1.0)
-        if site["name"].endswith("subs_model.stationary"):
+        if name.endswith("subs_model.stationary"):
             D, = site["fn"].event_shape
             return torch.ones(D) / D
-        raise ValueError("unknown site {}".format(site["name"]))
+        raise ValueError(f"unknown site: {name}")

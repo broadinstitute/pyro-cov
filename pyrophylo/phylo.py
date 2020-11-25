@@ -229,8 +229,10 @@ class Phylogeny:
 
     @staticmethod
     def sort(times, parents, leaves):
+        if times.dim() > 1:
+            raise NotImplementedError("Phylogeny.sort() does not support batching")
         num_nodes = times.size(-1)
-        times, new2old = times.sort()
+        times, new2old = times.sort(-1)
         old2new = torch.empty(num_nodes, dtype=torch.long)
         old2new[new2old] = torch.arange(num_nodes)
         leaves = old2new[leaves]
