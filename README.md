@@ -8,6 +8,10 @@ This repo assumes that folder is available locally and linked as the `data/` dir
 ln -sf ~/Google\ Drive\ File\ Stream/Shared\ drives/Pyro\ CoV data
 ```
 
+### Treebase datasets
+
+The `treebase/` directory contains snapshots from https://treebase.org/treebase-web
+
 ## Installing
 
 ```sh

@@ -131,3 +131,13 @@ def stack_nexus_trees(filename, *, max_num_trees=math.inf, processes=0):
                              max_num_trees=max_num_trees,
                              processes=processes)
     return Phylogeny.stack(trees)
+
+
+def read_newick_tree(filename):
+    """
+    Parse a single newick tree and convert to a ``Phylogeny``.
+    """
+    with open(filename) as f:
+        line = f.read().strip()
+    tree = next(Parser.from_string(line).parse())
+    return Phylogeny.from_bio_phylo(tree)

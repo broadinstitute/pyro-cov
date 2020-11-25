@@ -1,9 +1,12 @@
 import logging
+from collections import defaultdict, namedtuple
 
 import numpy as np
 import torch
 
 logger = logging.getLogger(__name__)
+
+_SubClade = namedtuple("SubClade", ("clade", "name"))
 
 
 class Phylogeny:
@@ -76,6 +79,61 @@ class Phylogeny:
         num_lineages = sign.flip(-1).cumsum(-1).flip(-1)
         return num_lineages
 
+    def hash_topology(self):
+        """
+        Returns a hashable binary tree represented as nested frozensets.
+        """
+        if self.batch_shape:
+            return tuple(p.hash_topology() for p in self)
+        trees = defaultdict(list)
+        for leaf, v in enumerate(self.leaves.tolist()):
+            trees[v] = leaf
+        for v, parent in enumerate(self.parents[1:].tolist()):
+            trees[parent].append(trees[v + 1])
+
+        def freeze(x):
+            if isinstance(x, int):
+                return x
+            assert len(x) == 2
+            return frozenset(map(freeze, x))
+
+        return freeze(trees[0])
+
+    def time_mrca(self):
+        """
+        Computes all-pairs times to most recent common ancestor.
+        """
+        if self.batch_shape:
+            return torch.stack([p.time_mrca() for p in self])
+        descendents = torch.eye(self.num_nodes, dtype=torch.bool)
+        children = defaultdict(list)
+        result = self.times.new_zeros(descendents.shape)
+        result.diagonal()[:] = self.times
+        for c in range(self.num_nodes - 1, 0, -1):
+            p = self.parents[c].item()
+            descendents[p] |= descendents[c]
+            children[p].append(c)
+            if len(children[p]) == 2:
+                c1, c2 = children[p]
+                d1 = descendents[c1]
+                d2 = descendents[c2]
+                mask = d1 & d2[:, None]
+                mask[p] |= d1 | d2
+                mask |= mask.T
+                result[mask] = self.times[p]
+        return result
+
+    def leaf_time_mrca(self):
+        """
+        Computes times to most recent common ancestors for all leaves.
+        For phylogenies whose leaves are all at time 0, the result is an
+        ultrametric.
+        """
+        if self.batch_shape:
+            return torch.stack([p.leaf_time_mrca() for p in self])
+        result = self.time_mrca()
+        return result[self.leaves[..., None], self.leaves]
+
     @staticmethod
     def stack(phylogenies):
         """
@@ -107,14 +165,31 @@ class Phylogeny:
         clades = list(tree.find_clades())
         clade_to_time = {tree.root: get_branch_length(tree.root)}
         clade_to_parent = {}
+        clade_to_children = defaultdict(list)
         for clade in clades:
             time = clade_to_time[clade]
             for child in clade:
                 clade_to_time[child] = time + get_branch_length(child)
                 clade_to_parent[child] = clade
-        clades.sort(key=lambda c: (clade_to_time[c], c.name))
+                clade_to_children[clade].append(child)
+
+        # Binarize the tree.
+        for parent, children in clade_to_children.items():
+            while len(children) > 2:
+                c1 = children.pop()
+                c2 = children.pop()
+                c12 = _SubClade(parent, f"{parent.name}.{len(children):0>4d}")
+                clades.append(c12)
+                children.append(c12)
+                clade_to_time[c12] = clade_to_time[parent]
+                clade_to_parent[c1] = c12
+                clade_to_parent[c2] = c12
+                clade_to_parent[c12] = parent
+        del clade_to_children
+
+        # Serialize clades.
+        clades.sort(key=lambda c: (clade_to_time[c], str(c.name)))
         assert clades[0] not in clade_to_parent, "invalid root"
-        # TODO binarize the tree
         clade_to_id = {clade: i for i, clade in enumerate(clades)}
         times = torch.tensor([float(clade_to_time[clade]) for clade in clades])
         parents = torch.tensor([-1] + [clade_to_id[clade_to_parent[clade]]
@@ -153,12 +228,18 @@ class Phylogeny:
         return Phylogeny.from_unsorted(times, parents, leaves)
 
     @staticmethod
-    def from_unsorted(times, parents, leaves):
+    def sort(times, parents, leaves):
+        if times.dim() > 1:
+            raise NotImplementedError("Phylogeny.sort() does not support batching")
         num_nodes = times.size(-1)
-        times, new2old = times.sort()
+        times, new2old = times.sort(-1)
         old2new = torch.empty(num_nodes, dtype=torch.long)
         old2new[new2old] = torch.arange(num_nodes)
         leaves = old2new[leaves]
         parents = old2new[parents[new2old]]
         parents[0] = -1
-        return Phylogeny(times, parents, leaves)
+        return Phylogeny(times, parents, leaves), old2new, new2old
+
+    @staticmethod
+    def from_unsorted(times, parents, leaves):
+        return Phylogeny.sort(times, parents, leaves)[0]
