@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 # TODO replace with CoalescentTimes(self.leaf_times, ordered=False)
-class CoalescentTimes(dist.TransformedDistribution):
+class FakeCoalescentTimes(dist.TransformedDistribution):
     support = constraints.less_than(0.)
 
     def __init__(self, leaf_times):
@@ -117,7 +117,7 @@ class BetheModel(PyroModule):
 
         # Sample times of internal nodes.
         internal_times = pyro.sample("internal_times",
-                                     CoalescentTimes(self.leaf_times))
+                                     FakeCoalescentTimes(self.leaf_times).mask(False))
         times = pyro.deterministic("times",
                                    torch.cat([self.leaf_times, internal_times]))
 
@@ -196,6 +196,7 @@ class BetheModel(PyroModule):
         N = 2 * L - 1
         E = self.embedding_dim
         leaf_codes = torch.pca_lowrank(self.leaf_states.reshape(L, -1), E)[0]
+        leaf_codes *= L ** 0.5  # Force unit variance.
 
         # Heuristically initialize hierarchy.
         clustering = AgglomerativeClustering(

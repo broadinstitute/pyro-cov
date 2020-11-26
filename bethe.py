@@ -15,6 +15,7 @@ import argparse
 import io
 import logging
 import math
+import re
 import sys
 from collections import Counter
 
@@ -36,14 +37,23 @@ logging.basicConfig(format="%(relativeCreated) 9d %(message)s", level=logging.DE
 
 
 def load_data(args):
-    logger.info(f"loading data from {args.nexus_infile}")
+    logger.info(f"Loading data from {args.nexus_infile}")
 
     # Truncate file to work around bug in Bio.Nexus reader.
     lines = []
     with open(args.nexus_infile) as f:
+        missing = "?"
         for line in f:
             if line.startswith("BEGIN CODONS"):
                 break
+            if line.startswith("BEGIN SETS"):
+                break
+            match = re.search("MISSING=(.)", line)
+            if match:
+                missing = match.group(1)
+            if "{" in line:
+                # TODO Support ambiguous reads. For now replace them with missing.
+                line = re.sub("{[ATCG]+}", missing, line)
             lines.append(line)
     f = io.StringIO("".join(lines))
     alignment = AlignIO.read(f, "nexus")
@@ -53,7 +63,7 @@ def load_data(args):
     data = torch.zeros((num_taxa, num_characters), dtype=torch.long)
     mask = torch.zeros((num_taxa, num_characters), dtype=torch.bool)
     mapping = {
-        "?": (False, 0),  # unobserved
+        missing: (False, 0),  # unobserved/missing
         "A": (True, 0),
         "C": (True, 1),
         "G": (True, 2),
@@ -64,6 +74,7 @@ def load_data(args):
         seq = alignment[i].seq
         for j in range(num_characters):
             mask[i, j], data[i, j] = mapping[seq[j]]
+    logger.info(f"loaded {num_taxa} taxa x {num_characters} characters")
 
     times = torch.zeros(num_taxa)
     return times, data, mask
@@ -288,8 +299,8 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Tree learning experiment")
-    parser.add_argument("--nexus-infile", default="data/treebase/M487.nex")
-    parser.add_argument("--outfile", default="results/bethe.pt")
+    parser.add_argument("-i", "--nexus-infile", default="data/treebase/M487.nex")
+    parser.add_argument("-o", "--outfile", default="results/bethe.pt")
     parser.add_argument("--max-taxa", default=int(1e6), type=int)
     parser.add_argument("--max-characters", default=int(1e6), type=int)
     parser.add_argument("--subs-rate", type=float)
@@ -302,7 +313,7 @@ if __name__ == "__main__":
     parser.add_argument("-lr0", "--pre-learning-rate", default=0.1, type=float)
     parser.add_argument("-map", "--guide-map", action="store_true")
     parser.add_argument("-r", "--guide-rank", default=20, type=int)
-    parser.add_argument("-is", "--init-scale", default=0.01, type=float)
+    parser.add_argument("-is", "--init-scale", default=0.05, type=float)
     parser.add_argument("-n", "--num-steps", default=1001, type=int)
     parser.add_argument("-lr", "--learning-rate", default=0.01, type=float)
     parser.add_argument("-lrd", "--learning-rate-decay", default=0.1, type=float)
