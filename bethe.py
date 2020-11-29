@@ -160,7 +160,6 @@ def _predict_task(args):
     args, model, guide, i = args
     torch.set_default_dtype(torch.double)
     pyro.set_rng_seed(args.seed + i)
-    pyro.enable_validation(__debug__)
 
     guide_trace = poutine.trace(guide).get_trace()
     with poutine.replay(trace=guide_trace):
@@ -253,7 +252,6 @@ def main(args):
     mp.set_start_method("spawn")
     torch.set_default_dtype(torch.double if args.double else torch.float)
     pyro.set_rng_seed(args.seed)
-    pyro.enable_validation(__debug__)
 
     # Run the pipeline.
     leaf_times, leaf_data, leaf_mask = load_data(args)
