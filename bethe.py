@@ -15,10 +15,12 @@ import argparse
 import io
 import logging
 import math
+import os
 import re
 import sys
 from collections import Counter
 
+import numpy as np
 import pyro
 import pyro.poutine as poutine
 import setuptools  # noqa F401
@@ -36,44 +38,70 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(format="%(relativeCreated) 9d %(message)s", level=logging.DEBUG)
 
 
-def load_data(args):
-    logger.info(f"Loading data from {args.nexus_infile}")
+def print_dot():
+    sys.stderr.write(".")
+    sys.stderr.flush()
 
-    # Truncate file to work around bug in Bio.Nexus reader.
+
+def read_nexus(filename):
+    # Work around bugs in Bio.Nexus reader.
     lines = []
-    with open(args.nexus_infile) as f:
-        missing = "?"
+    with open(filename) as f:
         for line in f:
             if line.startswith("BEGIN CODONS"):
                 break
             if line.startswith("BEGIN SETS"):
                 break
-            match = re.search("MISSING=(.)", line)
-            if match:
-                missing = match.group(1)
             if "{" in line:
                 # TODO Support ambiguous reads. For now replace them with missing.
-                line = re.sub("{[ATCG]+}", missing, line)
+                line = re.sub("{[ATCG]+}", "?", line)
             lines.append(line)
     f = io.StringIO("".join(lines))
     alignment = AlignIO.read(f, "nexus")
+    return alignment
+
+
+def load_data(args):
+    logger.info(f"Loading data from {args.alignment_infile}")
+    filename = os.path.expanduser(args.alignment_infile)
+    if filename.endswith(".nex"):
+        alignment = read_nexus(filename)
+    elif filename.endswith(".fasta"):
+        alignment = AlignIO.read(filename, "fasta")
+    else:
+        raise ValueError(f"Unknown file format {args.alignment_infile}")
 
     num_taxa = min(len(alignment), args.max_taxa)
     num_characters = min(len(alignment[0]), args.max_characters)
+    logger.info(f"parsing {num_taxa} taxa x {num_characters} characters")
     data = torch.zeros((num_taxa, num_characters), dtype=torch.long)
     mask = torch.zeros((num_taxa, num_characters), dtype=torch.bool)
+
     mapping = {
-        missing: (False, 0),  # unobserved/missing
+        "?": (False, 0),  # missing
         "A": (True, 0),
         "C": (True, 1),
         "G": (True, 2),
         "T": (True, 3),
-        "-": (True, 4),  # insertion/deletion
+        "-": (True, 4),  # gap
+        ".": (True, 4),  # gap
     }
+    for letter in "RYSWKMBDHVN":
+        # Ignore FASTA ambiguities (FIXME encode as uniform distributions)
+        # See https://www.bioinformatics.org/sms/iupac.html
+        mapping[letter] = (False, 0)
+    data_values = torch.zeros(256, dtype=torch.long)
+    mask_values = torch.zeros(256, dtype=torch.bool)
+    keys = np.array(list(mapping.keys()), dtype="|S1").view(np.uint8)
+    keys = torch.tensor(keys, dtype=torch.long)
+    mask_values[keys] = torch.tensor([m for m, d in mapping.values()])
+    data_values[keys] = torch.tensor([d for m, d in mapping.values()])
     for i in range(num_taxa):
-        seq = alignment[i].seq
-        for j in range(num_characters):
-            mask[i, j], data[i, j] = mapping[seq[j]]
+        seq = alignment[i].seq[:num_characters]
+        seq = np.array(seq, dtype="|S1").view(np.uint8)
+        seq = torch.tensor(seq, dtype=torch.long)
+        mask[i] = mask_values[seq]
+        data[i] = data_values[seq]
     logger.info(f"loaded {num_taxa} taxa x {num_characters} characters")
 
     times = torch.zeros(num_taxa)
@@ -81,7 +109,7 @@ def load_data(args):
 
 
 def pretrain_model(args, model):
-    logger.info("Pretraining model via SVI")
+    logger.info(f"Pretraining model via SVI for {args.pre_steps} steps")
     logger.info("model has {} parameters".format(
         sum(p.numel() for p in model.parameters())))
 
@@ -103,7 +131,7 @@ def pretrain_model(args, model):
 
 
 def train_guide(args, model):
-    logger.info("Training model+guide via SVI")
+    logger.info(f"Training model+guide via SVI for {args.num_steps} steps")
 
     # Configure a guide.
     guide_config = {"init_loc_fn": model.init_loc_fn,
@@ -171,8 +199,7 @@ def _predict_task(args):
     codes = codes[new2old]
 
     if i % args.log_every == 0:
-        sys.stderr.write(".")
-        sys.stderr.flush()
+        print_dot()
     return tree, codes
 
 
@@ -297,7 +324,7 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Tree learning experiment")
-    parser.add_argument("-i", "--nexus-infile", default="data/treebase/M487.nex")
+    parser.add_argument("-i", "--alignment-infile", default="data/treebase/M487.nex")
     parser.add_argument("-o", "--outfile", default="results/bethe.pt")
     parser.add_argument("--max-taxa", default=int(1e6), type=int)
     parser.add_argument("--max-characters", default=int(1e6), type=int)

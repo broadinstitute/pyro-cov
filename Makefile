@@ -21,4 +21,10 @@ profile_bvi.prof: lint
 	python -O -m cProfile -s tottime -o profile_bvi.prof bethe.py --sequential --num-samples=1
 	snakeviz profile_bvi.prof
 
+profile_ncov.prof: lint
+	python -O -m cProfile -s tottime -o profile_ncov.prof bethe.py \
+		--sequential -n0=5 -n=10 -s=1 --log-every=1 \
+		--alignment-infile=~/github/nextstrain/ncov/results/aligned.fasta
+	snakeviz profile_ncov.prof
+
 FORCE:
