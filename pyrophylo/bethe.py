@@ -47,8 +47,7 @@ class BetheModel(PyroModule):
     max_plate_nesting = 2
 
     def __init__(self, leaf_times, leaf_logits, *,
-                 embedding_dim=20, bp_iters=30, min_dt=1e-3,
-                 entropy_regularize=0.):
+                 embedding_dim=20, bp_iters=30, min_dt=1e-3):
         super().__init__()
         assert leaf_times.dim() == 1
         assert (leaf_times[:-1] <= leaf_times[1:]).all()
@@ -56,7 +55,6 @@ class BetheModel(PyroModule):
         assert leaf_logits.shape[:1] == leaf_times.shape
         assert isinstance(embedding_dim, int) and embedding_dim > 0
         assert isinstance(min_dt, float) and min_dt >= 0
-        assert isinstance(entropy_regularize, float) and entropy_regularize >= 0
         L, C, D = leaf_logits.shape
 
         self.num_nodes = 2 * L - 1
@@ -67,7 +65,6 @@ class BetheModel(PyroModule):
         self.subs_model = JukesCantor69(dim=D)
         self.bp_iters = bp_iters
         self.min_dt = min_dt
-        self.entropy_regularize = entropy_regularize
         self.embedding_dim = embedding_dim
         self.decoder = Decoder(embedding_dim, (C, D))
 
@@ -86,15 +83,11 @@ class BetheModel(PyroModule):
         assert states.shape == (N, C, D)
 
         # Condition on observations.
-        pyro.factor("leaf_likelihood",
-                    torch.einsum("lcd,lcd->", self.leaf_logits, states[:L]))
+        if not sample_tree:
+            pyro.factor("leaf_likelihood",
+                        torch.einsum("lcd,lcd->", states[:L], self.leaf_logits))
         if pretrain:  # If we're training only self.decoder,
             return    # then we can ignore the rest of the model.
-
-        # Optionally regularize by entropy.
-        if self.entropy_regularize:
-            entropy = dist.Categorical(states).entropy().sum()
-            pyro.factor("node_entropy", (-self.entropy_regularize) * entropy)
 
         # Sample times of internal nodes.
         internal_times = pyro.sample("internal_times",
@@ -115,7 +108,7 @@ class BetheModel(PyroModule):
             tree_dist = dist.Delta(tree_dist.mode(), event_dim=1)
             tree = pyro.sample("tree", tree_dist)
 
-            # Convert sparse matching to phylogeny.
+            # Convert sparse matching to phylogeny inputs.
             parents = tree.new_full((N,), -1)
             parents[sources] = destins[tree]
             pyro.deterministic("parents", parents)

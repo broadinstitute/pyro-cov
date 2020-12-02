@@ -65,9 +65,9 @@ def load_data(args):
     filename = os.path.expanduser(args.alignment_infile)
     probs = read_alignment(filename, max_taxa=args.max_taxa,
                            max_characters=args.max_characters)
-    logits = probs.mul_(1 - args.error_rate) \
-                  .add_(args.error_rate / probs.size(-1)) \
-                  .log_()
+    probs.mul_(1 - args.error_rate).add_(args.error_rate / probs.size(-1))
+    logits = probs.log()
+    logits -= (probs * logits).sum(-1, True)
 
     times = torch.zeros(probs.size(0))
     return times, logits
@@ -249,8 +249,7 @@ def main(args):
     model = BetheModel(leaf_times, leaf_logits,
                        embedding_dim=args.embedding_dim,
                        bp_iters=args.bp_iters,
-                       min_dt=args.min_dt,
-                       entropy_regularize=args.entropy_regularize)
+                       min_dt=args.min_dt)
     if args.subs_rate is not None:
         model.subs_model.rate = args.subs_rate
     losses = pretrain_model(args, model)
@@ -293,15 +292,14 @@ if __name__ == "__main__":
     parser.add_argument("--subs-rate", type=float)
     parser.add_argument("-e", "--embedding-dim", default=20, type=int)
     parser.add_argument("--min-dt", default=1e-3, action="store_true")
-    parser.add_argument("-er", "--entropy-regularize", default=0., type=float)
     parser.add_argument("-bp", "--bp-iters", default=30, type=int)
     parser.add_argument("-n0", "--pre-steps", default=51, type=int)
     parser.add_argument("-lr0", "--pre-learning-rate", default=0.1, type=float)
     parser.add_argument("-map", "--guide-map", action="store_true")
     parser.add_argument("-r", "--guide-rank", default=20, type=int)
     parser.add_argument("-is", "--init-scale", default=0.05, type=float)
-    parser.add_argument("-n", "--num-steps", default=1001, type=int)
-    parser.add_argument("-lr", "--learning-rate", default=0.01, type=float)
+    parser.add_argument("-n", "--num-steps", default=501, type=int)
+    parser.add_argument("-lr", "--learning-rate", default=0.05, type=float)
     parser.add_argument("-lrd", "--learning-rate-decay", default=0.1, type=float)
     parser.add_argument("-cn", "--clip-norm", default=1e2, type=float)
     parser.add_argument("-mcmc", action="store_true")
