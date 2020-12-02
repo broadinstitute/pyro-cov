@@ -5,7 +5,6 @@ import math
 import re
 import sys
 
-import numpy as np
 import torch
 import torch.multiprocessing as mp
 from Bio import AlignIO
@@ -188,13 +187,12 @@ def read_alignment(filename, format=None, *,
     # Convert to a single PyTorch array.
     num_taxa = min(len(alignment), max_taxa)
     num_characters = min(len(alignment[0]), max_characters)
+    alignment = alignment[:num_taxa, :num_characters]
     logger.info(f"parsing {num_taxa} taxa x {num_characters} characters")
     codebook = _get_codebook()
-    probs = torch.zeros(num_taxa, num_characters, 5)
-    for i in range(num_taxa):
-        seq = alignment[i].seq[:num_characters]
-        seq = _chars_to_tensor(seq)
-        torch.index_select(codebook, 0, seq, out=probs[i])
+    probs = torch.empty(num_taxa, num_characters, 5)
+    for i, seq in enumerate(alignment):
+        probs[i] = codebook[list(map(ord, seq))]
     return probs
 
 
@@ -266,15 +264,9 @@ def _encode_ambiguity(chars):
     return AMBIGUOUS_CODES[frozenset(chars)]
 
 
-def _chars_to_tensor(chars):
-    array = np.array(chars, dtype="|S1").view(np.uint8)
-    tensor = torch.tensor(array, dtype=torch.long)
-    return tensor
-
-
 def _get_codebook():
-    codes = torch.zeros(256, 5)
-    keys = _chars_to_tensor(list(NUCLEOTIDE_CODES.keys()))
+    codes = torch.full((256, 5), math.nan)
+    keys = list(map(ord, NUCLEOTIDE_CODES.keys()))
     values = torch.tensor(list(NUCLEOTIDE_CODES.values()))
     assert values.sum(-1).sub(1).abs().le(1e-6).all()
     codes[keys] = values
