@@ -184,15 +184,24 @@ def read_alignment(filename, format=None, *,
     else:
         alignment = AlignIO.read(filename, format)
 
-    # Convert to a single PyTorch array.
+    # Convert to a single torch.Tensor.
     num_taxa = min(len(alignment), max_taxa)
     num_characters = min(len(alignment[0]), max_characters)
     alignment = alignment[:num_taxa, :num_characters]
     logger.info(f"parsing {num_taxa} taxa x {num_characters} characters")
     codebook = _get_codebook()
-    probs = torch.empty(num_taxa, num_characters, 5)
-    for i, seq in enumerate(alignment):
-        probs[i] = codebook[list(map(ord, seq))]
+    probs = torch.full((num_taxa, num_characters, 5), 1/5)
+    for i in range(num_taxa):
+        seq = alignment[i].seq
+        # Replace gaps at ends with missing.
+        beg, end = 0, probs.size(1)
+        if seq[0] in "-.N":
+            seq, old = seq.lstrip(seq[0]), seq
+            beg += len(old) - len(seq)
+        if seq[-1] in "-.N":
+            seq, old = seq.rstrip(seq[-1]), seq
+            end -= len(old) - len(seq)
+        probs[i, beg:end] = codebook[list(map(ord, seq))]
     return probs
 
 

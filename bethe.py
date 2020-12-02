@@ -65,6 +65,15 @@ def load_data(args):
     filename = os.path.expanduser(args.alignment_infile)
     probs = read_alignment(filename, max_taxa=args.max_taxa,
                            max_characters=args.max_characters)
+
+    # Optionally ignore low-diversity sites.
+    if args.min_diversity > 0:
+        diversity = 1 - (probs > 0).float().mean(0).max(-1).values
+        mask = diversity > args.min_diversity
+        logger.info(f"Cropping to {mask.sum():d}/{len(mask)} diverse characters")
+        probs = probs[:, mask]
+
+    # Convert probs to logits.
     probs.mul_(1 - args.error_rate).add_(args.error_rate / probs.size(-1))
     logits = probs.log()
     logits -= (probs * logits).sum(-1, True)
@@ -288,6 +297,7 @@ if __name__ == "__main__":
     parser.add_argument("-o", "--outfile", default="results/bethe.pt")
     parser.add_argument("--max-taxa", default=int(1e6), type=int)
     parser.add_argument("--max-characters", default=int(1e6), type=int)
+    parser.add_argument("--min-diversity", default=1e-2, type=int)
     parser.add_argument("--error-rate", default=1e-3, type=float)
     parser.add_argument("--subs-rate", type=float)
     parser.add_argument("-e", "--embedding-dim", default=20, type=int)
