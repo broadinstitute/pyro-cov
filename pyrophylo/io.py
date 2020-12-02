@@ -1,11 +1,25 @@
 import functools
+import io
+import logging
 import math
+import re
 import sys
 
+import numpy as np
+import torch
 import torch.multiprocessing as mp
+from Bio import AlignIO
 from Bio.Phylo.NewickIO import Parser
 
 from .phylo import Phylogeny
+
+logger = logging.getLogger(__name__)
+
+FILE_FORMATS = {
+    "nex": "nexus",
+    "nexus": "nexus",
+    "fasta": "fasta",
+}
 
 
 def _print_dot():
@@ -141,3 +155,127 @@ def read_newick_tree(filename):
         line = f.read().strip()
     tree = next(Parser.from_string(line).parse())
     return Phylogeny.from_bio_phylo(tree)
+
+
+def read_alignment(filename, format=None, *,
+                   max_taxa=math.inf,
+                   max_characters=math.inf):
+    """
+    Reads a single alignment file to a torch tensor of probabilites.
+
+    :param str filename: Name of input file.
+    :param str format: Optional input format, e.g. "nexus" or "fasta".
+    :param int max_taxa: Optional number of taxa for truncation.
+    :param int max_characters: Optional number of characters for truncation.
+    :rtype: torch.Tensor
+    :returns: A float tensor of shape ``(num_sequences, num_characters,
+        num_bases)`` that is normalized along its rightmost dimension. Note
+        that ``num_bases`` is 5 = 4 + 1, where the final base denots a gap or
+        indel.
+    """
+    # Load a Bio.Align.MultipleSeqAlignment object.
+    logger.info(f"Loading data from {filename}")
+    if format is None:
+        suffix = filename.split(".")[-1].lower()
+        format = FILE_FORMATS.get(suffix)
+    if format is None:
+        raise ValueError("Please specify a file format, e.g. 'nexus' or 'fasta'")
+    elif format == "nexus":
+        alignment = _read_alignment_nexus(filename)
+    else:
+        alignment = AlignIO.read(filename, format)
+
+    # Convert to a single PyTorch array.
+    num_taxa = min(len(alignment), max_taxa)
+    num_characters = min(len(alignment[0]), max_characters)
+    logger.info(f"parsing {num_taxa} taxa x {num_characters} characters")
+    codebook = _get_codebook()
+    probs = torch.zeros(num_taxa, num_characters, 5)
+    for i in range(num_taxa):
+        seq = alignment[i].seq[:num_characters]
+        seq = _chars_to_tensor(seq)
+        torch.index_select(codebook, 0, seq, out=probs[i])
+    return probs
+
+
+def _read_alignment_nexus(filename):
+    # Work around bugs in Bio.Nexus reader.
+    lines = []
+    section = None
+    done = set()
+    with open(filename) as f:
+        for line in f:
+            if line.startswith("BEGIN"):
+                section = line.split()[-1].strip()[:-1]
+            elif line.startswith("END;"):
+                done.add(section)
+                section = None
+                if "TAXA" in done and "CHARACTERS" in done:
+                    lines.append(line)
+                    break
+            elif section == "CHARACTERS":
+                if "{" in line:
+                    line = re.sub("{[ATCG]+}", _encode_ambiguity, line)
+            lines.append(line)
+    f = io.StringIO("".join(lines))
+    alignment = AlignIO.read(f, "nexus")
+    return alignment
+
+
+# See https://www.bioinformatics.org/sms/iupac.html
+NUCLEOTIDE_CODES = {
+    #    [  A,   C,   G,   T, gap]
+    "?": [1/5, 1/5, 1/5, 1/5, 1/5],  # missing
+    "A": [1/1, 0.0, 0.0, 0.0, 0.0],  # adenine
+    "C": [0.0, 1/1, 0.0, 0.0, 0.0],  # cytosine
+    "G": [0.0, 0.0, 1/1, 0.0, 0.0],  # guanine
+    "T": [0.0, 0.0, 0.0, 1/1, 0.0],  # thymine
+    "U": [0.0, 0.0, 0.0, 1/1, 0.0],  # uracil
+    "R": [1/2, 0.0, 1/2, 0.0, 0.0],
+    "Y": [0.0, 1/2, 0.0, 1/2, 0.0],
+    "S": [0.0, 1/2, 1/2, 0.0, 0.0],
+    "W": [1/2, 0.0, 0.0, 1/2, 0.0],
+    "K": [0.0, 0.0, 1/2, 1/2, 0.0],
+    "M": [1/2, 1/2, 0.0, 0.0, 0.0],
+    "B": [0.0, 1/3, 1/3, 1/3, 0.0],
+    "D": [1/3, 0.0, 1/3, 1/3, 0.0],
+    "H": [1/3, 1/3, 0.0, 1/3, 0.0],
+    "V": [1/3, 1/3, 1/3, 0.0, 0.0],
+    "N": [1/4, 1/4, 1/4, 1/4, 0.0],
+    "-": [0.0, 0.0, 0.0, 0.0, 1/1],  # gap
+    ".": [0.0, 0.0, 0.0, 0.0, 1/1],  # gap
+}
+
+AMBIGUOUS_CODES = {
+    frozenset("AG"): "R",
+    frozenset("CT"): "Y",
+    frozenset("CG"): "S",
+    frozenset("AT"): "W",
+    frozenset("GT"): "K",
+    frozenset("AC"): "M",
+    frozenset("CGT"): "B",
+    frozenset("AGT"): "D",
+    frozenset("ACT"): "H",
+    frozenset("ACG"): "V",
+    frozenset("ACGT"): "N",
+}
+assert len(AMBIGUOUS_CODES) == 6 + 4 + 1
+
+
+def _encode_ambiguity(chars):
+    return AMBIGUOUS_CODES[frozenset(chars)]
+
+
+def _chars_to_tensor(chars):
+    array = np.array(chars, dtype="|S1").view(np.uint8)
+    tensor = torch.tensor(array, dtype=torch.long)
+    return tensor
+
+
+def _get_codebook():
+    codes = torch.zeros(256, 5)
+    keys = _chars_to_tensor(list(NUCLEOTIDE_CODES.keys()))
+    values = torch.tensor(list(NUCLEOTIDE_CODES.values()))
+    assert values.sum(-1).sub(1).abs().le(1e-6).all()
+    codes[keys] = values
+    return codes

@@ -20,7 +20,6 @@ import re
 import sys
 from collections import Counter
 
-import numpy as np
 import pyro
 import pyro.poutine as poutine
 import setuptools  # noqa F401
@@ -32,6 +31,7 @@ from pyro.infer.autoguide import AutoDelta, AutoLowRankMultivariateNormal, AutoN
 from pyro.optim import ClippedAdam
 
 from pyrophylo.bethe import BetheModel
+from pyrophylo.io import read_alignment
 from pyrophylo.phylo import Phylogeny
 
 logger = logging.getLogger(__name__)
@@ -62,50 +62,15 @@ def read_nexus(filename):
 
 
 def load_data(args):
-    logger.info(f"Loading data from {args.alignment_infile}")
     filename = os.path.expanduser(args.alignment_infile)
-    if filename.endswith(".nex"):
-        alignment = read_nexus(filename)
-    elif filename.endswith(".fasta"):
-        alignment = AlignIO.read(filename, "fasta")
-    else:
-        raise ValueError(f"Unknown file format {args.alignment_infile}")
+    probs = read_alignment(filename, max_taxa=args.max_taxa,
+                           max_characters=args.max_characters)
+    logits = probs.mul_(1 - args.error_rate) \
+                  .add_(args.error_rate / probs.size(-1)) \
+                  .log_()
 
-    num_taxa = min(len(alignment), args.max_taxa)
-    num_characters = min(len(alignment[0]), args.max_characters)
-    logger.info(f"parsing {num_taxa} taxa x {num_characters} characters")
-    data = torch.zeros((num_taxa, num_characters), dtype=torch.long)
-    mask = torch.zeros((num_taxa, num_characters), dtype=torch.bool)
-
-    mapping = {
-        "?": (False, 0),  # missing
-        "A": (True, 0),
-        "C": (True, 1),
-        "G": (True, 2),
-        "T": (True, 3),
-        "-": (True, 4),  # gap
-        ".": (True, 4),  # gap
-    }
-    for letter in "RYSWKMBDHVN":
-        # Ignore FASTA ambiguities (FIXME encode as uniform distributions)
-        # See https://www.bioinformatics.org/sms/iupac.html
-        mapping[letter] = (False, 0)
-    data_values = torch.zeros(256, dtype=torch.long)
-    mask_values = torch.zeros(256, dtype=torch.bool)
-    keys = np.array(list(mapping.keys()), dtype="|S1").view(np.uint8)
-    keys = torch.tensor(keys, dtype=torch.long)
-    mask_values[keys] = torch.tensor([m for m, d in mapping.values()])
-    data_values[keys] = torch.tensor([d for m, d in mapping.values()])
-    for i in range(num_taxa):
-        seq = alignment[i].seq[:num_characters]
-        seq = np.array(seq, dtype="|S1").view(np.uint8)
-        seq = torch.tensor(seq, dtype=torch.long)
-        mask[i] = mask_values[seq]
-        data[i] = data_values[seq]
-    logger.info(f"loaded {num_taxa} taxa x {num_characters} characters")
-
-    times = torch.zeros(num_taxa)
-    return times, data, mask
+    times = torch.zeros(probs.size(0))
+    return times, logits
 
 
 def pretrain_model(args, model):
@@ -118,11 +83,10 @@ def pretrain_model(args, model):
     guide = AutoDelta(model, init_loc_fn=model.init_loc_fn)
     guide = poutine.block(guide, hide_types=["param"])  # Keep leaf codes fixed.
     svi = SVI(model, guide, optim, Trace_ELBO())
-    num_observations = model.leaf_mask.sum()
     losses = []
     for step in range(args.pre_steps):
         svi.step(pretrain=True)
-        loss = svi.step(pretrain=True) / num_observations
+        loss = svi.step(pretrain=True) / model.num_observations
         if step % args.log_every == 0:
             logger.info(f"step {step: >4} loss = {loss:0.4g}")
         assert math.isfinite(loss)
@@ -158,10 +122,9 @@ def train_guide(args, model):
                          "clip_norm": args.clip_norm,
                          })
     svi = SVI(model, guide, optim, Trace_ELBO())
-    num_observations = model.leaf_mask.sum()
     losses = []
     for step in range(args.num_steps):
-        loss = svi.step() / num_observations
+        loss = svi.step() / model.num_observations
         if step % args.log_every == 0:
             logger.info(f"step {step: >4} loss = {loss:0.4g}")
         assert math.isfinite(loss)
@@ -281,13 +244,12 @@ def main(args):
     pyro.set_rng_seed(args.seed)
 
     # Run the pipeline.
-    leaf_times, leaf_data, leaf_mask = load_data(args)
+    leaf_times, leaf_logits = load_data(args)
     args.embedding_dim = min(args.embedding_dim, len(leaf_times))
-    model = BetheModel(leaf_times, leaf_data, leaf_mask,
+    model = BetheModel(leaf_times, leaf_logits,
                        embedding_dim=args.embedding_dim,
                        bp_iters=args.bp_iters,
                        min_dt=args.min_dt,
-                       quantize=args.quantize,
                        entropy_regularize=args.entropy_regularize)
     if args.subs_rate is not None:
         model.subs_model.rate = args.subs_rate
@@ -308,8 +270,7 @@ def main(args):
             "args": args,
             "data": {
                 "leaf_times": leaf_times,
-                "leaf_data": leaf_data,
-                "leaf_mask": leaf_mask,
+                "leaf_logits": leaf_logits,
             },
             "model": model,
             "guide": guide,
@@ -328,9 +289,9 @@ if __name__ == "__main__":
     parser.add_argument("-o", "--outfile", default="results/bethe.pt")
     parser.add_argument("--max-taxa", default=int(1e6), type=int)
     parser.add_argument("--max-characters", default=int(1e6), type=int)
+    parser.add_argument("--error-rate", default=1e-3, type=float)
     parser.add_argument("--subs-rate", type=float)
     parser.add_argument("-e", "--embedding-dim", default=20, type=int)
-    parser.add_argument("--quantize", action="store_true")
     parser.add_argument("--min-dt", default=1e-3, action="store_true")
     parser.add_argument("-er", "--entropy-regularize", default=0., type=float)
     parser.add_argument("-bp", "--bp-iters", default=30, type=int)
