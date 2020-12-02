@@ -70,7 +70,7 @@ class BetheModel(PyroModule):
 
         self._initialize()
 
-    def forward(self, pretrain=False, sample_tree=False):
+    def forward(self, mode="train"):
         L, C, D = self.leaf_logits.shape
         N = 2 * L - 1
         node_plate = pyro.plate("node_plate", N, dim=-2)
@@ -83,11 +83,11 @@ class BetheModel(PyroModule):
         assert states.shape == (N, C, D)
 
         # Condition on observations.
-        if not sample_tree:
+        if mode in ("train", "pretrain"):
             pyro.factor("leaf_likelihood",
                         torch.einsum("lcd,lcd->", states[:L], self.leaf_logits))
-        if pretrain:  # If we're training only self.decoder,
-            return    # then we can ignore the rest of the model.
+        if mode == "pretrain":  # If we're training only self.decoder,
+            return              # then we can ignore the rest of the model.
 
         # Sample times of internal nodes.
         internal_times = pyro.sample("internal_times",
@@ -98,11 +98,11 @@ class BetheModel(PyroModule):
         # Account for random tree structure.
         logits, sources, destins = self.kernel(states.float(), times.float())
         tree_dist = dist.OneTwoMatching(logits, bp_iters=self.bp_iters)
-        if not sample_tree:
+        if mode == "train":
             # During training, analytically marginalize over trees.
             pyro.factor("tree_likelihood",
                         tree_dist.log_partition_function.to(times.dtype))
-        else:
+        elif mode == "predict":
             # During prediction, simply sample a tree.
             # TODO implement OneTwoMatching.sample(); until then use .mode().
             tree_dist = dist.Delta(tree_dist.mode(), event_dim=1)

@@ -94,8 +94,7 @@ def pretrain_model(args, model):
     svi = SVI(model, guide, optim, Trace_ELBO())
     losses = []
     for step in range(args.pre_steps):
-        svi.step(pretrain=True)
-        loss = svi.step(pretrain=True) / model.num_observations
+        loss = svi.step(mode="pretrain") / model.num_observations
         if step % args.log_every == 0:
             logger.info(f"step {step: >4} loss = {loss:0.4g}")
         assert math.isfinite(loss)
@@ -163,7 +162,7 @@ def _predict_task(args):
 
     guide_trace = poutine.trace(guide).get_trace()
     with poutine.replay(trace=guide_trace):
-        codes, times, parents = model(sample_tree=True)
+        codes, times, parents = model(mode="predict")
 
     # Convert to Phylogeny objects.
     leaves = torch.arange(model.num_leaves)
@@ -206,7 +205,7 @@ def sample_model_mcmc(args, model):
     with torch.no_grad():
         predictive = Predictive(model, samples,
                                 return_sites=["codes", "times", "parents"])
-        samples = predictive(sample_tree=True)
+        samples = predictive(mode="predict")
 
         # Convert to a stacked Phylogeny object.
         trees = []
@@ -303,7 +302,7 @@ if __name__ == "__main__":
     parser.add_argument("-e", "--embedding-dim", default=20, type=int)
     parser.add_argument("--min-dt", default=1e-3, action="store_true")
     parser.add_argument("-bp", "--bp-iters", default=30, type=int)
-    parser.add_argument("-n0", "--pre-steps", default=51, type=int)
+    parser.add_argument("-n0", "--pre-steps", default=101, type=int)
     parser.add_argument("-lr0", "--pre-learning-rate", default=0.1, type=float)
     parser.add_argument("-map", "--guide-map", action="store_true")
     parser.add_argument("-r", "--guide-rank", default=20, type=int)
