@@ -1,6 +1,6 @@
 import pyro.distributions as dist
 import torch
-from pyro.nn import PyroModule, PyroSample
+from pyro.nn import PyroModule, PyroSample, pyro_method
 
 
 class SubstitutionModel(PyroModule):
@@ -10,6 +10,16 @@ class SubstitutionModel(PyroModule):
 
     This returns a continuous time transition matrix.
     """
+    @pyro_method
+    def matrix_exp(self, dt):
+        m = self().to(dt.dtype)
+        return (m * dt[:, None, None]).matrix_exp()
+
+    @pyro_method
+    def log_matrix_exp(self, dt):
+        m = self.matrix_exp(dt)
+        m.data.clamp_(torch.finfo(m.dtype).epsilon)
+        return m.log()
 
 
 class JukesCantor69(SubstitutionModel):
@@ -30,6 +40,25 @@ class JukesCantor69(SubstitutionModel):
     def forward(self):
         D = self.dim
         return self.rate * (1. / D - torch.eye(D))
+
+    @pyro_method
+    def matrix_exp(self, dt):
+        D = self.dim
+        rate = self.rate.to(dt.dtype)
+        p = dt.mul(-rate).exp()[:, None, None]
+        q = (1 - p) / D
+        return torch.where(torch.eye(D, dtype=torch.bool), p + q, q)
+
+    @pyro_method
+    def log_matrix_exp(self, dt):
+        D = self.dim
+        rate = self.rate.to(dt.dtype)
+        p = dt.mul(-rate).exp()[:, None, None]
+        q = (1 - p) / D
+        q.data.clamp_(min=torch.finfo(q.dtype).eps)
+        on_diag = (p + q).log()
+        off_diag = q.log()
+        return torch.where(torch.eye(D, dtype=torch.bool), on_diag, off_diag)
 
 
 class GeneralizedTimeReversible(SubstitutionModel):

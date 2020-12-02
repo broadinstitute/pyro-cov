@@ -133,12 +133,10 @@ class BetheModel(PyroModule):
 
         # Convert dense square -> sparse.
         dt = times[v1] - times[v0] + self.min_dt
-        m = self.subs_model().to(states.dtype)
-        exp_mt = (dt[:, None, None] * m).matrix_exp()
-        exp_mt.data.clamp_(min=finfo.eps)
+        transition = self.subs_model.log_matrix_exp(dt)
         # Accumulate sufficient statistics over characters.
         stats = torch.einsum("icd,jce->ijde", states, states)[v0, v1]
-        sparse_logits = torch.einsum("fde,fde->f", exp_mt.log(), stats)
+        sparse_logits = torch.einsum("fde,fde->f", transition, stats)
         assert sparse_logits.isfinite().all()
 
         # Convert sparse -> dense matching.

@@ -23,7 +23,7 @@ profile_bvi.prof: lint
 
 profile_ncov.prof: lint
 	python -O -m cProfile -s tottime -o profile_ncov.prof bethe.py \
-		--sequential --single -n0=11 -n=51 -s=1 \
+		--sequential --single -n=101 -s=1 \
 		--alignment-infile=~/github/nextstrain/ncov/results/aligned.fasta
 	snakeviz profile_ncov.prof
 
