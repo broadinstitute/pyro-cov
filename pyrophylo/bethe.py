@@ -47,14 +47,13 @@ class BetheModel(PyroModule):
     max_plate_nesting = 2
 
     def __init__(self, leaf_times, leaf_logits, *,
-                 embedding_dim=20, bp_iters=30, min_dt=1e-3):
+                 embedding_dim=20, bp_iters=30):
         super().__init__()
         assert leaf_times.dim() == 1
         assert (leaf_times[:-1] <= leaf_times[1:]).all()
         assert leaf_logits.dim() == 3
         assert leaf_logits.shape[:1] == leaf_times.shape
         assert isinstance(embedding_dim, int) and embedding_dim > 0
-        assert isinstance(min_dt, float) and min_dt >= 0
         L, C, D = leaf_logits.shape
 
         self.num_nodes = 2 * L - 1
@@ -64,7 +63,6 @@ class BetheModel(PyroModule):
         self.leaf_logits = leaf_logits
         self.subs_model = JukesCantor69(dim=D)
         self.bp_iters = bp_iters
-        self.min_dt = min_dt
         self.embedding_dim = embedding_dim
         self.decoder = Decoder(embedding_dim, (C, D))
 
@@ -132,11 +130,11 @@ class BetheModel(PyroModule):
         v0, v1 = feasible.nonzero(as_tuple=True)
 
         # Convert dense square -> sparse.
-        dt = times[v1] - times[v0] + self.min_dt
+        dt = times[v1] - times[v0]
         transition = self.subs_model.log_matrix_exp(dt)
         # Accumulate sufficient statistics over characters.
         stats = torch.einsum("icd,jce->ijde", states, states)[v0, v1]
-        sparse_logits = torch.einsum("fde,fde->f", transition, stats)
+        sparse_logits = torch.einsum("fde,fde->f", stats, transition)
         assert sparse_logits.isfinite().all()
 
         # Convert sparse -> dense matching.
