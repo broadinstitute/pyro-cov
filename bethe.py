@@ -187,7 +187,10 @@ def predict(args, model, guide):
 
 
 def sample_model_mcmc(args, model):
+    logger.info(f"Running MCMC for {2 * args.num_samples} steps")
+
     # Freeze the decoder neural network.
+    model.requires_grad_(False)
     frozen_model = poutine.block(model, hide_fn=lambda msg: "decoder." in msg["name"])
 
     # Run mcmc.
@@ -260,12 +263,13 @@ def main(args):
     if args.subs_rate is not None:
         model.subs_model.rate = args.subs_rate
     losses = pretrain_model(args, model)
+    guide, guide_losses = train_guide(args, model)
+    losses += guide_losses
     if args.mcmc:
-        guide = None
+        # Use model.decoder trained via SVI, but draw samples via NUTS.
         trees, codes = sample_model_mcmc(args, model)
     else:
-        guide, guide_losses = train_guide(args, model)
-        losses += guide_losses
+        # Sample directly from the guide.
         trees, codes = predict(args, model, guide)
     evaluate(args, trees)
 
