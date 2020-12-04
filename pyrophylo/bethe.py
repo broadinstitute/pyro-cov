@@ -77,13 +77,13 @@ class BetheModel(PyroModule):
         # Sample genetic sequences of all nodes, leaves + internal.
         with node_plate, code_plate:
             codes = pyro.sample("codes", dist.Normal(0, 1).mask(False))
-        states = self.decoder(codes)
-        assert states.shape == (N, C, D)
+            probs = self.decoder(codes)
+        assert probs.shape == (N, C, D)
 
         # Condition on observations.
         if mode in ("train", "pretrain"):
             pyro.factor("leaf_likelihood",
-                        torch.einsum("lcd,lcd->", states[:L], self.leaf_logits))
+                        torch.einsum("lcd,lcd->", probs[:L], self.leaf_logits))
         if mode == "pretrain":  # If we're training only self.decoder,
             return              # then we can ignore the rest of the model.
 
@@ -94,7 +94,7 @@ class BetheModel(PyroModule):
                                    torch.cat([self.leaf_times, internal_times]))
 
         # Account for random tree structure.
-        logits, sources, destins = self.kernel(states.float(), times.float())
+        logits, sources, destins = self.kernel(probs.float(), times.float())
         tree_dist = dist.OneTwoMatching(logits, bp_iters=self.bp_iters)
         if mode == "train":
             # During training, analytically marginalize over trees.
@@ -112,14 +112,14 @@ class BetheModel(PyroModule):
             pyro.deterministic("parents", parents)
             return codes, times, parents
 
-    def kernel(self, states, times):
+    def kernel(self, probs, times):
         """
-        Given states and times, compute pairwise transition log probability
+        Given probs and times, compute pairwise transition log probability
         between every undirected pair of states. This will be -inf for
         infeasible pairs, namely leaf-leaf and internal-after-leaf.
         """
-        finfo = torch.finfo(states.dtype)
-        N, C, D = states.shape
+        finfo = torch.finfo(probs.dtype)
+        N, C, D = probs.shape
         assert times.shape == (N,)
         L = (N + 1) // 2
 
@@ -133,7 +133,7 @@ class BetheModel(PyroModule):
         dt = times[v1] - times[v0]
         transition = self.subs_model.log_matrix_exp(dt)
         # Accumulate sufficient statistics over characters.
-        stats = torch.einsum("icd,jce->ijde", states, states)[v0, v1]
+        stats = torch.einsum("icd,jce->ijde", probs, probs)[v0, v1]
         sparse_logits = torch.einsum("fde,fde->f", stats, transition)
         assert sparse_logits.isfinite().all()
 
