@@ -290,6 +290,9 @@ def main(args):
                 "codes": codes,
             },
         }
+        dirname = os.path.dirname(args.outfile)
+        if not os.path.exists(dirname):
+            os.makedirs(dirname)
         torch.save(results, args.outfile)
 
 
