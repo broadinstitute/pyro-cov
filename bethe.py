@@ -75,8 +75,7 @@ def load_data(args):
 
     # Convert probs to logits.
     probs.mul_(1 - args.error_rate).add_(args.error_rate / probs.size(-1))
-    logits = probs.log()
-    logits -= (probs * logits).sum(-1, True)
+    logits = probs.log_()
 
     times = torch.zeros(probs.size(0))
     return times, logits
@@ -190,7 +189,7 @@ def sample_model_mcmc(args, model):
     logger.info(f"Running MCMC for {2 * args.num_samples} steps")
 
     # Freeze the decoder neural network.
-    model.requires_grad_(False)
+    model.requires_grad_(False).train(False)
     frozen_model = poutine.block(model, hide_fn=lambda msg: "decoder." in msg["name"])
 
     # Run mcmc.

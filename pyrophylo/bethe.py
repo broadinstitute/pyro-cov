@@ -37,7 +37,9 @@ class Decoder(nn.Module):
     def forward(self, code):
         logits = self.linear(code)
         logits = logits.reshape(code.shape[:-1] + self.shape)
-        return logits.softmax(dim=-1)
+        logits = logits.softmax(dim=-1)
+        logits.data.clamp_(min=torch.finfo(logits.dtype).eps)
+        return logits
 
 
 class Encoder(nn.Module):
@@ -52,6 +54,21 @@ class Encoder(nn.Module):
         loc = self.linear(probs.reshape(shape))
         scale = self.log_scale.exp()
         return loc, scale
+
+    def log_prob(self, codes, state):
+        loc, scale = self(state)
+        return dist.Normal(loc, scale).log_prob(codes).sum()
+
+    def expected_log_prob(self, codes, probs):
+        assert len(codes) == len(probs)
+        N, E = codes.shape
+        N, C, D = probs.shape
+        loc, scale = self(probs)
+        mean_part = dist.Normal(loc, scale).log_prob(codes).sum()
+        cov_sum = probs.sum(0).diag_embed() - torch.einsum("nci,ncj->cij", probs, probs)
+        linear = self.linear.weight.reshape(E, C, D)
+        cov_part = einsum("e,eci,ecj,cij->", scale.pow(-2), linear, linear, cov_sum)
+        return mean_part - 0.5 * cov_part
 
 
 class BetheModel(PyroModule):
@@ -96,25 +113,19 @@ class BetheModel(PyroModule):
             probs = self.decoder(codes)
 
         if mode in ("train", "pretrain"):
-            # Add hierarchical elbo terms.
-            pyro.factor("entropy", -(probs * probs.log()).sum())
-            with node_plate, code_plate:
-                loc, scale = self.encoder(probs)
-                pyro.sample("hierarchical_mean", dist.Normal(loc, scale), obs=codes)
-            cov = probs.diag_embed() - probs[..., None] * probs[..., None, :]
-            linear = self.encoder.linear.weight.reshape(self.embedding_dim, C, D)
-            pyro.factor("hierarchical_cov",
-                        (-0.5) * einsum("e,eci,ecj,ncij->", scale, linear, linear, cov))
-
             # Condition on observations.
             pyro.factor("leaf_likelihood",
                         torch.einsum("lcd,lcd->", probs[:L], self.leaf_logits))
+
+            # Add hierarchical elbo terms.
+            pyro.factor("entropy", -(probs * probs.log()).sum())
+            pyro.factor("hierarchy", self.encoder.expected_log_prob(codes, probs))
         if mode == "pretrain":  # If we're training only self.decoder,
             return              # then we can ignore the rest of the model.
 
         # Sample times of internal nodes.
         internal_times = pyro.sample("internal_times",
-                                     FakeCoalescentTimes(self.leaf_times).mask(False))
+                                     FakeCoalescentTimes(self.leaf_times))
         times = pyro.deterministic("times",
                                    torch.cat([self.leaf_times, internal_times]))
 
