@@ -9,7 +9,7 @@ ROOT = os.path.dirname(os.path.dirname(__file__))
 FILENAME = os.path.join(ROOT, "data", "GTR4G_posterior.trees")
 
 
-@pytest.mark.xfail(reason="Python <3.8 cannot .read() large files")
+@pytest.mark.xfail(reason="Python <3.8 cannot .read() large files", run=False)
 def test_bio_phylo_parse():
     trees = Phylo.parse(FILENAME, format="nexus")
     for tree in trees:

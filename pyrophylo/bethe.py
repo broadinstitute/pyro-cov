@@ -65,7 +65,7 @@ class Encoder(nn.Module):
         N, C, D = probs.shape
         loc, scale = self(probs)
         mean_part = dist.Normal(loc, scale).log_prob(codes).sum()
-        cov_sum = probs.sum(0).diag_embed() - torch.einsum("nci,ncj->cij", probs, probs)
+        cov_sum = probs.sum(0).diag_embed() - einsum("nci,ncj->cij", probs, probs)
         linear = self.linear.weight.reshape(E, C, D)
         cov_part = einsum("e,eci,ecj,cij->", scale.pow(-2), linear, linear, cov_sum)
         return mean_part - 0.5 * cov_part
@@ -104,18 +104,17 @@ class BetheModel(PyroModule):
     def forward(self, mode="train"):
         L, C, D = self.leaf_logits.shape
         N = 2 * L - 1
-        node_plate = pyro.plate("node_plate", N, dim=-2)
-        code_plate = pyro.plate("code_plate", self.embedding_dim, dim=-1)
+        E = self.embedding_dim
 
-        # Sample genetic sequences of all nodes, leaves + internal.
-        with node_plate, code_plate:
+        # Sample relaxed genetic sequences of all nodes, leaves + internal.
+        with pyro.plate("nodes", N, dim=-2), pyro.plate("embedding", E, dim=-1):
             codes = pyro.sample("codes", dist.Normal(0, 1).mask(False))
             probs = self.decoder(codes)
 
         if mode in ("train", "pretrain"):
             # Condition on observations.
             pyro.factor("leaf_likelihood",
-                        torch.einsum("lcd,lcd->", probs[:L], self.leaf_logits))
+                        einsum("lcd,lcd->", probs[:L], self.leaf_logits))
 
             # Add hierarchical elbo terms.
             pyro.factor("entropy", -(probs * probs.log()).sum())
@@ -169,8 +168,8 @@ class BetheModel(PyroModule):
         dt = times[v1] - times[v0]
         transition = self.subs_model.log_matrix_exp(dt)
         # Accumulate sufficient statistics over characters.
-        stats = torch.einsum("icd,jce->ijde", probs, probs)[v0, v1]
-        sparse_logits = torch.einsum("fde,fde->f", stats, transition)
+        stats = einsum("icd,jce->ijde", probs, probs)[v0, v1]
+        sparse_logits = einsum("fde,fde->f", stats, transition)
         assert sparse_logits.isfinite().all()
 
         # Convert sparse -> dense matching.

@@ -87,7 +87,7 @@ def pretrain_model(args, model):
         sum(p.numel() for p in model.parameters())))
 
     # Pretrain the model via SVI with an AutoDelta guide.
-    optim = ClippedAdam({"lr": args.pre_learning_rate})
+    optim = ClippedAdam({"lr": args.learning_rate, "betas": (0.8, 0.9)})
     guide = AutoDelta(model, init_loc_fn=model.init_loc_fn)
     guide = poutine.block(guide, hide_types=["param"])  # Keep leaf codes fixed.
     svi = SVI(model, guide, optim, Trace_ELBO())
@@ -126,8 +126,7 @@ def train_guide(args, model):
     # Train the guide via SVI.
     optim = ClippedAdam({"lr": args.learning_rate,
                          "lrd": args.learning_rate_decay ** (1 / args.num_steps),
-                         "clip_norm": args.clip_norm,
-                         })
+                         "clip_norm": args.clip_norm})
     svi = SVI(model, guide, optim, Trace_ELBO())
     losses = []
     for step in range(args.num_steps):
@@ -307,12 +306,11 @@ if __name__ == "__main__":
     parser.add_argument("-e", "--embedding-dim", default=20, type=int)
     parser.add_argument("-bp", "--bp-iters", default=30, type=int)
     parser.add_argument("-n0", "--pre-steps", default=101, type=int)
-    parser.add_argument("-lr0", "--pre-learning-rate", default=0.1, type=float)
     parser.add_argument("-map", "--guide-map", action="store_true")
     parser.add_argument("-r", "--guide-rank", default=20, type=int)
     parser.add_argument("-is", "--init-scale", default=0.05, type=float)
     parser.add_argument("-n", "--num-steps", default=501, type=int)
-    parser.add_argument("-lr", "--learning-rate", default=0.05, type=float)
+    parser.add_argument("-lr", "--learning-rate", default=0.02, type=float)
     parser.add_argument("-lrd", "--learning-rate-decay", default=0.1, type=float)
     parser.add_argument("-cn", "--clip-norm", default=1e2, type=float)
     parser.add_argument("-mcmc", action="store_true")
