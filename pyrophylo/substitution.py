@@ -18,7 +18,7 @@ class SubstitutionModel(PyroModule):
     @pyro_method
     def log_matrix_exp(self, dt):
         m = self.matrix_exp(dt)
-        m.data.clamp_(torch.finfo(m.dtype).epsilon)
+        m.data.clamp_(torch.finfo(m.dtype).eps)
         return m.log()
 
 
