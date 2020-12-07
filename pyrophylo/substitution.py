@@ -44,7 +44,7 @@ class JukesCantor69(SubstitutionModel):
     @pyro_method
     def matrix_exp(self, dt):
         D = self.dim
-        rate = self.rate.to(dt.dtype)
+        rate = torch.as_tensor(self.rate, dtype=dt.dtype)
         p = dt.mul(-rate).exp()[:, None, None]
         q = (1 - p) / D
         return torch.where(torch.eye(D, dtype=torch.bool), p + q, q)
@@ -52,7 +52,7 @@ class JukesCantor69(SubstitutionModel):
     @pyro_method
     def log_matrix_exp(self, dt):
         D = self.dim
-        rate = self.rate.to(dt.dtype)
+        rate = torch.as_tensor(self.rate, dtype=dt.dtype)
         p = dt.mul(-rate).exp()[:, None, None]
         q = (1 - p) / D
         q.data.clamp_(min=torch.finfo(q.dtype).eps)
