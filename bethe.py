@@ -12,11 +12,9 @@ unobserved for many taxa.
 """
 
 import argparse
-import io
 import logging
 import math
 import os
-import re
 import sys
 from collections import Counter
 
@@ -25,7 +23,6 @@ import pyro.poutine as poutine
 import setuptools  # noqa F401
 import torch
 import torch.multiprocessing as mp
-from Bio import AlignIO
 from pyro.infer import MCMC, NUTS, SVI, Predictive, Trace_ELBO
 from pyro.infer.autoguide import AutoDelta, AutoLowRankMultivariateNormal, AutoNormal
 from pyro.optim import ClippedAdam
@@ -41,24 +38,6 @@ logging.basicConfig(format="%(relativeCreated) 9d %(message)s", level=logging.DE
 def print_dot():
     sys.stderr.write(".")
     sys.stderr.flush()
-
-
-def read_nexus(filename):
-    # Work around bugs in Bio.Nexus reader.
-    lines = []
-    with open(filename) as f:
-        for line in f:
-            if line.startswith("BEGIN CODONS"):
-                break
-            if line.startswith("BEGIN SETS"):
-                break
-            if "{" in line:
-                # TODO Support ambiguous reads. For now replace them with missing.
-                line = re.sub("{[ATCG]+}", "?", line)
-            lines.append(line)
-    f = io.StringIO("".join(lines))
-    alignment = AlignIO.read(f, "nexus")
-    return alignment
 
 
 def load_data(args):
@@ -125,7 +104,7 @@ def train_guide(args, model):
                 print(f"{name}: [{grad.data.min():0.3g}, {grad.data.max():0.3g}]")
     if args.debug_time:
         for name, param in guide.named_parameters():
-            if name.startswith("internal_times_unconstrained"):
+            if "internal_times" in name and "scales" not in name:
                 @param.register_hook
                 def print_time_grad(grad, name=name, param=param):
                     value, root = param.data.max(-1)
@@ -314,7 +293,7 @@ if __name__ == "__main__":
     parser.add_argument("-o", "--outfile", default="results/bethe.pt")
     parser.add_argument("--max-taxa", default=int(1e6), type=int)
     parser.add_argument("--max-characters", default=int(1e6), type=int)
-    parser.add_argument("--min-diversity", default=1e-2, type=int)
+    parser.add_argument("--min-diversity", default=1e-2, type=float)
     parser.add_argument("--error-rate", default=1e-3, type=float)
     parser.add_argument("--subs-rate", type=float)
     parser.add_argument("--min-dt", default=0.01, type=float)

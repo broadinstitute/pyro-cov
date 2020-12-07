@@ -193,6 +193,8 @@ def read_alignment(filename, format=None, *,
     probs = torch.full((num_taxa, num_characters, 5), 1/5)
     for i in range(num_taxa):
         seq = alignment[i].seq
+        if not VALID_CODES.issuperset(seq):
+            raise ValueError(f"Invalid characters: {set(seq) - VALID_CODES}")
         # Replace gaps at ends with missing.
         beg, end = 0, probs.size(1)
         if seq[0] in "-.N":
@@ -202,6 +204,7 @@ def read_alignment(filename, format=None, *,
             seq, old = seq.rstrip(seq[-1]), seq
             end -= len(old) - len(seq)
         probs[i, beg:end] = codebook[list(map(ord, seq))]
+    assert torch.isfinite(probs).all()
     return probs
 
 
@@ -222,7 +225,7 @@ def _read_alignment_nexus(filename):
                     break
             elif section == "CHARACTERS":
                 if "{" in line:
-                    line = re.sub("{[ATCG]+}", _encode_ambiguity, line)
+                    line = re.sub("{([ATCG]+)}", _encode_ambiguity, line)
             lines.append(line)
     f = io.StringIO("".join(lines))
     alignment = AlignIO.read(f, "nexus")
@@ -233,6 +236,7 @@ def _read_alignment_nexus(filename):
 NUCLEOTIDE_CODES = {
     #    [  A,   C,   G,   T, gap]
     "?": [1/5, 1/5, 1/5, 1/5, 1/5],  # missing
+    "n": [1/5, 1/5, 1/5, 1/5, 1/5],  # missing
     "A": [1/1, 0.0, 0.0, 0.0, 0.0],  # adenine
     "C": [0.0, 1/1, 0.0, 0.0, 0.0],  # cytosine
     "G": [0.0, 0.0, 1/1, 0.0, 0.0],  # guanine
@@ -252,6 +256,7 @@ NUCLEOTIDE_CODES = {
     "-": [0.0, 0.0, 0.0, 0.0, 1/1],  # gap
     ".": [0.0, 0.0, 0.0, 0.0, 1/1],  # gap
 }
+VALID_CODES = set(NUCLEOTIDE_CODES)
 
 AMBIGUOUS_CODES = {
     frozenset("AG"): "R",
@@ -270,7 +275,7 @@ assert len(AMBIGUOUS_CODES) == 6 + 4 + 1
 
 
 def _encode_ambiguity(chars):
-    return AMBIGUOUS_CODES[frozenset(chars)]
+    return AMBIGUOUS_CODES[frozenset(chars.group(1))]
 
 
 def _get_codebook():

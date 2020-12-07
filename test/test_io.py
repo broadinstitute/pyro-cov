@@ -1,9 +1,11 @@
+import glob
 import os
 
 import pytest
+import torch
 from Bio import Phylo
 
-from pyrophylo.io import read_nexus_trees, stack_nexus_trees
+from pyrophylo.io import read_alignment, read_nexus_trees, stack_nexus_trees
 
 ROOT = os.path.dirname(os.path.dirname(__file__))
 FILENAME = os.path.join(ROOT, "data", "GTR4G_posterior.trees")
@@ -29,3 +31,10 @@ def test_read_nexus_trees(processes):
 def test_stack_nexus_trees(processes):
     phylo = stack_nexus_trees(FILENAME, max_num_trees=5, processes=processes)
     assert phylo.batch_shape == (5,)
+
+
+@pytest.mark.parametrize("filename", glob.glob("data/treebase/DS*.nex"))
+def test_read_alignment(filename):
+    probs = read_alignment(filename)
+    assert probs.dim() == 3
+    assert torch.isfinite(probs).all()
