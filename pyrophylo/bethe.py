@@ -79,13 +79,14 @@ class BetheModel(PyroModule):
     max_plate_nesting = 2
 
     def __init__(self, leaf_times, leaf_logits, *,
-                 embedding_dim=20, bp_iters=30):
+                 embedding_dim=20, bp_iters=30, min_dt=0.01):
         super().__init__()
         assert leaf_times.dim() == 1
         assert (leaf_times[:-1] <= leaf_times[1:]).all()
         assert leaf_logits.dim() == 3
         assert leaf_logits.shape[:1] == leaf_times.shape
         assert isinstance(embedding_dim, int) and embedding_dim > 0
+        assert isinstance(min_dt, float) and min_dt >= 0
         L, C, D = leaf_logits.shape
 
         self.num_nodes = 2 * L - 1
@@ -96,6 +97,7 @@ class BetheModel(PyroModule):
         self.subs_model = JukesCantor69(dim=D)
         self.bp_iters = bp_iters
         self.embedding_dim = embedding_dim
+        self.min_dt = min_dt
         self.decoder = Decoder(embedding_dim, (C, D))
         self.encoder = Encoder(embedding_dim, (C, D))
 
@@ -166,6 +168,9 @@ class BetheModel(PyroModule):
 
         # Convert dense square -> sparse.
         dt = times[v1] - times[v0]
+        if self.min_dt > 0:
+            # Ensure gradients wrt time are smooth.
+            dt = (dt ** 2 + self.min_dt ** 2).sqrt()
         transition = self.subs_model.log_matrix_exp(dt)
         # Accumulate sufficient statistics over characters.
         stats = einsum("icd,jce->ijde", probs, probs)[v0, v1]

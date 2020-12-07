@@ -257,7 +257,7 @@ def main(args):
     args.embedding_dim = min(args.embedding_dim, len(leaf_times))
     model = BetheModel(leaf_times, leaf_logits,
                        embedding_dim=args.embedding_dim,
-                       bp_iters=args.bp_iters)
+                       bp_iters=args.bp_iters, min_dt=args.min_dt)
     if args.subs_rate is not None:
         model.subs_model.rate = args.subs_rate
     losses = pretrain_model(args, model)
@@ -303,6 +303,7 @@ if __name__ == "__main__":
     parser.add_argument("--min-diversity", default=1e-2, type=int)
     parser.add_argument("--error-rate", default=1e-3, type=float)
     parser.add_argument("--subs-rate", type=float)
+    parser.add_argument("--min-dt", default=0.01, type=float)
     parser.add_argument("-e", "--embedding-dim", default=20, type=int)
     parser.add_argument("-bp", "--bp-iters", default=30, type=int)
     parser.add_argument("-n0", "--pre-steps", default=101, type=int)
