@@ -117,16 +117,29 @@ def train_guide(args, model):
     guide()
     logger.info("guide has {} parameters".format(
         sum(p.numel() for p in guide.parameters())))
+    history = {}
     if args.debug_grads:
         for name, param in guide.named_parameters():
             @param.register_hook
             def print_grad_norm(grad, name=name, param=param):
                 print(f"{name}: [{grad.data.min():0.3g}, {grad.data.max():0.3g}]")
+    if args.debug_time:
+        for name, param in guide.named_parameters():
+            if name.startswith("internal_times_unconstrained"):
+                @param.register_hook
+                def print_time_grad(grad, name=name, param=param):
+                    value, root = param.data.max(-1)
+                    value = value.item()
+                    grad = grad.data[root].item()
+                    history.setdefault("root time value", []).append(value)
+                    history.setdefault("root time grad", []).append(grad)
+                    print(f"{name}[root] value={value:0.3g}, grad={grad:0.3g}")
 
     # Train the guide via SVI.
     optim = ClippedAdam({"lr": args.learning_rate,
                          "lrd": args.learning_rate_decay ** (1 / args.num_steps),
-                         "clip_norm": args.clip_norm})
+                         "clip_norm": args.clip_norm,
+                         "betas": (0.8, 0.99)})
     svi = SVI(model, guide, optim, Trace_ELBO())
     losses = []
     for step in range(args.num_steps):
@@ -149,7 +162,7 @@ def train_guide(args, model):
                            f"{value.max().item():0.3g}")
     logger.info("\n".join(message))
 
-    return guide, losses
+    return guide, losses, history
 
 
 @torch.no_grad()
@@ -261,7 +274,7 @@ def main(args):
     if args.subs_rate is not None:
         model.subs_model.rate = args.subs_rate
     losses = pretrain_model(args, model)
-    guide, guide_losses = train_guide(args, model)
+    guide, guide_losses, history = train_guide(args, model)
     losses += guide_losses
     if args.mcmc:
         # Use model.decoder trained via SVI, but draw samples via NUTS.
@@ -283,6 +296,7 @@ def main(args):
             "model": model,
             "guide": guide,
             "losses": losses,
+            "history": history,
             "samples": {
                 "trees": trees,
                 "codes": codes,
@@ -306,6 +320,7 @@ if __name__ == "__main__":
     parser.add_argument("--min-dt", default=0.01, type=float)
     parser.add_argument("-e", "--embedding-dim", default=20, type=int)
     parser.add_argument("-bp", "--bp-iters", default=30, type=int)
+    parser.add_argument("--exact", dest="bp_iters", action="store_const", const=None)
     parser.add_argument("-n0", "--pre-steps", default=101, type=int)
     parser.add_argument("-map", "--guide-map", action="store_true")
     parser.add_argument("-r", "--guide-rank", default=20, type=int)
@@ -328,6 +343,7 @@ if __name__ == "__main__":
     parser.add_argument("--seed", default=20201103, type=int)
     parser.add_argument("-l", "--log-every", default=10, type=int)
     parser.add_argument("-dg", "--debug-grads", action="store_true")
+    parser.add_argument("-dt", "--debug-time", action="store_true")
     args = parser.parse_args()
 
     # Disable multiprocessing when running under pdb.
