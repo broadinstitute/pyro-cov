@@ -45,13 +45,20 @@ def load_data(args):
     filename = os.path.expanduser(args.alignment_infile)
     probs = read_alignment(filename, max_taxa=args.max_taxa,
                            max_characters=args.max_characters)
+    eps = torch.finfo(probs.dtype).eps
+
+    # Optionally treat indels as missing data.
+    if not args.indels:
+        probs = probs[..., :-1] + eps / probs.size(-1)
+        probs.div_(probs.sum(dim=-1, keepdim=True))
 
     # Optionally ignore low-diversity sites.
     if args.min_diversity > 0:
-        diversity = 1 - (probs > 0).float().mean(0).max(-1).values
+        diversity = 1 - (probs > eps).float().mean(0).max(-1).values
         mask = diversity > args.min_diversity
         logger.info(f"Cropping to {mask.sum():d}/{len(mask)} diverse characters")
         probs = probs[:, mask]
+        assert probs.numel(), "Cropped all data"
 
     # Convert probs to logits.
     probs.mul_(1 - args.error_rate).add_(args.error_rate / probs.size(-1))
@@ -297,6 +304,8 @@ if __name__ == "__main__":
     parser.add_argument("--max-taxa", default=int(1e6), type=int)
     parser.add_argument("--max-characters", default=int(1e6), type=int)
     parser.add_argument("--min-diversity", default=1e-3, type=float)
+    parser.add_argument("--indels", default=True, action="store_true")
+    parser.add_argument("--no-indels", dest="indels", action="store_false")
     parser.add_argument("--error-rate", default=1e-3, type=float)
     parser.add_argument("--subs-rate", type=float)
     parser.add_argument("--min-dt", default=0.01, type=float)
