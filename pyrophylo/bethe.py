@@ -15,17 +15,18 @@ from .substitution import JukesCantor69
 logger = logging.getLogger(__name__)
 
 
-# TODO replace with CoalescentTimes(self.leaf_times, ordered=False)
-class FakeCoalescentTimes(dist.TransformedDistribution):
+# TODO move upstream to Pyro
+class UnorderedCoalescentTimes(dist.CoalescentTimes):
     support = constraints.less_than(0.)
 
-    def __init__(self, leaf_times):
+    def __init__(self, leaf_times, rate):
         if not (leaf_times == 0).all():
-            raise NotImplementedError
-        L = len(leaf_times)
-        super().__init__(
-            dist.Exponential(torch.ones(L - 1)).to_event(1),
-            dist.transforms.AffineTransform(0., -1.))
+            raise NotImplementedError("TODO")
+        super().__init__(leaf_times, rate)
+
+    def log_prob(self, value):
+        value = value.sort(dim=-1).values
+        return super().log_prob(value) - math.lgamma(1 + value.size(-1))
 
 
 class Decoder(nn.Module):
@@ -124,9 +125,17 @@ class BetheModel(PyroModule):
         if mode == "pretrain":  # If we're training only self.decoder,
             return              # then we can ignore the rest of the model.
 
+        # Sample constant coalescent rate from the Jeffreys prior.
+        coalescent_rate = pyro.sample(
+            "coalescent_rate",
+            dist.TransformedDistribution(
+                dist.ImproperUniform(constraints.real, (), ()),
+                dist.transforms.ExpTransform()))
+
         # Sample times of internal nodes.
-        internal_times = pyro.sample("internal_times",
-                                     FakeCoalescentTimes(self.leaf_times))
+        internal_times = pyro.sample(
+            "internal_times",
+            UnorderedCoalescentTimes(self.leaf_times, coalescent_rate))
         times = pyro.deterministic("times",
                                    torch.cat([self.leaf_times, internal_times]))
 
@@ -237,4 +246,6 @@ class BetheModel(PyroModule):
         if name.endswith("subs_model.stationary"):
             D, = site["fn"].event_shape
             return torch.ones(D) / D
+        if name.endswith("coalescent_rate"):
+            return torch.ones(())
         raise ValueError(f"unknown site: {name}")

@@ -15,6 +15,7 @@ import argparse
 import logging
 import math
 import os
+import resource
 import sys
 from collections import Counter
 
@@ -74,7 +75,8 @@ def pretrain_model(args, model):
     for step in range(args.pre_steps):
         loss = svi.step(mode="pretrain") / model.num_observations
         if step % args.log_every == 0:
-            logger.info(f"step {step: >4} loss = {loss:0.4g}")
+            maxrss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+            logger.info(f"step {step: >4} loss = {loss:0.4g}, maxrss = {maxrss}")
         assert math.isfinite(loss)
         losses.append(loss)
     return losses
@@ -124,7 +126,8 @@ def train_guide(args, model):
     for step in range(args.num_steps):
         loss = svi.step() / model.num_observations
         if step % args.log_every == 0:
-            logger.info(f"step {step: >4} loss = {loss:0.4g}")
+            maxrss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+            logger.info(f"step {step: >4} loss = {loss:0.4g}, maxrss = {maxrss}")
         assert math.isfinite(loss)
         losses.append(loss)
 
@@ -293,7 +296,7 @@ if __name__ == "__main__":
     parser.add_argument("-o", "--outfile", default="results/bethe.pt")
     parser.add_argument("--max-taxa", default=int(1e6), type=int)
     parser.add_argument("--max-characters", default=int(1e6), type=int)
-    parser.add_argument("--min-diversity", default=1e-2, type=float)
+    parser.add_argument("--min-diversity", default=1e-3, type=float)
     parser.add_argument("--error-rate", default=1e-3, type=float)
     parser.add_argument("--subs-rate", type=float)
     parser.add_argument("--min-dt", default=0.01, type=float)
