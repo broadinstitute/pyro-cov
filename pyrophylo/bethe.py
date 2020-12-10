@@ -140,6 +140,7 @@ class BetheModel(PyroModule):
                                    torch.cat([self.leaf_times, internal_times]))
 
         # Account for random tree structure.
+        # TODO try running this in double precision.
         logits, sources, destins = self.kernel(probs.float(), times.float())
         tree_dist = dist.OneTwoMatching(logits, bp_iters=self.bp_iters)
         if mode == "train":
