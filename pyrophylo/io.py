@@ -9,6 +9,8 @@ import torch
 import torch.multiprocessing as mp
 from Bio import AlignIO
 from Bio.Phylo.NewickIO import Parser
+from Bio.Seq import Seq
+from Bio.SeqRecord import SeqRecord
 
 from .phylo import Phylogeny
 
@@ -18,6 +20,7 @@ FILE_FORMATS = {
     "nex": "nexus",
     "nexus": "nexus",
     "fasta": "fasta",
+    "xml": "beast",
 }
 
 
@@ -181,13 +184,18 @@ def read_alignment(filename, format=None, *,
         raise ValueError("Please specify a file format, e.g. 'nexus' or 'fasta'")
     elif format == "nexus":
         alignment = _read_alignment_nexus(filename)
+    elif format == "beast":
+        alignment = _read_alignment_beast(filename)
     else:
         alignment = AlignIO.read(filename, format)
 
     # Convert to a single torch.Tensor.
     num_taxa = min(len(alignment), max_taxa)
+    if num_taxa < len(alignment):
+        alignment = alignment[:num_taxa]
     num_characters = min(len(alignment[0]), max_characters)
-    alignment = alignment[:num_taxa, :num_characters]
+    if num_characters < len(alignment[0]):
+        alignment = alignment[:, :num_characters]
     logger.info(f"parsing {num_taxa} taxa x {num_characters} characters")
     codebook = _get_codebook()
     probs = torch.full((num_taxa, num_characters, 5), 1/5)
@@ -230,6 +238,19 @@ def _read_alignment_nexus(filename):
     f = io.StringIO("".join(lines))
     alignment = AlignIO.read(f, "nexus")
     return alignment
+
+
+def _read_alignment_beast(filename):
+    result = []
+    with open(filename) as f:
+        for line in f:
+            line = line.strip()
+            if not line.startswith("<sequence "):
+                continue
+            id_ = re.search(r'\bid="([^"]*)"', line).group(1)
+            seq = re.search(r'\bvalue="([^"]*)"', line).group(1)
+            result.append(SeqRecord(Seq(seq), id=id_))
+    return result
 
 
 # See https://www.bioinformatics.org/sms/iupac.html
