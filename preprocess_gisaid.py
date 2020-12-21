@@ -48,36 +48,36 @@ def update_shards(shard_names):
     logger.info(f"split {i + 1} lines")
 
 
+STATS = ["date", "location", "length"]
+
+
 def _get_stats(filename):
-    dates = Counter()
-    locations = Counter()
+    stats = {key: Counter() for key in STATS}
     with open(filename) as f:
         for line in f:
             datum = json.loads(line)
-            dates[datum["covv_collection_date"]] += 1
-            locations[datum["covv_location"]] += 1
-    return dates, locations
+            stats["date"][datum["covv_collection_date"]] += 1
+            stats["location"][datum["covv_location"]] += 1
+            seq = datum["sequence"].replace("\n", "")
+            stats["length"][len(seq)] += 1
+    return stats
 
 
 def get_stats(args, shard_names):
-    cache_file = "results/gisaid.stats"
+    cache_file = "results/gisaid.stats.pkl"
     if args.force or not os.path.exists(cache_file):
-        dates = Counter()
-        locations = Counter()
+        stats = {key: Counter() for key in STATS}
         for result in pmap(_get_stats, shard_names):
-            dates.update(result[0])
-            locations.update(result[1])
-        stats = {"dates": dates, "locations": locations}
+            for key, value in result.items():
+                stats[key].update(value)
         with open(cache_file, "wb") as f:
             pickle.dump(stats, f)
     else:
         with open(cache_file, "rb") as f:
             stats = pickle.load(f)
-
-    logger.info("Top dates:\n{}".format("\n".join(
-        f"{v: >5d}: {k}" for k, v in stats["dates"].most_common(10))))
-    logger.info("Top locations:\n{}".format("\n".join(
-        f"{v: >5d}: {k}" for k, v in stats["locations"].most_common(10))))
+    for key, counts in stats.items():
+        logger.info("Top 10/{} {}s:\n{}".format(len(counts), key, "\n".join(
+            f"{v: >6d}: {k}" for k, v in counts.most_common(10))))
     return stats
 
 
@@ -87,6 +87,7 @@ def main(args):
     if args.force or not all(map(os.path.exists, shard_names)):
         update_shards(shard_names)
     get_stats(args, shard_names)
+    # TODO align
 
 
 if __name__ == "__main__":
