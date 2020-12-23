@@ -1,0 +1,49 @@
+#include <vector>
+#include <string>
+
+#include <torch/extension.h>
+
+inline uint64_t murmur64(uint64_t h) {
+  h ^= h >> 33;
+  h *= 0xff51afd7ed558ccd;
+  h ^= h >> 33;
+  h *= 0xc4ceb9fe1a85ec53;
+  h ^= h >> 33;
+  return h;
+}
+
+void string_to_soft_hash(int min_k, int max_k, const std::string& seq, at::Tensor out) {
+  static std::vector<uint64_t> to_bits(256, false);
+  to_bits['A'] = 0;
+  to_bits['C'] = 1;
+  to_bits['G'] = 2;
+  to_bits['T'] = 3;
+
+  static std::vector<uint64_t> salts(33);
+  assert(max_k < salts.size());
+  for (int k = min_k; k <= max_k; ++k) {
+    salts[k] = murmur64(1 + k);
+  }
+
+  const int bits = out.size(-1);
+  float* data = static_cast<float*>(out.data_ptr());
+  for (int pos = 0, end = seq.size(); pos != end; ++pos) {
+    if (max_k > end - pos) {
+      max_k = end - pos;
+    }
+    uint64_t hash = 0;
+    for (int k = 1; k <= max_k; ++k) {
+      int i = k - 1;
+      hash ^= to_bits[seq[pos + i]] << (i + i);
+      if (k < min_k) continue;
+      uint64_t hash_k = murmur64(salts[k] ^ hash);
+      for (int b = 0; b < bits; ++b) {
+        data[b] += (hash_k & (1UL << b)) ? 1.f : -1.f;
+      }
+    }
+  }
+}
+
+PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+  m.def("string_to_soft_hash", &string_to_soft_hash, "Convert a string to a soft hash");
+}

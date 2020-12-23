@@ -3,15 +3,24 @@ import re
 import torch
 
 
-def _murmur64(h):
+def murmur64(h):
     """
     A cheap simple hash function : int64 -> int64.
     """
-    h ^= h >> 33
-    h *= -49064778989728563  # == 0xff51afd7ed558ccd
-    h ^= h >> 33
-    h *= -4265267296055464877  # == 0xc4ceb9fe1a85ec53
-    h ^= h >> 33
+    if isinstance(h, torch.Tensor):
+        h ^= h >> 33
+        h *= -49064778989728563  # == 0xff51afd7ed558ccd
+        h ^= h >> 33
+        h *= -4265267296055464877  # == 0xc4ceb9fe1a85ec53
+        h ^= h >> 33
+    else:
+        h ^= h >> 33
+        h *= 0xff51afd7ed558ccd
+        h &= 0xffffffffffffffff
+        h ^= h >> 33
+        h *= 0xc4ceb9fe1a85ec53
+        h &= 0xffffffffffffffff
+        h ^= h >> 33
     return h
 
 
@@ -33,32 +42,27 @@ class KmerSketcher:
     """
     Clustering via LSH of k-mers.
     """
-    def __init__(self, *, min_k=2, max_k=6, bits=16):
-        assert 1 <= min_k <= max_k <= 32
-        assert bits < 23, "too many bits for float storage"
+    def __init__(self, *, min_k=2, max_k=12, bits=16, backend="cpp"):
+        assert 1 <= min_k <= max_k
+        assert max_k * 2 <= 64, "max_k is too large"
+        assert bits <= 24, "too many bits for float storage"
         self.min_k = min_k
         self.max_k = max_k
         self.bits = bits
-        self._bits = 2 ** torch.arange(self.bits)
-        self._kmer = 2 ** torch.arange(self.max_k * 2, dtype=torch.float)
-        self._codebook = torch.full((256, 2), -1, dtype=torch.float)
-        for i, base in enumerate("ACGT"):
-            self._codebook[ord(base), 0] = i & 1
-            self._codebook[ord(base), 1] = i & 2
+        self.backend = backend
 
     def string_to_soft_hash(self, string, out):
         assert out.shape == (self.bits,)
         assert out.dtype == torch.float
+        if self.backend == "python":
+            impl = string_to_soft_hash
+        elif self.backend == "cpp":
+            impl = _get_cpp_module().string_to_soft_hash
+        else:
+            raise NotImplementedError(f"Unsupported backend: {self.backend}")
         out.fill_(0)
         for substring in re.findall("[ACGT]+", string):
-            seq = self._codebook[list(map(ord, substring))].reshape(-1)
-            for k in range(self.min_k, min(self.max_k + 1, len(substring))):
-                n = len(substring) - k + 1
-                kmers = seq.as_strided((n, k * 2), (2, 1))
-                ints = (kmers @ self._kmer[:k * 2]).long()
-                ints = _murmur64(ints)
-                signs = (ints[:, None] & self._bits).bool().float().sum(0) * 2 - n
-                out += signs
+            impl(self.min_k, self.max_k, substring, out)
 
     def soft_to_hard_hashes(self, soft_hashes):
         assert soft_hashes.dim() == 2
@@ -68,7 +72,7 @@ class KmerSketcher:
         hard_hashes = (signs @ powers_of_two).long()
         return hard_hashes
 
-    def find_clusters(self, hard_hashes, *, radius=6):
+    def find_clusters(self, hard_hashes, *, radius=4):
         assert hard_hashes.dim() == 1
         assert radius >= 1
 
@@ -102,3 +106,37 @@ class KmerSketcher:
         assert hard_hashes.dim() == 1
         assert clusters.dim() == 1
         return count_bits(self.bits)[hard_hashes[:, None] ^ clusters]
+
+
+_cpp_module = None
+
+
+def _get_cpp_module():
+    """
+    JIT compiles the cpp module.
+    """
+    global _cpp_module
+    if _cpp_module is None:
+        from torch.utils.cpp_extension import load
+        assert __file__.endswith(".py")
+        path = __file__[:-3] + ".cpp"
+        _cpp_module = load(name="cpp_cluster",
+                           sources=[path],
+                           extra_cflags=['-O2'],
+                           verbose=True)
+    return _cpp_module
+
+
+def string_to_soft_hash(min_k, max_k, seq, out):
+    to_bits = {"A": 0, "C": 1, "G": 2, "T": 3}
+
+    bits = out.size(-1)
+    for k in range(min_k, max_k + 1):
+        salt = murmur64(1 + k)
+        for pos in range(len(seq) - k + 1):
+            hash_ = salt
+            for i in range(k):
+                hash_ ^= to_bits[seq[pos + i]] << (i + i)
+            hash_ = murmur64(hash_)
+            for b in range(bits):
+                out[b] += 1 if (hash_ & (1 << b)) else -1

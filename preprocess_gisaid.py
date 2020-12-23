@@ -21,6 +21,14 @@ def print_dot():
     sys.stderr.flush()
 
 
+def ln_sf(source, target):
+    source = os.path.abspath(source)
+    target = os.path.abspath(target)
+    if os.path.exists(target):
+        os.remove(target)
+    os.symlink(source, target)
+
+
 POOL = None
 
 
@@ -90,11 +98,13 @@ def get_stats(args, shard_names):
 def _cluster(args, sketcher, shard_name):
     sequences = []
     with open(shard_name) as f:
-        for line in f:
+        for i, line in enumerate(f):
             datum = json.loads(line)
             seq = datum["sequence"].replace("\n", "")
             if args.min_length <= len(seq) <= args.max_length:
                 sequences.append(seq)
+            if i + 1 == args.truncate:
+                break
 
     hashes = torch.empty(len(sequences), sketcher.bits)
     for i, seq in enumerate(sequences):
@@ -106,31 +116,33 @@ def _cluster(args, sketcher, shard_name):
 
 
 def cluster(args, shard_names):
-    cache_file = "results/gisaid.cluster.pt"
+    cache_file = f"results/gisaid.cluster.{args.min_k}.{args.max_k}.{args.cluster_bits}.pt"
     if args.force or not os.path.exists(cache_file):
         logger.info("Clustering via LSH of k-mers")
         sketcher = KmerSketcher(min_k=args.min_k, max_k=args.max_k, bits=args.cluster_bits)
 
-        hashes = pmap(_cluster, [(args, sketcher, s) for s in shard_names])
-        hashes = torch.cat(hashes, 0)
+        soft_hashes = pmap(_cluster, [(args, sketcher, s) for s in shard_names])
+        soft_hashes = torch.cat(soft_hashes, 0)
         logger.info("quantizing hashes")
-        hashes = sketcher.soft_to_hard_hashes(hashes)
+        hard_hashes = sketcher.soft_to_hard_hashes(soft_hashes)
         logger.info("greedily finding clusters")
-        clusters = sketcher.find_clusters(hashes, radius=args.cluster_radius)
+        clusters = sketcher.find_clusters(hard_hashes, radius=args.cluster_radius)
         num_clusters = min(len(clusters), args.max_clusters)
         logger.info(f"Using {num_clusters}/{len(clusters)} clusters")
         clusters = clusters[:args.max_clusters]
         logger.info("computing pairwise sequence-cluster distances")
-        distances = sketcher.cdist(hashes, clusters)
         clustering = {
-            "hashes": hashes,
+            "soft_hashes": soft_hashes,
+            "hard_hashes": hard_hashes,
             "clusters": clusters,
-            "distances": distances,
+            "cc_distances": sketcher.cdist(clusters, clusters),
+            "hc_distances": sketcher.cdist(hard_hashes, clusters),
         }
         torch.save(clustering, cache_file)
         logger.info(f"saving {cache_file}")
     else:
         clustering = torch.load(cache_file)
+    ln_sf(cache_file, "results/gisaid.cluster.pt")
     return clustering
 
 
@@ -152,6 +164,8 @@ def main(args):
     total = sum(length.values())
     logger.info(f"Keeping {num_ok}/{total} = {100*num_ok/total:0.1f}% of sequences")
 
+    if args.truncate:
+        shard_names = shard_names[:1]
     clustering = cluster(args, shard_names)
     assert clustering
 
@@ -160,16 +174,17 @@ if __name__ == "__main__":
     mp.set_start_method("spawn")
 
     parser = argparse.ArgumentParser(description="Preprocess GISAID data")
-    parser.add_argument("--min-length-rel", default=0.9, type=float)
-    parser.add_argument("--max-length-rel", default=1.1, type=float)
+    parser.add_argument("--min-length-rel", default=0.95, type=float)
+    parser.add_argument("--max-length-rel", default=1.05, type=float)
     parser.add_argument("--min-k", default=2, type=int)
-    parser.add_argument("--max-k", default=6, type=int)
+    parser.add_argument("--max-k", default=12, type=int)
     parser.add_argument("--cluster-bits", default=16, type=int)
-    parser.add_argument("--cluster-radius", default=6, type=int)
+    parser.add_argument("--cluster-radius", default=4, type=int)
     parser.add_argument("--max-clusters", default=200, type=int)
     parser.add_argument("-s", "--num-shards", default=mp.cpu_count(), type=int)
     parser.add_argument("-l", "--log-every", default=1000, type=int)
     parser.add_argument("-f", "--force", action="store_true")
+    parser.add_argument("--truncate", default=0, type=int)
     args = parser.parse_args()
 
     main(args)
