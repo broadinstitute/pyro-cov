@@ -33,13 +33,12 @@ class KmerSketcher:
     """
     Clustering via LSH of k-mers.
     """
-    def __init__(self, *, min_k=2, max_k=6, bits=12):
+    def __init__(self, *, min_k=2, max_k=6, bits=13):
         assert 1 <= min_k <= max_k <= 32
         assert bits < 23, "too many bits for float storage"
         self.min_k = min_k
         self.max_k = max_k
         self.bits = bits
-        self._bit_mask = 0xFFFFFFFF >> (32 - self.bits)
         self._bits = 2 ** torch.arange(self.bits)
         self._kmer = 2 ** torch.arange(self.max_k * 2, dtype=torch.float)
         self._codebook = torch.full((256, 2), -1, dtype=torch.float)
@@ -69,7 +68,7 @@ class KmerSketcher:
         hard_hashes = (signs @ powers_of_two).long()
         return hard_hashes
 
-    def find_clusters(self, hard_hashes, *, radius=2):
+    def find_clusters(self, hard_hashes, *, radius=3):
         assert hard_hashes.dim() == 1
         assert radius >= 1
 
