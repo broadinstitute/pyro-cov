@@ -88,16 +88,20 @@ def get_stats(args, shard_names):
 
 
 def _cluster(args, sketcher, shard_name):
+    sequences = []
     with open(shard_name) as f:
-        num_lines = sum(1 for _ in f)
-    hashes = torch.empty(num_lines, sketcher.bits)
-    with open(shard_name) as f:
-        for i, line in enumerate(f):
+        for line in f:
             datum = json.loads(line)
             seq = datum["sequence"].replace("\n", "")
-            sketcher.string_to_soft_hash(seq, hashes[i])
-            if i % args.log_every == 0:
-                print_dot()
+            if args.min_length <= len(seq) <= args.max_length:
+                sequences.append(seq)
+
+    hashes = torch.empty(len(sequences), sketcher.bits)
+    for i, seq in enumerate(sequences):
+        sketcher.string_to_soft_hash(seq, hashes[i])
+        if i % args.log_every == 0:
+            print_dot()
+
     return hashes
 
 
@@ -131,7 +135,19 @@ def main(args):
                    for i in range(args.num_shards)]
     if args.force or not all(map(os.path.exists, shard_names)):
         update_shards(shard_names)
-    get_stats(args, shard_names)
+    stats = get_stats(args, shard_names)
+
+    # Drop low quality sequences.
+    assert 0 <= args.min_length_rel <= 1 <= args.max_length_rel
+    length = stats["length"]
+    mean_length = sum(k * v for k, v in length.items()) / sum(length.values())
+    args.max_length = int(args.max_length_rel * mean_length)
+    args.min_length = int(args.min_length_rel * mean_length)
+    num_ok = sum(v for k, v in length.items()
+                 if args.min_length < k < args.max_length)
+    total = sum(length.values())
+    logger.info(f"Keeping {num_ok}/{total} = {100*num_ok/total:0.1f}% of sequences")
+
     clustering = cluster(args, shard_names)
     assert clustering
 
@@ -140,6 +156,8 @@ if __name__ == "__main__":
     mp.set_start_method("spawn")
 
     parser = argparse.ArgumentParser(description="Preprocess GISAID data")
+    parser.add_argument("--min-length-rel", default=0.9, type=float)
+    parser.add_argument("--max-length-rel", default=1.1, type=float)
     parser.add_argument("--min-k", default=2, type=int)
     parser.add_argument("--max-k", default=6, type=int)
     parser.add_argument("--cluster-bits", default=13, type=int)

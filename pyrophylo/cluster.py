@@ -72,20 +72,20 @@ class KmerSketcher:
         assert hard_hashes.dim() == 1
         assert radius >= 1
 
-        # Construct a kernel for non-maximum supression.
-        kernel = count_bits(self.bits) <= radius
-        k = torch.arange(2 ** self.bits)
-
-        # Aggregate hash counts.
+        # Aggregate hash counts, including single bit flips.
         counts = torch.zeros(2 ** self.bits, dtype=torch.float)
         ones = torch.ones(()).expand_as(hard_hashes)
         counts.scatter_add_(-1, hard_hashes, ones)
+        for b in range(self.bits):
+            counts.scatter_add_(-1, hard_hashes ^ (2 ** b), ones)
 
-        # Greedily extract clusters.
+        # Greedily extract clusters, suppressing neighbors.
+        mask = count_bits(self.bits) <= radius
+        k = torch.arange(2 ** self.bits)
         clusters = []
         while counts.max() > 0:
             c = counts.max(0).indices.item()
-            counts[kernel[k ^ c]] = 0
+            counts[mask[k ^ c]] = 0
             clusters.append(c)
         return torch.tensor(clusters)
 
