@@ -33,7 +33,7 @@ class KmerSketcher:
     """
     Clustering via LSH of k-mers.
     """
-    def __init__(self, *, min_k=2, max_k=6, bits=13):
+    def __init__(self, *, min_k=2, max_k=6, bits=16):
         assert 1 <= min_k <= max_k <= 32
         assert bits < 23, "too many bits for float storage"
         self.min_k = min_k
@@ -68,18 +68,27 @@ class KmerSketcher:
         hard_hashes = (signs @ powers_of_two).long()
         return hard_hashes
 
-    def find_clusters(self, hard_hashes, *, radius=3):
+    def find_clusters(self, hard_hashes, *, radius=6):
         assert hard_hashes.dim() == 1
         assert radius >= 1
 
-        # Aggregate hash counts, including single bit flips.
+        # Aggregate hash counts.
         counts = torch.zeros(2 ** self.bits, dtype=torch.float)
         ones = torch.ones(()).expand_as(hard_hashes)
         counts.scatter_add_(-1, hard_hashes, ones)
-        for b in range(self.bits):
-            counts.scatter_add_(-1, hard_hashes ^ (2 ** b), ones)
 
-        # Greedily extract clusters, suppressing neighbors.
+        # Add counts from single and double bit flips via inclusion-exclusion.
+        B = self.bits
+        B2 = B * (B - 1) / 2
+        counts = counts.reshape((2,) * B)
+        conv = counts.clone()
+        for b in range(B):
+            conv -= counts.sum(b, True) / B
+            for b2 in range(b):
+                conv += counts.sum([b, b2], True) / B2
+        counts = conv.reshape(-1)
+
+        # Greedily detect clusters, suppressing nearby maxima.
         mask = count_bits(self.bits) <= radius
         k = torch.arange(2 ** self.bits)
         clusters = []

@@ -122,7 +122,11 @@ def cluster(args, shard_names):
         clusters = clusters[:args.max_clusters]
         logger.info("computing pairwise sequence-cluster distances")
         distances = sketcher.cdist(hashes, clusters)
-        clustering = {"clusters": clusters, "distances": distances}
+        clustering = {
+            "hashes": hashes,
+            "clusters": clusters,
+            "distances": distances,
+        }
         torch.save(clustering, cache_file)
         logger.info(f"saving {cache_file}")
     else:
@@ -160,9 +164,9 @@ if __name__ == "__main__":
     parser.add_argument("--max-length-rel", default=1.1, type=float)
     parser.add_argument("--min-k", default=2, type=int)
     parser.add_argument("--max-k", default=6, type=int)
-    parser.add_argument("--cluster-bits", default=13, type=int)
-    parser.add_argument("--cluster-radius", default=3, type=int)
-    parser.add_argument("--max-clusters", default=100, type=int)
+    parser.add_argument("--cluster-bits", default=16, type=int)
+    parser.add_argument("--cluster-radius", default=6, type=int)
+    parser.add_argument("--max-clusters", default=200, type=int)
     parser.add_argument("-s", "--num-shards", default=mp.cpu_count(), type=int)
     parser.add_argument("-l", "--log-every", default=1000, type=int)
     parser.add_argument("-f", "--force", action="store_true")
