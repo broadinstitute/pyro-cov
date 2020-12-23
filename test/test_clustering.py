@@ -10,11 +10,11 @@ from pyrophylo.cluster import KmerSketcher
 def test_string_to_soft_hash(min_k, max_k, bits):
     probs = torch.tensor([1., 1., 1., 1., 0.05])
     probs /= probs.sum()
-    string = "".join("ACGTN"[i] for i in dist.Categorical(probs).sample([10000]))
+    string = "".join("ACGTN"[i] for i in dist.Categorical(probs).sample([1000]))
 
     results = {}
     for backend in ["python", "cpp"]:
-        results[backend] = torch.empty(bits)
+        results[backend] = torch.empty(64)
         sketcher = KmerSketcher(min_k=min_k, max_k=max_k, bits=bits, backend=backend)
         sketcher.string_to_soft_hash(string, results[backend])
 

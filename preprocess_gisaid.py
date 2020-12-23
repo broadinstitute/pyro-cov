@@ -106,13 +106,13 @@ def _cluster(args, sketcher, shard_name):
             if i + 1 == args.truncate:
                 break
 
-    hashes = torch.empty(len(sequences), sketcher.bits)
+    soft_hashes = torch.empty(len(sequences), 64)
     for i, seq in enumerate(sequences):
-        sketcher.string_to_soft_hash(seq, hashes[i])
+        sketcher.string_to_soft_hash(seq, soft_hashes[i])
         if i % args.log_every == 0:
             print_dot()
 
-    return hashes
+    return soft_hashes
 
 
 def cluster(args, shard_names):

@@ -25,8 +25,8 @@ void string_to_soft_hash(int min_k, int max_k, const std::string& seq, at::Tenso
     salts[k] = murmur64(1 + k);
   }
 
-  const int bits = out.size(-1);
-  float* data = static_cast<float*>(out.data_ptr());
+  float * const data_begin = static_cast<float*>(out.data_ptr());
+  float * const data_end = data_begin + out.size(-1);
   for (int pos = 0, end = seq.size(); pos != end; ++pos) {
     if (max_k > end - pos) {
       max_k = end - pos;
@@ -37,8 +37,9 @@ void string_to_soft_hash(int min_k, int max_k, const std::string& seq, at::Tenso
       hash ^= to_bits[seq[pos + i]] << (i + i);
       if (k < min_k) continue;
       uint64_t hash_k = murmur64(salts[k] ^ hash);
-      for (int b = 0; b < bits; ++b) {
-        data[b] += (hash_k & (1UL << b)) ? 1.f : -1.f;
+      for (float *p = data_begin; p != data_end; ++p) {
+        *p += static_cast<int64_t>(hash_k & 1UL) * 2L - 1L;
+        hash_k >>= 1UL;
       }
     }
   }

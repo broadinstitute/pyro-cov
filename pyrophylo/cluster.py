@@ -40,7 +40,7 @@ def count_bits(bits):
 
 class KmerSketcher:
     """
-    Clustering via LSH of k-mers.
+    Clustering via AMS sketching of k-mer counts followed by LSH.
     """
     def __init__(self, *, min_k=2, max_k=12, bits=16, backend="cpp"):
         assert 1 <= min_k <= max_k
@@ -52,7 +52,7 @@ class KmerSketcher:
         self.backend = backend
 
     def string_to_soft_hash(self, string, out):
-        assert out.shape == (self.bits,)
+        assert out.dim() == 1
         assert out.dtype == torch.float
         if self.backend == "python":
             impl = string_to_soft_hash
@@ -66,7 +66,7 @@ class KmerSketcher:
 
     def soft_to_hard_hashes(self, soft_hashes):
         assert soft_hashes.dim() == 2
-        assert soft_hashes.size(-1) == self.bits
+        soft_hashes = soft_hashes[:, :self.bits]
         signs = (soft_hashes > soft_hashes.median(0).values).float()
         powers_of_two = 2 ** torch.arange(self.bits, dtype=torch.float)
         hard_hashes = (signs @ powers_of_two).long()
