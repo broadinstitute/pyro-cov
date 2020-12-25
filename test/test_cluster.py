@@ -56,10 +56,10 @@ def test_clock_cdiff(k, size):
         sketcher.string_to_hash(string, sketch[i])
 
     cdiff = sketcher.cdiff(sketch, sketch)
-    assert cdiff.shape == (n, n, 64)
-    cc = cdiff.transpose(0, 1) + cdiff
-    assert ((cc == 0) | (cc == -512)).all()
-    assert (cdiff.diagonal(dim1=0, dim2=1) == 0).all()
+    assert cdiff.shape == (n, n)
+    assert (cdiff.clocks.transpose(0, 1) == -cdiff.clocks).all()
+    assert (cdiff.clocks.diagonal(dim1=0, dim2=1) == 0).all()
+    assert (cdiff.count.diagonal(dim1=0, dim2=1) == 0).all()
     mask = torch.arange(n) < torch.arange(n).unsqueeze(-1)
-    mean = cdiff[mask].abs().float().mean().item()
-    assert mean > 127 - 20, mean
+    mean = cdiff.clocks[mask].abs().float().mean().item()
+    assert mean > 64 - 10, mean

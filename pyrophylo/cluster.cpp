@@ -74,17 +74,22 @@ void string_to_clock_hash(int k, const std::string& seq, at::Tensor clocks, at::
   to_bits['G'] = 2;
   to_bits['T'] = 3;
 
+  const int num_words = clocks.size(-1) / 64;
   uint64_t * const clocks_data = static_cast<uint64_t*>(clocks.data_ptr());
   const int num_kmers = seq.size() - k + 1;
   count.add_(num_kmers);
   for (int pos = 0; pos < num_kmers; ++pos) {
-    uint64_t hash = murmur64(1 + k);
-    for (int i = 0; i < k; ++i) {
+    uint64_t hash = 0;
+    for (int i = 0; i != k; ++i) {
       hash ^= to_bits[seq[pos + i]] << (i + i);
     }
-    hash = murmur64(hash);
-    for (int b = 0; b < 8; ++b) {
-      clocks_data[b] = (clocks_data[b] + ((hash >> b) & 0x0101010101010101UL)) & 0x7F7F7F7F7F7F7F7FUL;
+    for (int w = 0; w != num_words; ++w) {
+      const uint64_t hash_w = murmur64(murmur64(1 + w) ^ hash);
+      for (int b = 0; b != 8; ++b) {
+        const int wb = w * 8 + b;
+        clocks_data[wb] = (clocks_data[wb] + ((hash_w >> b) & 0x0101010101010101UL))
+                        & 0x7F7F7F7F7F7F7F7FUL;
+      }
     }
   }
 }

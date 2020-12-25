@@ -119,7 +119,7 @@ def cluster(args, shard_names):
     cache_file = f"results/gisaid.cluster.{args.k}.pt"
     if args.force or not os.path.exists(cache_file):
         logger.info("Clustering k-mers sketches")
-        sketcher = ClockSketcher(k=args.k)
+        sketcher = ClockSketcher(k=args.k, num_clocks=args.num_clocks)
         sketches = pmap(_cluster, [(args, sketcher, s) for s in shard_names])
         clocks = torch.cat([s.clocks for s in sketches])
         count = torch.cat([s.count for s in sketches])
@@ -173,6 +173,7 @@ if __name__ == "__main__":
     parser.add_argument("--min-length-rel", default=0.95, type=float)
     parser.add_argument("--max-length-rel", default=1.05, type=float)
     parser.add_argument("--k", default=10, type=int)
+    parser.add_argument("--num-clocks", default=256, type=int)
     parser.add_argument("--cluster-bits", default=16, type=int)
     parser.add_argument("--cluster-radius", default=4, type=int)
     parser.add_argument("--max-clusters", default=200, type=int)

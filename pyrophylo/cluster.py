@@ -110,7 +110,7 @@ class AMSSketcher:
 
 class ClockSketch:
     def __init__(self, clocks, count):
-        assert clocks.shape == count.shape + (64,)
+        assert clocks.shape[:-1] == count.shape
         assert clocks.dtype == torch.int8
         assert count.dtype == torch.int16
         self.clocks = clocks
@@ -122,19 +122,25 @@ class ClockSketch:
     def __len__(self):
         return len(self.count)
 
+    @property
+    def shape(self):
+        return self.count.shape
+
 
 class ClockSketcher:
     """
-    Sketches each bag of k-mers as bank of 64 8-bit clocks plus a single total
+    Sketches each bag of k-mers as bank of 8-bit clocks plus a single total
     k-mer counter.
     """
-    def __init__(self, k, *, backend="cpp"):
+    def __init__(self, k, *, num_clocks=256, backend="cpp"):
+        assert num_clocks > 0 and num_clocks % 64 == 0
         self.k = k
+        self.num_clocks = num_clocks
         self.backend = backend
 
-    def init_sketch(self, *batch_shape):
-        clocks = torch.zeros(batch_shape + (64,), dtype=torch.int8)
-        count = torch.zeros(batch_shape, dtype=torch.int16)
+    def init_sketch(self, *shape):
+        clocks = torch.zeros(shape + (self.num_clocks,), dtype=torch.int8)
+        count = torch.zeros(shape, dtype=torch.int16)
         return ClockSketch(clocks, count)
 
     def string_to_hash(self, string, sketch):
@@ -149,13 +155,9 @@ class ClockSketcher:
         sketch.clocks.mul_(2).sub_(sketch.count)
 
     def cdiff(self, x, y):
-        clock = x.clocks.unsqueeze(-2) - y.clocks.unsqueeze(-3)
+        clocks = x.clocks.unsqueeze(-2) - y.clocks.unsqueeze(-3)
         count = x.count.unsqueeze(-1) - y.count.unsqueeze(-2)
-        diff = clock.to(dtype=torch.int16)
-        # The following performs math with 9-bit signed integers.
-        diff.mul_(2).sub_(count.unsqueeze(-1))
-        diff.add_(256).bitwise_and_(511).sub_(256)
-        return diff
+        return ClockSketch(clocks, count)
 
     def cdist(self, x, y):
         diff = self.cdiff(x, y)
@@ -221,11 +223,13 @@ def string_to_clock_hash(k, seq, clocks, count):
     num_kmers = len(seq) - k + 1
     count.add_(num_kmers)
     for pos in range(num_kmers):
-        hash_ = murmur64(1 + k)
+        hash_ = 0
         for i in range(k):
             hash_ ^= to_bits[seq[pos + i]] << (i + i)
-        hash_ = murmur64(hash_)
-        for b in range(64):
-            b_ = (b // 8) + 8 * (b % 8)  # for vectorized math in C++
-            clocks[b] += (hash_ >> b_) & 1
-            clocks[b] &= 0x7F
+        for w in range(len(clocks) // 64):
+            hash_w = murmur64(murmur64(1 + w) ^ hash_)
+            for b in range(64):
+                wb = w * 64 + b
+                b_ = (b // 8) + 8 * (b % 8)  # for vectorized math in C++
+                clocks[wb] += (hash_w >> b_) & 1
+                clocks[wb] &= 0x7F
