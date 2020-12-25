@@ -38,7 +38,7 @@ def count_bits(bits):
     return result.reshape(-1)
 
 
-class KmerSketcher:
+class AMSSketcher:
     """
     Clustering via AMS sketching of k-mer counts followed by LSH.
     """
@@ -108,6 +108,41 @@ class KmerSketcher:
         return count_bits(self.bits)[hard_hashes[:, None] ^ clusters]
 
 
+class ClockSketcher:
+    """
+    Sketches bags of k-mers as 64 8-bit clocks plus a k-mer counter.
+    """
+    def __init__(self, k, *, backend="cpp"):
+        self.k = k
+        self.backend = backend
+
+    def init_hash(self, *batch_shape):
+        clocks = torch.zeros(batch_shape + (64,), dtype=torch.int8)
+        count = torch.zeros(batch_shape, dtype=torch.int16)
+        return clocks, count
+
+    def string_to_hash(self, string, clocks, count):
+        assert clocks.dtype == torch.int8
+        assert clocks.shape == (64,)
+        assert count.shape == ()
+        if self.backend == "python":
+            impl = string_to_clock_hash
+        elif self.backend == "cpp":
+            impl = _get_cpp_module().string_to_clock_hash
+        else:
+            raise NotImplementedError(f"Unsupported backend: {self.backend}")
+        for substring in re.findall("[ACGT]+", string):
+            impl(self.k, substring, clocks, count)
+
+    def cdiff(self, x_clocks, x_count, y_clocks, y_count):
+        clock = x_clocks.unsqueeze(-2) - y_clocks.unsqueeze(-3)
+        count = x_count.unsqueeze(-1) - y_count.unsqueeze(-2)
+        diff = clock.to(dtype=torch.int16)
+        diff.mul_(2).sub_(count.unsqueeze(-1))
+        diff.add_(256).bitwise_and_(511).sub_(256)
+        return diff
+
+
 _cpp_module = None
 
 
@@ -140,3 +175,17 @@ def string_to_soft_hash(min_k, max_k, seq, out):
             hash_ = murmur64(hash_)
             for b in range(bits):
                 out[b] += 1 if (hash_ & (1 << b)) else -1
+
+
+def string_to_clock_hash(k, seq, clocks, count):
+    to_bits = {"A": 0, "C": 1, "G": 2, "T": 3}
+
+    num_kmers = len(seq) - k + 1
+    count.add_(num_kmers)
+    for pos in range(num_kmers):
+        hash_ = murmur64(1 + k)
+        for i in range(k):
+            hash_ ^= to_bits[seq[pos + i]] << (i + i)
+        hash_ = murmur64(hash_)
+        for b in range(64):
+            clocks[b] += (hash_ >> b) & 1

@@ -10,7 +10,7 @@ from contextlib import ExitStack
 import torch
 import torch.multiprocessing as mp
 
-from pyrophylo.cluster import KmerSketcher
+from pyrophylo.cluster import ClockSketcher
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(format="%(relativeCreated) 9d %(message)s", level=logging.DEBUG)
@@ -106,37 +106,33 @@ def _cluster(args, sketcher, shard_name):
             if i + 1 == args.truncate:
                 break
 
-    soft_hashes = torch.empty(len(sequences), 64)
+    clocks, count = sketcher.init_hash(len(seq))
     for i, seq in enumerate(sequences):
-        sketcher.string_to_soft_hash(seq, soft_hashes[i])
+        sketcher.string_to_hash(seq, clocks[i], count[i])
         if i % args.log_every == 0:
             print_dot()
 
-    return soft_hashes
+    return clocks, count
 
 
 def cluster(args, shard_names):
-    cache_file = f"results/gisaid.cluster.{args.min_k}.{args.max_k}.{args.cluster_bits}.pt"
+    cache_file = f"results/gisaid.cluster.{args.k}.pt"
     if args.force or not os.path.exists(cache_file):
-        logger.info("Clustering via LSH of k-mers")
-        sketcher = KmerSketcher(min_k=args.min_k, max_k=args.max_k, bits=args.cluster_bits)
-
-        soft_hashes = pmap(_cluster, [(args, sketcher, s) for s in shard_names])
-        soft_hashes = torch.cat(soft_hashes, 0)
-        logger.info("quantizing hashes")
-        hard_hashes = sketcher.soft_to_hard_hashes(soft_hashes)
-        logger.info("greedily finding clusters")
-        clusters = sketcher.find_clusters(hard_hashes, radius=args.cluster_radius)
-        num_clusters = min(len(clusters), args.max_clusters)
-        logger.info(f"Using {num_clusters}/{len(clusters)} clusters")
-        clusters = clusters[:args.max_clusters]
-        logger.info("computing pairwise sequence-cluster distances")
+        logger.info("Clustering k-mers sketches")
+        sketcher = ClockSketcher(k=args.k)
+        sketches = pmap(_cluster, [(args, sketcher, s) for s in shard_names])
+        clocks = torch.cat([s[0] for s in sketches])
+        count = torch.cat([s[1] for s in sketches])
+        # TODO
+        # logger.info("greedily finding clusters")
+        # clusters = sketcher.find_clusters(clocks, counts, )
+        # num_clusters = min(len(clusters), args.max_clusters)
+        # logger.info(f"Using {num_clusters}/{len(clusters)} clusters")
+        # clusters = clusters[:args.max_clusters]
+        # logger.info("computing pairwise sequence-cluster distances")
         clustering = {
-            "soft_hashes": soft_hashes,
-            "hard_hashes": hard_hashes,
-            "clusters": clusters,
-            "cc_distances": sketcher.cdist(clusters, clusters),
-            "hc_distances": sketcher.cdist(hard_hashes, clusters),
+            "clocks": clocks,
+            "count": count,
         }
         torch.save(clustering, cache_file)
         logger.info(f"saving {cache_file}")
@@ -176,8 +172,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Preprocess GISAID data")
     parser.add_argument("--min-length-rel", default=0.95, type=float)
     parser.add_argument("--max-length-rel", default=1.05, type=float)
-    parser.add_argument("--min-k", default=2, type=int)
-    parser.add_argument("--max-k", default=12, type=int)
+    parser.add_argument("--k", default=10, type=int)
     parser.add_argument("--cluster-bits", default=16, type=int)
     parser.add_argument("--cluster-radius", default=4, type=int)
     parser.add_argument("--max-clusters", default=200, type=int)

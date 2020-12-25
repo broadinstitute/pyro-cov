@@ -45,6 +45,29 @@ void string_to_soft_hash(int min_k, int max_k, const std::string& seq, at::Tenso
   }
 }
 
+void string_to_clock_hash(int k, const std::string& seq, at::Tensor clocks, at::Tensor count) {
+  static std::vector<uint64_t> to_bits(256, false);
+  to_bits['A'] = 0;
+  to_bits['C'] = 1;
+  to_bits['G'] = 2;
+  to_bits['T'] = 3;
+
+  int8_t * const clocks_data = static_cast<int8_t*>(clocks.data_ptr());
+  const int num_kmers = seq.size() - k + 1;
+  count.add_(num_kmers);
+  for (int pos = 0; pos < num_kmers; ++pos) {
+    uint64_t hash = murmur64(1 + k);
+    for (int i = 0; i < k; ++i) {
+      hash ^= to_bits[seq[pos + i]] << (i + i);
+    }
+    hash = murmur64(hash);
+    for (int i = 0; i < 64; ++i) {
+      clocks_data[i] += (hash >> i) & 1;
+    }
+  }
+}
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("string_to_soft_hash", &string_to_soft_hash, "Convert a string to a soft hash");
+  m.def("string_to_clock_hash", &string_to_clock_hash, "Convert a string to a clock hash");
 }
