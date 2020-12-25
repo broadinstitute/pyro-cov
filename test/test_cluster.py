@@ -33,17 +33,16 @@ def test_string_to_soft_hash(min_k, max_k, bits):
 def test_string_to_clock_hash(k):
     string = random_string(1000)
 
-    clocks = {}
-    count = {}
+    results = {}
     for backend in ["python", "cpp"]:
         sketcher = ClockSketcher(k, backend=backend)
-        clocks[backend], count[backend] = sketcher.init_hash()
-        sketcher.string_to_hash(string, clocks[backend], count[backend])
+        results[backend] = sketcher.init_sketch()
+        sketcher.string_to_hash(string, results[backend])
 
-    for results in [clocks, count]:
-        expected = results["python"]
-        actual = results["cpp"]
-        assert (actual == expected).all()
+    expected = results["python"]
+    actual = results["cpp"]
+    assert (actual.clocks == expected.clocks).all()
+    assert (actual.count == expected.count).all()
 
 
 @pytest.mark.parametrize("k", [2, 3, 4, 5, 8, 16, 32])
@@ -52,11 +51,11 @@ def test_clock_cdiff(k, size):
     n = 10
     strings = [random_string(size) for _ in range(n)]
     sketcher = ClockSketcher(k)
-    clocks, count = sketcher.init_hash(n)
+    sketch = sketcher.init_sketch(n)
     for i, string in enumerate(strings):
-        sketcher.string_to_hash(string, clocks[i], count[i])
+        sketcher.string_to_hash(string, sketch[i])
 
-    cdiff = sketcher.cdiff(clocks, count, clocks, count)
+    cdiff = sketcher.cdiff(sketch, sketch)
     assert cdiff.shape == (n, n, 64)
     cc = cdiff.transpose(0, 1) + cdiff
     assert ((cc == 0) | (cc == -512)).all()

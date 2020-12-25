@@ -10,7 +10,7 @@ from contextlib import ExitStack
 import torch
 import torch.multiprocessing as mp
 
-from pyrophylo.cluster import ClockSketcher
+from pyrophylo.cluster import ClockSketch, ClockSketcher
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(format="%(relativeCreated) 9d %(message)s", level=logging.DEBUG)
@@ -106,13 +106,13 @@ def _cluster(args, sketcher, shard_name):
             if i + 1 == args.truncate:
                 break
 
-    clocks, count = sketcher.init_hash(len(seq))
+    sketch = sketcher.init_sketch(len(seq))
     for i, seq in enumerate(sequences):
-        sketcher.string_to_hash(seq, clocks[i], count[i])
+        sketcher.string_to_hash(seq, sketch[i])
         if i % args.log_every == 0:
             print_dot()
 
-    return clocks, count
+    return sketch
 
 
 def cluster(args, shard_names):
@@ -121,8 +121,9 @@ def cluster(args, shard_names):
         logger.info("Clustering k-mers sketches")
         sketcher = ClockSketcher(k=args.k)
         sketches = pmap(_cluster, [(args, sketcher, s) for s in shard_names])
-        clocks = torch.cat([s[0] for s in sketches])
-        count = torch.cat([s[1] for s in sketches])
+        clocks = torch.cat([s.clocks for s in sketches])
+        count = torch.cat([s.count for s in sketches])
+        sketch = ClockSketch(clocks, count)
         # TODO
         # logger.info("greedily finding clusters")
         # clusters = sketcher.find_clusters(clocks, counts, )
@@ -131,8 +132,7 @@ def cluster(args, shard_names):
         # clusters = clusters[:args.max_clusters]
         # logger.info("computing pairwise sequence-cluster distances")
         clustering = {
-            "clocks": clocks,
-            "count": count,
+            "sketch": sketch,
         }
         torch.save(clustering, cache_file)
         logger.info(f"saving {cache_file}")

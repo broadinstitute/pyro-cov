@@ -108,23 +108,36 @@ class AMSSketcher:
         return count_bits(self.bits)[hard_hashes[:, None] ^ clusters]
 
 
+class ClockSketch:
+    def __init__(self, clocks, count):
+        assert clocks.shape == count.shape + (64,)
+        assert clocks.dtype == torch.int8
+        assert count.dtype == torch.int16
+        self.clocks = clocks
+        self.count = count
+
+    def __getitem__(self, i):
+        return ClockSketch(self.clocks[i], self.count[i])
+
+    def __len__(self):
+        return len(self.count)
+
+
 class ClockSketcher:
     """
-    Sketches bags of k-mers as 64 8-bit clocks plus a k-mer counter.
+    Sketches each bag of k-mers as bank of 64 8-bit clocks plus a single total
+    k-mer counter.
     """
     def __init__(self, k, *, backend="cpp"):
         self.k = k
         self.backend = backend
 
-    def init_hash(self, *batch_shape):
+    def init_sketch(self, *batch_shape):
         clocks = torch.zeros(batch_shape + (64,), dtype=torch.int8)
         count = torch.zeros(batch_shape, dtype=torch.int16)
-        return clocks, count
+        return ClockSketch(clocks, count)
 
-    def string_to_hash(self, string, clocks, count):
-        assert clocks.dtype == torch.int8
-        assert clocks.shape == (64,)
-        assert count.shape == ()
+    def string_to_hash(self, string, sketch):
         if self.backend == "python":
             impl = string_to_clock_hash
         elif self.backend == "cpp":
@@ -132,15 +145,40 @@ class ClockSketcher:
         else:
             raise NotImplementedError(f"Unsupported backend: {self.backend}")
         for substring in re.findall("[ACGT]+", string):
-            impl(self.k, substring, clocks, count)
+            impl(self.k, substring, sketch.clocks, sketch.count)
+        sketch.clocks.mul_(2).sub_(sketch.count)
 
-    def cdiff(self, x_clocks, x_count, y_clocks, y_count):
-        clock = x_clocks.unsqueeze(-2) - y_clocks.unsqueeze(-3)
-        count = x_count.unsqueeze(-1) - y_count.unsqueeze(-2)
+    def cdiff(self, x, y):
+        clock = x.clocks.unsqueeze(-2) - y.clocks.unsqueeze(-3)
+        count = x.count.unsqueeze(-1) - y.count.unsqueeze(-2)
         diff = clock.to(dtype=torch.int16)
+        # The following performs math with 9-bit signed integers.
         diff.mul_(2).sub_(count.unsqueeze(-1))
         diff.add_(256).bitwise_and_(511).sub_(256)
         return diff
+
+    def cdist(self, x, y):
+        diff = self.cdiff(x, y)
+        return diff
+
+    def find_clusters(self, x, max_clusters):
+        assert len(x.clocks) == len(x.count)
+        n = len(x.clocks)
+
+        c = self.init_sketch(min(n, max_clusters))
+        c.clocks[0] = x.clocks[0]
+        c.count[1] = x.count[1]
+        # weight = torch.zeros(max_clusters, dtype=torch.long)
+        num_clusters = 1
+
+        for i in range(1, n):
+            x_minus_c, c_minus_x = self.cdist(x[i], c[:num_clusters])
+            ok = (x_minus_c < self.k / 2) & (c_minus_x < 100)
+            if not any(ok):
+                if num_clusters == max_clusters:
+                    raise NotImplementedError("TODO")
+
+        raise NotImplementedError("TODO")
 
 
 _cpp_module = None
@@ -188,4 +226,6 @@ def string_to_clock_hash(k, seq, clocks, count):
             hash_ ^= to_bits[seq[pos + i]] << (i + i)
         hash_ = murmur64(hash_)
         for b in range(64):
-            clocks[b] += (hash_ >> b) & 1
+            b_ = (b // 8) + 8 * (b % 8)  # for vectorized math in C++
+            clocks[b] += (hash_ >> b_) & 1
+            clocks[b] &= 0x7F
