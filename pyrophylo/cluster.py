@@ -1,6 +1,9 @@
 import re
+from collections import namedtuple
 
 import torch
+
+MeanStd = namedtuple("MeanStd", ("mean", "std"))
 
 
 def murmur64(h):
@@ -144,6 +147,7 @@ class ClockSketcher:
         return ClockSketch(clocks, count)
 
     def string_to_hash(self, string, sketch):
+        assert sketch.shape == ()
         if self.backend == "python":
             impl = string_to_clock_hash
         elif self.backend == "cpp":
@@ -159,9 +163,17 @@ class ClockSketcher:
         count = x.count.unsqueeze(-1) - y.count.unsqueeze(-2)
         return ClockSketch(clocks, count)
 
-    def cdist(self, x, y):
-        diff = self.cdiff(x, y)
-        return diff
+    def estimate_set_difference(self, x, y):
+        r"""
+        Estimates the multiset difference ``|x\y|``.
+        Returns the mean and standard deviation of the estimate.
+        """
+        clocks = x.clocks.unsqueeze(-2) - y.clocks.unsqueeze(-3)
+        count = x.count.unsqueeze(-1) - y.count.unsqueeze(-2)
+        V_hx_minus_hy = clocks.float().square_().mean(-1)
+        E_x_minus_y = 0.5 * (count.float() + V_hx_minus_hy)
+        std_x_minus_y = (0.5 / self.num_clocks) ** 0.5 * V_hx_minus_hy
+        return MeanStd(E_x_minus_y, std_x_minus_y)
 
     def find_clusters(self, x, max_clusters):
         assert len(x.clocks) == len(x.count)
@@ -198,7 +210,7 @@ def _get_cpp_module():
         _cpp_module = load(name="cpp_cluster",
                            sources=[path],
                            extra_cflags=['-O2'],
-                           verbose=True)
+                           verbose=False)
     return _cpp_module
 
 
