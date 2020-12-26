@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import pickle
+import re
 import sys
 from collections import Counter
 from contextlib import ExitStack
@@ -55,7 +56,7 @@ def update_shards(shard_names):
     logger.info(f"split {i + 1} lines")
 
 
-STATS = ["date", "location", "length"]
+STATS = ["date", "location", "length", "nchars"]
 
 
 def _get_stats(args, filename):
@@ -67,6 +68,8 @@ def _get_stats(args, filename):
             stats["location"][datum["covv_location"]] += 1
             seq = datum["sequence"].replace("\n", "")
             stats["length"][len(seq)] += 1
+            nchars = sum(map(len, re.findall("[ACGT]+", seq)))
+            stats["nchars"][nchars] += 1
     return stats
 
 
@@ -90,76 +93,91 @@ def get_stats(args, shard_names):
     return stats
 
 
-def _cluster(args, sketcher, shard_name):
+def _make_sketch(args, sketcher, shard_name):
     sequences = []
     with open(shard_name) as f:
         for i, line in enumerate(f):
             datum = json.loads(line)
             seq = datum["sequence"].replace("\n", "")
-            if args.min_length <= len(seq) <= args.max_length:
-                sequences.append(seq)
+            parts = re.findall("[ACGT]+", seq)
+            if args.min_nchars <= sum(map(len, parts)) <= args.max_nchars:
+                sequences.append(parts)
             if i + 1 == args.truncate:
                 break
 
     sketch = sketcher.init_sketch(len(sequences))
-    for i, seq in enumerate(sequences):
-        sketcher.string_to_hash(seq, sketch[i])
+    for i, parts in enumerate(sequences):
+        sketcher.string_to_hash(parts, sketch[i])
         if i % args.log_every == 0:
             print(".", end="", flush=True)
 
     return sketch
 
 
-def cluster(args, shard_names):
-    cache_file = f"results/gisaid.cluster.{args.k}.pt"
+def make_sketch(args, shard_names):
+    cache_file = f"results/gisaid.sketch.{args.k}.pt"
     sketcher = ClockSketcher(k=args.k, num_clocks=args.num_clocks)
-    if args.force or not os.path.exists(cache_file):  # DEBUG
-        logger.info("Clustering k-mers sketches")
-        sketches = pmap(_cluster, [(args, sketcher, s) for s in shard_names])
+    if args.force or not os.path.exists(cache_file):
+        args.force = True
+        logger.info("Sketching k-mers bags")
+        sketches = pmap(_make_sketch, [(args, sketcher, s) for s in shard_names])
         clocks = torch.cat([s.clocks for s in sketches])
         count = torch.cat([s.count for s in sketches])
         sketch = ClockSketch(clocks, count)
         # TODO
         # logger.info("greedily finding clusters")
-        # num_clusters = min(len(clusters), args.max_clusters)
-        # logger.info(f"Using {num_clusters}/{len(clusters)} clusters")
-        # clusters = clusters[:args.max_clusters]
-        # logger.info("computing pairwise sequence-cluster distances")
-        clustering = {
+        result = {
+            "k": args.k,
+            "num_clocks": args.num_clocks,
             "sketch": sketch,
         }
-        torch.save(clustering, cache_file)
+        torch.save(result, cache_file)
         logger.info(f"saving {cache_file}")
     else:
-        clustering = torch.load(cache_file)
-        sketch = clustering["sketch"]
+        result = torch.load(cache_file)
+        sketch = result["sketch"]
+    ln_sf(cache_file, "results/gisaid.sketch.pt")
+    return sketcher, sketch
+
+
+def cluster(args, sketcher, sketch):
+    cache_file = f"results/gisaid.cluster.{args.num_clusters}.{args.cluster_radius}.{args.cluster_epochs}.pt"
+    if args.force or not os.path.exists(cache_file):
+        args.force = True
+        logger.info(f"Clustering {len(sketch)} taxa into {args.num_clusters} clusters")
+        result = sketcher.find_clusters(sketch, num_clusters=args.num_clusters,
+                                        radius=args.cluster_radius,
+                                        epochs=args.cluster_epochs)
+        torch.save(result, cache_file)
+    else:
+        result = torch.load(cache_file)
     ln_sf(cache_file, "results/gisaid.cluster.pt")
-    clusters = sketcher.find_clusters(sketch, max_clusters=args.max_clusters)
-    clustering.update(clusters)
-    return clustering
+    return result
 
 
 def main(args):
     shard_names = [f"results/gisaid.{i:03d}-of-{args.num_shards:03d}.json"
                    for i in range(args.num_shards)]
     if args.force or not all(map(os.path.exists, shard_names)):
+        args.force = True
         update_shards(shard_names)
     stats = get_stats(args, shard_names)
 
     # Drop low quality sequences.
-    assert 0 <= args.min_length_rel <= 1 <= args.max_length_rel
-    length = stats["length"]
-    mean_length = sum(k * v for k, v in length.items()) / sum(length.values())
-    args.max_length = int(args.max_length_rel * mean_length)
-    args.min_length = int(args.min_length_rel * mean_length)
-    num_ok = sum(v for k, v in length.items()
-                 if args.min_length < k < args.max_length)
-    total = sum(length.values())
+    assert 0 <= args.min_nchars_rel <= 1 <= args.max_nchars_rel
+    nchars = stats["nchars"]
+    mean_nchars = sum(k * v for k, v in nchars.items()) / sum(nchars.values())
+    args.max_nchars = int(args.max_nchars_rel * mean_nchars)
+    args.min_nchars = int(args.min_nchars_rel * mean_nchars)
+    num_ok = sum(v for k, v in nchars.items()
+                 if args.min_nchars < k < args.max_nchars)
+    total = sum(nchars.values())
     logger.info(f"Keeping {num_ok}/{total} = {100*num_ok/total:0.1f}% of sequences")
 
     if args.truncate:
         shard_names = shard_names[:1]
-    clustering = cluster(args, shard_names)
+    sketcher, sketch = make_sketch(args, shard_names)
+    clustering = cluster(args, sketcher, sketch)
     assert clustering
 
 
@@ -167,13 +185,13 @@ if __name__ == "__main__":
     mp.set_start_method("spawn")
 
     parser = argparse.ArgumentParser(description="Preprocess GISAID data")
-    parser.add_argument("--min-length-rel", default=0.95, type=float)
-    parser.add_argument("--max-length-rel", default=1.05, type=float)
+    parser.add_argument("--min-nchars-rel", default=0.95, type=float)
+    parser.add_argument("--max-nchars-rel", default=1.05, type=float)
     parser.add_argument("--k", default=20, type=int)
     parser.add_argument("--num-clocks", default=256, type=int)
-    parser.add_argument("--cluster-bits", default=16, type=int)
-    parser.add_argument("--cluster-radius", default=4, type=int)
-    parser.add_argument("--max-clusters", default=200, type=int)
+    parser.add_argument("--num-clusters", default=200, type=int)
+    parser.add_argument("--cluster-radius", default=100, type=int)
+    parser.add_argument("--cluster-epochs", default=2, type=int)
     parser.add_argument("-s", "--num-shards", default=mp.cpu_count(), type=int)
     parser.add_argument("-l", "--log-every", default=1000, type=int)
     parser.add_argument("-f", "--force", action="store_true")

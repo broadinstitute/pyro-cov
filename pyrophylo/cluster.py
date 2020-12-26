@@ -1,8 +1,10 @@
+import logging
 import re
 from collections import namedtuple
 
 import torch
-import torch.distributions as dist
+
+logger = logging.getLogger(__name__)
 
 MeanStd = namedtuple("MeanStd", ("mean", "std"))
 
@@ -55,9 +57,11 @@ class AMSSketcher:
         self.bits = bits
         self.backend = backend
 
-    def string_to_soft_hash(self, string, out):
+    def string_to_soft_hash(self, strings, out):
         assert out.dim() == 1
         assert out.dtype == torch.float
+        if isinstance(strings, str):
+            strings = re.findall("[ACGT]+", strings)
         if self.backend == "python":
             impl = string_to_soft_hash
         elif self.backend == "cpp":
@@ -65,8 +69,8 @@ class AMSSketcher:
         else:
             raise NotImplementedError(f"Unsupported backend: {self.backend}")
         out.fill_(0)
-        for substring in re.findall("[ACGT]+", string):
-            impl(self.min_k, self.max_k, substring, out)
+        for string in strings:
+            impl(self.min_k, self.max_k, string, out)
 
     def soft_to_hard_hashes(self, soft_hashes):
         assert soft_hashes.dim() == 2
@@ -154,16 +158,18 @@ class ClockSketcher:
         count = torch.zeros(shape, dtype=torch.int16)
         return ClockSketch(clocks, count)
 
-    def string_to_hash(self, string, sketch):
+    def string_to_hash(self, strings, sketch):
         assert sketch.shape == ()
+        if isinstance(strings, str):
+            strings = re.findall("[ACGT]+", strings)
         if self.backend == "python":
             impl = string_to_clock_hash
         elif self.backend == "cpp":
             impl = _get_cpp_module().string_to_clock_hash
         else:
             raise NotImplementedError(f"Unsupported backend: {self.backend}")
-        for substring in re.findall("[ACGT]+", string):
-            impl(self.k, substring, sketch.clocks, sketch.count)
+        for string in strings:
+            impl(self.k, string, sketch.clocks, sketch.count)
         sketch.clocks.mul_(2).sub_(sketch.count)
 
     def cdiff(self, x, y):
@@ -181,54 +187,61 @@ class ClockSketcher:
 
         # Use a moment-matching estimator with Gaussian approximation.
         V_hx_minus_hy = clocks.float().square_().mean(-1)
-        E_x_minus_y = 0.5 * (count.float() + V_hx_minus_hy)
-        std_x_minus_y = (0.5 / self.num_clocks) ** 0.5 * V_hx_minus_hy
+        E_x_minus_y = count.float().add_(V_hx_minus_hy).clamp_(min=0).mul_(0.5)
+        std_x_minus_y = V_hx_minus_hy.mul_((0.5 / self.num_clocks) ** 0.5)
 
         # Give up in case of numerical overflow.
-        overflow = (count.abs() > 85).any(-1)
+        overflow = (count.abs_() > 85).any(-1)
         std_x_minus_y[overflow] = float(x.count.max())
         return MeanStd(E_x_minus_y, std_x_minus_y)
 
-    def find_clusters(self, data, max_clusters, *,
-                      error_rate=1e-2, epochs=1, shuffle=True):
+    def set_difference(self, x, y):
         r"""
-        Greedy clustering algorithm by reservoir sampling compatible sets of
-        sequences. A sequence ``x`` is compatible with sequence ``c`` serving
-        as cluster representative if ``|x\c| < k``.
+        Estimates the multiset difference ``|x\y|``.
+        """
+        # An optimized version of estimate_set_difference().
+        V_hx_minus_hy = (x.clocks - y.clocks).float().square_().mean(-1)
+        E_x_minus_y = V_hx_minus_hy.add_(x.count - y.count).clamp_(min=0).mul_(0.5)
+        return E_x_minus_y
+
+    def find_clusters(self, data, num_clusters, *,
+                      radius=100, epochs=1, shuffle=True, log_every=5000):
+        r"""
+        Greedy clustering algorithm by reservoir sampling.
         """
         assert len(data.clocks) == len(data.count)
         N, = data.shape
-        K = min(N, max_clusters)
+        K = min(N, num_clusters)
         if shuffle:
             data = data[torch.randperm(N)]
 
         clusters = data[N - K:].clone()
-        weight = torch.ones(max_clusters, dtype=torch.float)
+        weight = torch.ones(K, dtype=torch.float)
         probs_k1 = torch.ones(K + 1, dtype=torch.float)
         probs_k = probs_k1[:K]
-        threshold = dist.Normal(0, 1).icdf(torch.tensor(1. - error_rate)).item()
         for epoch in range(epochs):
-            for x in data:
-                x_minus_c, error = self.estimate_set_difference(x, clusters)
-                x_minus_c, error = x_minus_c[0], error[0]
-                weight.mul_(1 - 1 / N)
-                torch.reciprocal(weight, out=probs_k)
-                ok = x_minus_c + threshold * error < self.k
-                if ok.any():
+            for i, x in enumerate(data):
+                weight *= 1 - 1 / N
+                x_minus_c = self.set_difference(x, clusters)
+                probs_k.copy_(x_minus_c).mul_(-1 / radius).exp_().mul_(weight)
+                c = probs_k1.multinomial(1).item()
+                if c < K:
                     # Add weight to a random existing cluster.
-                    probs_k[~ok] = 0
-                    i = probs_k.multinomial(1).item()
-                    weight[i] += 1
-                    print("+", end="", flush=True)
-                else:
-                    # Possibly replace a random existing cluster with the datum.
-                    i = probs_k1.multinomial(1).item()
-                    if i < K:
-                        clusters[i] = x
-                        weight[i] = 1
-                        print("o", end="", flush=True)
-                    else:
+                    weight[c] += 1
+                    if log_every == 1:
                         print("-", end="", flush=True)
+                else:
+                    # Replace a random existing cluster with the datum.
+                    torch.reciprocal(weight, out=probs_k)
+                    c = probs_k.multinomial(1).item()
+                    clusters[c] = x
+                    weight[c] = 1
+                    if log_every == 1:
+                        print("o", end="", flush=True)
+                if log_every > 1 and i % log_every == 0:
+                    p = weight / weight.sum()
+                    perplexity = p.log().neg().mul(p).sum().exp()
+                    logger.info(f"weight = {weight.sum():0.1f}\tperplexity = {perplexity:0.2f}")
         return {"clusters": clusters, "weight": weight}
 
 
