@@ -16,11 +16,6 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(format="%(relativeCreated) 9d %(message)s", level=logging.DEBUG)
 
 
-def print_dot():
-    sys.stderr.write(".")
-    sys.stderr.flush()
-
-
 def ln_sf(source, target):
     source = os.path.abspath(source)
     target = os.path.abspath(target)
@@ -56,7 +51,7 @@ def update_shards(shard_names):
         for i, line in enumerate(f):
             shards[i % args.num_shards].write(line)
             if i % args.log_every == 0:
-                print_dot()
+                print(".", end="", flush=True)
     logger.info(f"split {i + 1} lines")
 
 
@@ -106,27 +101,26 @@ def _cluster(args, sketcher, shard_name):
             if i + 1 == args.truncate:
                 break
 
-    sketch = sketcher.init_sketch(len(seq))
+    sketch = sketcher.init_sketch(len(sequences))
     for i, seq in enumerate(sequences):
         sketcher.string_to_hash(seq, sketch[i])
         if i % args.log_every == 0:
-            print_dot()
+            print(".", end="", flush=True)
 
     return sketch
 
 
 def cluster(args, shard_names):
     cache_file = f"results/gisaid.cluster.{args.k}.pt"
-    if args.force or not os.path.exists(cache_file):
+    sketcher = ClockSketcher(k=args.k, num_clocks=args.num_clocks)
+    if args.force or not os.path.exists(cache_file):  # DEBUG
         logger.info("Clustering k-mers sketches")
-        sketcher = ClockSketcher(k=args.k, num_clocks=args.num_clocks)
         sketches = pmap(_cluster, [(args, sketcher, s) for s in shard_names])
         clocks = torch.cat([s.clocks for s in sketches])
         count = torch.cat([s.count for s in sketches])
         sketch = ClockSketch(clocks, count)
         # TODO
         # logger.info("greedily finding clusters")
-        # clusters = sketcher.find_clusters(clocks, counts, )
         # num_clusters = min(len(clusters), args.max_clusters)
         # logger.info(f"Using {num_clusters}/{len(clusters)} clusters")
         # clusters = clusters[:args.max_clusters]
@@ -138,7 +132,10 @@ def cluster(args, shard_names):
         logger.info(f"saving {cache_file}")
     else:
         clustering = torch.load(cache_file)
+        sketch = clustering["sketch"]
     ln_sf(cache_file, "results/gisaid.cluster.pt")
+    clusters = sketcher.find_clusters(sketch, max_clusters=args.max_clusters)
+    clustering.update(clusters)
     return clustering
 
 
@@ -172,7 +169,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Preprocess GISAID data")
     parser.add_argument("--min-length-rel", default=0.95, type=float)
     parser.add_argument("--max-length-rel", default=1.05, type=float)
-    parser.add_argument("--k", default=10, type=int)
+    parser.add_argument("--k", default=20, type=int)
     parser.add_argument("--num-clocks", default=256, type=int)
     parser.add_argument("--cluster-bits", default=16, type=int)
     parser.add_argument("--cluster-radius", default=4, type=int)

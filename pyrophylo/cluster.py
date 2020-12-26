@@ -2,6 +2,7 @@ import re
 from collections import namedtuple
 
 import torch
+import torch.distributions as dist
 
 MeanStd = namedtuple("MeanStd", ("mean", "std"))
 
@@ -122,12 +123,19 @@ class ClockSketch:
     def __getitem__(self, i):
         return ClockSketch(self.clocks[i], self.count[i])
 
+    def __setitem__(self, i, value):
+        self.clocks[i] = value.clocks
+        self.count[i] = value.count
+
     def __len__(self):
         return len(self.count)
 
     @property
     def shape(self):
         return self.count.shape
+
+    def clone(self):
+        return ClockSketch(self.clocks.clone(), self.count.clone())
 
 
 class ClockSketcher:
@@ -170,29 +178,58 @@ class ClockSketcher:
         """
         clocks = x.clocks.unsqueeze(-2) - y.clocks.unsqueeze(-3)
         count = x.count.unsqueeze(-1) - y.count.unsqueeze(-2)
+
+        # Use a moment-matching estimator with Gaussian approximation.
         V_hx_minus_hy = clocks.float().square_().mean(-1)
         E_x_minus_y = 0.5 * (count.float() + V_hx_minus_hy)
         std_x_minus_y = (0.5 / self.num_clocks) ** 0.5 * V_hx_minus_hy
+
+        # Give up in case of numerical overflow.
+        overflow = (count.abs() > 85).any(-1)
+        std_x_minus_y[overflow] = float(x.count.max())
         return MeanStd(E_x_minus_y, std_x_minus_y)
 
-    def find_clusters(self, x, max_clusters):
-        assert len(x.clocks) == len(x.count)
-        n = len(x.clocks)
+    def find_clusters(self, data, max_clusters, *,
+                      error_rate=1e-2, epochs=1, shuffle=True):
+        r"""
+        Greedy clustering algorithm by reservoir sampling compatible sets of
+        sequences. A sequence ``x`` is compatible with sequence ``c`` serving
+        as cluster representative if ``|x\c| < k``.
+        """
+        assert len(data.clocks) == len(data.count)
+        N, = data.shape
+        K = min(N, max_clusters)
+        if shuffle:
+            data = data[torch.randperm(N)]
 
-        c = self.init_sketch(min(n, max_clusters))
-        c.clocks[0] = x.clocks[0]
-        c.count[1] = x.count[1]
-        # weight = torch.zeros(max_clusters, dtype=torch.long)
-        num_clusters = 1
-
-        for i in range(1, n):
-            x_minus_c, c_minus_x = self.cdist(x[i], c[:num_clusters])
-            ok = (x_minus_c < self.k / 2) & (c_minus_x < 100)
-            if not any(ok):
-                if num_clusters == max_clusters:
-                    raise NotImplementedError("TODO")
-
-        raise NotImplementedError("TODO")
+        clusters = data[N - K:].clone()
+        weight = torch.ones(max_clusters, dtype=torch.float)
+        probs_k1 = torch.ones(K + 1, dtype=torch.float)
+        probs_k = probs_k1[:K]
+        threshold = dist.Normal(0, 1).icdf(torch.tensor(1. - error_rate)).item()
+        for epoch in range(epochs):
+            for x in data:
+                x_minus_c, error = self.estimate_set_difference(x, clusters)
+                x_minus_c, error = x_minus_c[0], error[0]
+                weight.mul_(1 - 1 / N)
+                torch.reciprocal(weight, out=probs_k)
+                ok = x_minus_c + threshold * error < self.k
+                if ok.any():
+                    # Add weight to a random existing cluster.
+                    probs_k[~ok] = 0
+                    i = probs_k.multinomial(1).item()
+                    weight[i] += 1
+                    print("+", end="", flush=True)
+                else:
+                    # Possibly replace a random existing cluster with the datum.
+                    i = probs_k1.multinomial(1).item()
+                    if i < K:
+                        clusters[i] = x
+                        weight[i] = 1
+                        print("o", end="", flush=True)
+                    else:
+                        print("-", end="", flush=True)
+        return {"clusters": clusters, "weight": weight}
 
 
 _cpp_module = None
