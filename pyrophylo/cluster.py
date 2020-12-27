@@ -200,48 +200,55 @@ class ClockSketcher:
         Estimates the multiset difference ``|x\y|``.
         """
         # An optimized version of estimate_set_difference().
-        V_hx_minus_hy = (x.clocks - y.clocks).float().square_().mean(-1)
-        E_x_minus_y = V_hx_minus_hy.add_(x.count - y.count).clamp_(min=0).mul_(0.5)
+        clocks = x.clocks.unsqueeze(-2) - y.clocks.unsqueeze(-3)
+        count = x.count.unsqueeze(-1) - y.count.unsqueeze(-2)
+        V_hx_minus_hy = clocks.float().square_().mean(-1)
+        E_x_minus_y = V_hx_minus_hy.add_(count).clamp_(min=0).mul_(0.5)
         return E_x_minus_y
 
     def find_clusters(self, data, num_clusters, *,
-                      radius=100, epochs=1, shuffle=True, log_every=5000):
+                      radius=100, shuffle=True,
+                      epochs=10, batch_size=100, log_every=10000):
         r"""
         Greedy clustering algorithm by reservoir sampling.
         """
         assert len(data.clocks) == len(data.count)
         N, = data.shape
         K = min(N, num_clusters)
+        B = batch_size
+        log_every = (log_every + B - 1) // B * B
         if shuffle:
             data = data[torch.randperm(N)]
 
         clusters = data[N - K:].clone()
         weight = torch.ones(K, dtype=torch.float)
-        probs_k1 = torch.ones(K + 1, dtype=torch.float)
-        probs_k = probs_k1[:K]
+        probs = torch.ones(B, K + 1, dtype=torch.float)
         for epoch in range(epochs):
-            for i, x in enumerate(data):
+            for i in range(0, N, B):
+                x = data[i: i + B]
+                b = len(x)
                 weight *= 1 - 1 / N
                 x_minus_c = self.set_difference(x, clusters)
-                probs_k.copy_(x_minus_c).mul_(-1 / radius).exp_().mul_(weight)
-                c = probs_k1.multinomial(1).item()
-                if c < K:
-                    # Add weight to a random existing cluster.
-                    weight[c] += 1
-                    if log_every == 1:
-                        print("-", end="", flush=True)
-                else:
-                    # Replace a random existing cluster with the datum.
-                    torch.reciprocal(weight, out=probs_k)
-                    c = probs_k.multinomial(1).item()
-                    clusters[c] = x
+                probs[:b, :K].copy_(x_minus_c).mul_(-1 / radius).exp_().mul_(weight)
+                c = probs[:b].multinomial(1).squeeze()
+
+                existing = c < K
+                replaced = ~existing
+                num_replaced = replaced.sum().item()
+                if existing.any():
+                    # Add weight to random existing clusters.
+                    weight.scatter_add_(0, c % K, existing.float())
+                if num_replaced:
+                    # Replace random existing cluster with the datum.
+                    c = weight.reciprocal().multinomial(num_replaced)
+                    clusters[c] = x[replaced]
                     weight[c] = 1
-                    if log_every == 1:
-                        print("o", end="", flush=True)
-                if log_every > 1 and i % log_every == 0:
+
+                if log_every and i % log_every == 0:
                     p = weight / weight.sum()
                     perplexity = p.log().neg().mul(p).sum().exp()
                     logger.info(f"weight = {weight.sum():0.1f}\tperplexity = {perplexity:0.2f}")
+
         return {"clusters": clusters, "weight": weight}
 
 
