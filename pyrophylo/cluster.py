@@ -221,15 +221,17 @@ class ClockSketcher:
             data = data[torch.randperm(N)]
 
         clusters = data[N - K:].clone()
-        weight = torch.ones(K, dtype=torch.float)
+        weights = torch.ones(K, dtype=torch.float)
         probs = torch.ones(B, K + 1, dtype=torch.float)
+        num_batches = (N + B - 1) // B
+        num_steps = num_batches * epochs
         for epoch in range(epochs):
             for i in range(0, N, B):
                 x = data[i: i + B]
                 b = len(x)
-                weight *= 1 - 1 / N
+                weights *= 1 - 1 / N
                 x_minus_c = self.set_difference(x, clusters)
-                probs[:b, :K].copy_(x_minus_c).mul_(-1 / radius).exp_().mul_(weight)
+                probs[:b, :K].copy_(x_minus_c).mul_(-1 / radius).exp_().mul_(weights)
                 c = probs[:b].multinomial(1).squeeze()
 
                 existing = c < K
@@ -237,19 +239,35 @@ class ClockSketcher:
                 num_replaced = replaced.sum().item()
                 if existing.any():
                     # Add weight to random existing clusters.
-                    weight.scatter_add_(0, c % K, existing.float())
+                    weights.scatter_add_(0, c % K, existing.float())
                 if num_replaced:
                     # Replace random existing cluster with the datum.
-                    c = weight.reciprocal().multinomial(num_replaced)
+                    c = weights.reciprocal().multinomial(num_replaced)
                     clusters[c] = x[replaced]
-                    weight[c] = 1
+                    weights[c] = 1
 
                 if log_every and i % log_every == 0:
-                    p = weight / weight.sum()
+                    step = i // B + num_batches * epoch
+                    p = weights / weights.sum()
                     perplexity = p.log().neg().mul(p).sum().exp()
-                    logger.info(f"weight = {weight.sum():0.1f}\tperplexity = {perplexity:0.2f}")
+                    logger.info(f"step {step: >5d}/{num_steps} "
+                                f"weight = {weights.sum():0.1f}\t"
+                                f"perplexity = {perplexity:0.2f}")
 
-        return {"clusters": clusters, "weight": weight}
+        weights, i = weights.sort(descending=True)
+        clusters = clusters[i]
+        return clusters, weights
+
+    def classify(self, data, clusters, weights, *, radius=100, batch_size=10000):
+        N, = data.shape
+        K, = clusters.shape
+        probs = weights.new_empty(N, K)
+        for i in range(0, N, batch_size):
+            x = data[i: i + batch_size]
+            probs[i:i + len(x)] = self.set_difference(x, clusters)
+        probs.mul_(-1 / radius).add_(weights.log())
+        probs.sub_(probs.logsumexp(-1, True)).exp_()
+        return probs
 
 
 _cpp_module = None
