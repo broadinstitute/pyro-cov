@@ -25,6 +25,8 @@ setup(
         'geopy',
         'gpytorch',
         'scikit-learn',
+        'umap-learn',
+        'mappy',
     ],
     extras_require={
         'test': [
