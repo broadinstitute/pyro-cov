@@ -229,7 +229,7 @@ class ClockSketcher:
             for i in range(0, N, B):
                 x = data[i: i + B]
                 b = len(x)
-                weights *= 1 - 1 / N
+                weights *= 1 - b / N
                 x_minus_c = self.set_difference(x, clusters)
                 probs[:b, :K].copy_(x_minus_c).mul_(-1 / radius).exp_().mul_(weights)
                 c = probs[:b].multinomial(1).squeeze()
@@ -268,6 +268,63 @@ class ClockSketcher:
         probs.mul_(-1 / radius).add_(weights.log())
         probs.sub_(probs.logsumexp(-1, True)).exp_()
         return probs
+
+
+def sample_diverse_clusters(
+    data,
+    num_clusters,
+    radius,
+    *,
+    epochs=10,
+    batch_size=100,
+    log_every=10000,
+):
+    r"""
+    Greedy clustering algorithm by reservoir sampling.
+    """
+    N, P = data.shape
+    K = min(N, num_clusters)
+    B = batch_size
+    log_every = (log_every + B - 1) // B * B
+    data = data[torch.randperm(N)]
+
+    clusters = data[N - K:].clone()
+    weights = torch.ones(K, dtype=torch.float)
+    probs = torch.ones(B, K + 1, dtype=torch.float)
+    num_batches = (N + B - 1) // B
+    num_steps = num_batches * epochs
+    for epoch in range(epochs):
+        for i in range(0, N, B):
+            x = data[i: i + B]
+            b = len(x)
+            weights *= 1 - b / N
+            distance = torch.cdist(x, clusters, p=1)
+            probs[:b, :K].copy_(distance).div_(radius).square_().neg_().exp_().mul_(weights)
+            c = probs[:b].multinomial(1).squeeze()
+
+            existing = c < K
+            replaced = ~existing
+            num_replaced = replaced.sum().item()
+            if existing.any():
+                # Add weight to random existing clusters.
+                weights.scatter_add_(0, c % K, existing.float())
+            if num_replaced:
+                # Replace random existing cluster with the datum.
+                c = weights.reciprocal().multinomial(num_replaced)
+                clusters[c] = x[replaced]
+                weights[c] = 1
+
+            if log_every and i % log_every == 0:
+                step = i // B + num_batches * epoch
+                p = weights / weights.sum()
+                perplexity = p.log().neg().mul(p).sum().exp()
+                logger.info(f"step {step: >5d}/{num_steps} "
+                            f"weight = {weights.sum():0.1f}\t"
+                            f"perplexity = {perplexity:0.2f}")
+
+    weights, i = weights.sort(descending=True)
+    clusters = clusters[i]
+    return clusters, weights
 
 
 _cpp_module = None
