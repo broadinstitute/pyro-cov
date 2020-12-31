@@ -3,6 +3,7 @@ import re
 from collections import namedtuple
 
 import torch
+from pyro.distributions.spanning_tree import SpanningTree, make_complete_graph
 
 logger = logging.getLogger(__name__)
 
@@ -281,17 +282,16 @@ class SoftminimaxClustering:
         \operatorname{min}_{z\in\text{clusters}}
         \|x-z\|_{p_{\text{feature}}}^{p_{\text{edge}}
     """
-    def __init__(self, num_clusters, *, p_edge=1, p_feature=1):
-        self.num_clusters = num_clusters
+    def __init__(self, *, p_feature=1, p_edge=4):
         self.p_feature = p_feature
         self.p_edge = p_edge
 
-    def init(self, data, log_every=10000):
+    def init(self, data, num_clusters, *, log_every=10000):
         """
         Initialize clusters via greedy agglomeration.
         """
         N, P = data.shape
-        K = min(N, self.num_clusters)
+        K = min(N, num_clusters)
         data = data[torch.randperm(N)]
 
         # Index the upper triangle.
@@ -327,7 +327,6 @@ class SoftminimaxClustering:
 
         mass, i = mass[:K].sort(descending=True)
         self.mean = mean[i]
-        return mass
 
     def fine_tune(
         self,
@@ -354,12 +353,40 @@ class SoftminimaxClustering:
             if log_every and step % log_every == 0:
                 logger.info(f"step {step: >4d} loss = {loss.item():0.3g}")
         with torch.no_grad():
-            logger.info("distance = f{(mean - self.mean).abs().sum():0.1f}")
+            logger.info(f"distance = {(mean - self.mean).abs().sum():0.1f}")
             self.mean.copy_(mean.detach())
         return losses
 
-    def classify(self, data):
-        return torch.cdist(data, self.mean, p=self.p_feature).argmin(-1)
+    def classify(self, data, temperature=0):
+        """
+        If temperature == 0, this returns an integer tensor of class ids.
+        If temperature > 0, this returns a tensor of probabilities.
+        """
+        with torch.no_grad():
+            distance = torch.cdist(data, self.mean, p=self.p_feature)
+            if temperature == 0:
+                return distance.argmin(-1)
+            else:
+                logits = distance.mul_(-1 / temperature)
+                return logits.sub_(logits.logsumexp(-1, True)).exp_()
+
+    def transition_matrix(self, temperature=0):
+        """
+        Constructs a continuous-time transition rate matrix between classes.
+        """
+        V = len(self.mean)
+        v1, v2 = make_complete_graph(V)
+        with torch.no_grad():
+            distance = torch.cdist(self.mean, self.mean, p=self.p_feature)
+            if temperature == 0:
+                logits = -distance[v1, v2]
+                tree = SpanningTree(logits).mode()
+                rate = self.mean.new_zeros(V, V)
+                rate[tree[:, 0], tree[:, 1]] = 1
+            else:
+                logits = distance[v1, v2].mul_(-1 / temperature)
+                rate = SpanningTree(logits.double()).edge_mean().to(distance.dtype)
+            return rate
 
 
 _cpp_module = None
