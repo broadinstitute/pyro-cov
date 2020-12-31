@@ -270,61 +270,96 @@ class ClockSketcher:
         return probs
 
 
-def sample_diverse_clusters(
-    data,
-    num_clusters,
-    radius,
-    *,
-    epochs=10,
-    batch_size=100,
-    log_every=10000,
-):
+class SoftminimaxClustering:
     r"""
-    Greedy clustering algorithm by reservoir sampling.
+    Finds a set of centroid clusters that minimizes the following softening of a
+    minimax edge length problem:
+
+    .. math::
+
+        \text{loss} = \sum_{x\in\text{data}}
+        \operatorname{min}_{z\in\text{clusters}}
+        \|x-z\|_{p_{\text{feature}}}^{p_{\text{edge}}
     """
-    N, P = data.shape
-    K = min(N, num_clusters)
-    B = batch_size
-    log_every = (log_every + B - 1) // B * B
-    data = data[torch.randperm(N)]
+    def __init__(self, num_clusters, *, p_edge=1, p_feature=1):
+        self.num_clusters = num_clusters
+        self.p_feature = p_feature
+        self.p_edge = p_edge
 
-    clusters = data[N - K:].clone()
-    weights = torch.ones(K, dtype=torch.float)
-    probs = torch.ones(B, K + 1, dtype=torch.float)
-    num_batches = (N + B - 1) // B
-    num_steps = num_batches * epochs
-    for epoch in range(epochs):
-        for i in range(0, N, B):
-            x = data[i: i + B]
-            b = len(x)
-            weights *= 1 - b / N
-            distance = torch.cdist(x, clusters, p=1)
-            probs[:b, :K].copy_(distance).div_(radius).square_().neg_().exp_().mul_(weights)
-            c = probs[:b].multinomial(1).squeeze()
+    def init(self, data, log_every=10000):
+        """
+        Initialize clusters via greedy agglomeration.
+        """
+        N, P = data.shape
+        K = min(N, self.num_clusters)
+        data = data[torch.randperm(N)]
 
-            existing = c < K
-            replaced = ~existing
-            num_replaced = replaced.sum().item()
-            if existing.any():
-                # Add weight to random existing clusters.
-                weights.scatter_add_(0, c % K, existing.float())
-            if num_replaced:
-                # Replace random existing cluster with the datum.
-                c = weights.reciprocal().multinomial(num_replaced)
-                clusters[c] = x[replaced]
-                weights[c] = 1
+        # Index the upper triangle.
+        U = torch.arange(K + 1)[:, None]
+        V = torch.arange(K + 1)
+        UV = (U < V).nonzero(as_tuple=False)
+        U, V = UV.unbind(-1)
+
+        mass = torch.ones(K + 1, dtype=torch.float)
+        mean = data[:K + 1].clone()
+        for i in range(K, N):
+            # Insert the datapoint as a new cluster.
+            mean[K] = data[i]
+
+            # Find the easiest pair of clusters to merge.
+            mass2 = mass.square()
+            cost = torch.cdist(mean, mean, p=self.p_feature).pow_(self.p_edge)
+            cost.mul_(mass * mass[:, None] / (mass2 + mass2[:, None]))
+            u, v = UV[cost[U, V].argmin(0)].tolist()
+            assert u < v
+
+            # Merge the pair of clusters.
+            mass[u] += mass[v]
+            mean[u] += mass[v] / mass[u] * (mean[v] - mean[u])
+            if v != K:
+                mass[v] = mass[K]
+                mean[v] = mean[K]
 
             if log_every and i % log_every == 0:
-                step = i // B + num_batches * epoch
-                p = weights / weights.sum()
-                perplexity = p.log().neg().mul(p).sum().exp()
-                logger.info(f"step {step: >5d}/{num_steps} "
-                            f"weight = {weights.sum():0.1f}\t"
-                            f"perplexity = {perplexity:0.2f}")
+                p = mass / mass.sum()
+                perplexity = p.log().clamp(min=torch.finfo(p.dtype).min).neg().mul(p).sum().exp()
+                logger.info(f"step {i: >6d}/{N} perplexity = {perplexity:0.2f}")
 
-    weights, i = weights.sort(descending=True)
-    clusters = clusters[i]
-    return clusters, weights
+        mass, i = mass[:K].sort(descending=True)
+        self.mean = mean[i]
+        return mass
+
+    def fine_tune(
+        self,
+        data,
+        *,
+        learning_rate=0.01,
+        num_steps=1001,
+        batch_size=2048,
+        log_every=100,
+    ):
+        """
+        Fine tune clusters via SGD.
+        """
+        mean = self.mean.clone().requires_grad_()
+        optim = torch.optim.Adam([mean], lr=learning_rate)
+        losses = []
+        for step in range(num_steps):
+            batch = data[torch.randperm(len(data))[:batch_size]]
+            optim.zero_grad()
+            loss = torch.cdist(batch, mean, p=self.p_feature).min(-1).values.norm(self.p_edge)
+            loss.backward()
+            optim.step()
+            losses.append(loss.item())
+            if log_every and step % log_every == 0:
+                logger.info(f"step {step: >4d} loss = {loss.item():0.3g}")
+        with torch.no_grad():
+            logger.info("distance = f{(mean - self.mean).abs().sum():0.1f}")
+            self.mean.copy_(mean.detach())
+        return losses
+
+    def classify(self, data):
+        return torch.cdist(data, self.mean, p=self.p_feature).argmin(-1)
 
 
 _cpp_module = None

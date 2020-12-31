@@ -171,7 +171,7 @@ class TimeSpaceStrainModel(nn.Module):
                 "infections",
                 dist.ImproperUniform(constraints.positive, (), ()),
             )
-        with pyro.plate("dt", T - 1, dim=-3), region_plate, strain_plate:
+        with step_plate, region_plate, strain_plate:
             pred = einsum(
                 "trs,tr,trRp,p,sS->tRS",
                 infections[:-1],
@@ -185,7 +185,7 @@ class TimeSpaceStrainModel(nn.Module):
 
         # The remainder of the model concerns time-region local observations.
         infections_sum = infections.sum(-1, True)
-        strain_probs = infections / infections_sum
+        strain_probs = (infections / infections_sum).unsqueeze(-2)
         with time_plate, region_plate:
             # Condition on case counts, marginalized over strains.
             # TODO use overdispersed distribution.
@@ -202,7 +202,7 @@ class TimeSpaceStrainModel(nn.Module):
             # Condition on strain counts.
             pyro.sample("strains",
                         dist.Multinomial(self.strain_total, strain_probs),
-                        obs=self.strain_obs)
+                        obs=self.strain_obs.unsqueeze(-2))
 
     def fit(
         self,
