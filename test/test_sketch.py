@@ -2,7 +2,7 @@ import pyro.distributions as dist
 import pytest
 import torch
 
-from pyrophylo.cluster import AMSSketcher, ClockSketcher
+from pyrophylo.sketch import AMSSketcher, ClockSketcher
 
 
 def random_string(size):
