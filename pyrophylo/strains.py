@@ -96,44 +96,55 @@ class TimeSpaceStrainModel(nn.Module):
     :param Tensor sample_strain: Three integer vectors of shape ``(N,)``
         containing the time, region, and strain classification of each of ``N``
         genetic samples.
-    :param Tensor strain_distance: An ``(S,S)``-shaped array of genetic
+    :param Tensor sample_matrix: A projection matrix of shape ``(Rs,R)`` whose
+        ``(c,f)`` entry is 1 iff fine region ``f`` is included in coarse
+        sampling region ``c``.
+    :param Tensor strain_distance: An ``(S,S)``-shaped array of
+    genetic
         distances between each pair of ``S``-many strains. This could be
         constructed e.g. by estimating a coarse phylogeny among strains and
         measuring the edge distance between each pair of strains.
     """
     def __init__(
         self,
+        *,
         case_data,
         death_data,
         transit_data,
         sample_time,
         sample_region,
         sample_strain,
+        sample_matrix,
         strain_distance,
         death_rate,
     ):
-        N = len(sample_time)
-        assert sample_time.shape == (N,)
-        assert sample_region.shape == (N,)
-        assert sample_strain.shape == (N,)
-        S = 1 + sample_strain.max().item()
-        assert strain_distance.shape == (S, S)
         T, R = case_data.shape
         assert death_data.shape == (T, R)
         P = transit_data.size(-1)
         assert transit_data.shape == (T, R, R, P)
         assert isinstance(death_rate, float) and 0 < death_rate < 1
         assert transit_data.min() >= 0, "transit data must be nonnegative"
+        N = len(sample_time)
+        assert sample_time.shape == (N,)
+        assert sample_region.shape == (N,)
+        assert sample_strain.shape == (N,)
+        S = 1 + sample_strain.max().item()
+        Rc = 1 + sample_region.max().item()
+        assert sample_matrix.shape == (Rc, R)
+        assert strain_distance.shape == (S, S)
 
         # Convert sparse sample data to dense multinomial observations.
-        strain_data = torch.zeros(T, R, S)
-        i = sample_time.mul(R).add_(sample_region).mul_(S).add_(sample_strain)
+        strain_data = torch.zeros(T, Rc, S)
+        i = sample_time.mul(Rc).add_(sample_region).mul_(S).add_(sample_strain)
         one = torch.ones(()).expand_as(i)
         strain_data.reshape(-1).scatter_add_(0, i, one)
         strain_total = strain_data.sum(-1)
 
+        logger.info(f"Creating model over {T} time steps x {R} regions x {S} strains "
+                    f"= {T * R * S} buckets")
         self.num_time_steps = T
         self.num_regions = R
+        self.num_coarse_regions = Rc
         self.num_strains = S
         self.num_transit_covariates = P
 
@@ -148,11 +159,13 @@ class TimeSpaceStrainModel(nn.Module):
     def model(self):
         T = self.num_time_steps
         R = self.num_regions
+        Rc = self.num_coarse_regions
         S = self.num_strains
         P = self.num_transit_covariates
         time_plate = pyro.plate("time", T, dim=-3)
         step_plate = pyro.plate("step", T - 1, dim=-3)
         region_plate = pyro.plate("region", R, dim=-2)
+        coarse_region_plate = pyro.plate("coarse_region", Rc, dim=-2)
         strain_plate = pyro.plate("strain", S, dim=-1)
 
         # Sample confirmed case response rate parameters.
@@ -216,26 +229,28 @@ class TimeSpaceStrainModel(nn.Module):
                         RelaxedPoisson(pred_infections, overdispersion=infection_od),
                         obs=curr_infections)
 
-        # The remainder of the model concerns time-region local observations.
-        # The case counts and death counts are missing strain information.
+        # Condition on case counts, marginalized over strains.
         infections_sum = infections.sum(-1, True)
-        strain_probs = (infections / infections_sum).unsqueeze(-2)
         case_od = pyro.sample("case_od", dist.Beta(1, 3))
-        death_od = pyro.sample("death_od", dist.Beta(1, 3))
         with time_plate, region_plate:
-            # Condition on case counts, marginalized over strains.
             pyro.sample("case_obs",
                         OverdispersedPoisson(infections_sum * case_rate,
                                              overdispersion=case_od),
                         obs=self.case_data)
 
-            # Condition on death counts, marginalized over strains.
+        # Condition on death counts, marginalized over strains.
+        death_od = pyro.sample("death_od", dist.Beta(1, 3))
+        with time_plate, region_plate:
             pyro.sample("death_obs",
                         OverdispersedPoisson(infections_sum * self.death_rate,
                                              overdispersion=death_od),
                         obs=self.death_data)
 
-            # Condition on strain counts.
+        # Condition on strain counts.
+        # Note these are partitioned into coarse regions.
+        coarse_infections = einsum("trs,Rr->tRs", infections, self.sample_matrix)
+        strain_probs = (coarse_infections / coarse_infections.sum(-1, True)).unsqueeze(-2)
+        with time_plate, coarse_region_plate:
             pyro.sample("strains",
                         dist.Multinomial(self.strain_total, strain_probs),
                         obs=self.strain_obs.unsqueeze(-2))
