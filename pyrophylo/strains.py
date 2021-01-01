@@ -19,18 +19,37 @@ from torch.distributions import constraints
 logger = logging.getLogger(__name__)
 
 
-def MomentMatchedPoisson(rate):
-    # Poisson mean = variance = rate
+def OverdispersedPoisson(rate, overdispersion=0):
+    if isinstance(overdispersion, (int, float)) and overdispersion == 0:
+        return dist.Poisson(rate)
+    # Negative Binomial
+    #   mean = r p / (1 - p) = rate
+    #   variance = r p / (1-p)**2 = rate * (1 + overdispersion * rate)
+    # Solving for (r,p):
+    #   1 - p = 1 / (1 + o*rate)
+    #   p = 1 - 1 / (1 + o*rate)
+    #   r = rate * (1-p) / p
+    q = (1 + overdispersion * rate).reciprocal()
+    p = 1 - q
+    r = rate * q / p
+    return dist.NegativeBinomial(r, p)
+
+
+def RelaxedPoisson(rate, overdispersion=0):
+    # Overdispersed Poisson
+    #   mean = rate
+    #   variance = rate * (1 + overdispersion * rate)
     # LogNormal(m,s)
     #   mean = exp(m + s**2/2)
     #   variance = (exp(s**2) - 1) exp(2*m + s**2)
     # Solving for (m,s) given rate:
-    #   m + s**2/2 = log(rate) = 2*m + s**2 + log(exp(s*2) - 1)
-    # ==> log(rate) = -log(exp(s**2) - 1)
-    # ==> 1/rate = exp(s**2) - 1
-    # ==> s = sqrt(log(1 + 1/rate))
+    #   m + s**2/2 = log(rate)
+    #   2*m + s**2 + log(exp(s**2) - 1) = log(rate) + log1p(o * rate)
+    # ==> log(rate) = log1p(o * rate) - log(exp(s**2) - 1)
+    # ==> (1 + o*rate) / rate = exp(s**2) - 1
+    # ==> s**2 = log(1 + (1 + o*rate) / rate) = log(1 + (1/rate + o))
     # ==> m = log(rate) - s**2/2
-    s2 = rate.reciprocal().log1p()
+    s2 = rate.reciprocal().add(overdispersion).log1p()
     m = rate.log() - s2 / 2
     s = s2.sqrt()
     return dist.LogNormal(m, s)
@@ -128,31 +147,42 @@ class TimeSpaceStrainModel(nn.Module):
 
     def model(self):
         T = self.num_time_steps
+        R = self.num_regions
+        S = self.num_strains
         P = self.num_transit_covariates
         time_plate = pyro.plate("time", T, dim=-3)
         step_plate = pyro.plate("step", T - 1, dim=-3)
-        region_plate = pyro.plate("region", T, dim=-2)
-        strain_plate = pyro.plate("strain", T, dim=-1)
+        region_plate = pyro.plate("region", R, dim=-2)
+        strain_plate = pyro.plate("strain", S, dim=-1)
 
-        # Sample case counting parameters, factored over time x region.
+        # Sample confirmed case response rate parameters.
+        # This factorizes over a time-dependent factor
         with time_plate:
             case_rate_time = pyro.sample("case_rate_time", dist.Beta(1, 2))
+        # and a region-dependent factor.
         with region_plate:
             case_rate_region = pyro.sample("case_rate_region", dist.Beta(1, 2))
         case_rate = case_rate_time * case_rate_region
 
         # Sample local spreading dynamics.
-        # TODO model spatial structure, say hierarchically.
+        # This factorizes into a global factor R0,
         R0 = pyro.sample("R0", dist.LogNormal(0, 1))
-        R_scale = pyro.sample("R_scale", dist.LogNormal(0, 1))
-        R_drift_scale = pyro.sample("R_drift_scale", dist.LogNormal(-2, 2))
+        # a strain-dependent factor Rs,
+        Rs_scale = pyro.sample("Rs_scale", dist.LogNormal(-2, 2))
+        with strain_plate:
+            Rs = pyro.sample("Rs", dist.LogNormal(1, Rs_scale))
+        # and a time-region dependent factor Rtr
+        Rtr_scale = pyro.sample("Rtr_scale", dist.LogNormal(-2, 2))
         with time_plate, region_plate:
-            Rt = pyro.sample("Rt", dist.LogNormal(R0, R_scale))
+            Rtr = pyro.sample("Rtr", dist.LogNormal(1, Rtr_scale))
+        # that varies slowly in time via a log-Brownian motion.
+        Rtr_drift_scale = pyro.sample("Rtr_drift_scale", dist.LogNormal(-2, 2))
         with step_plate, region_plate:
-            pyro.sample("R_drift", dist.LogNormal(0, R_drift_scale),
-                        obs=Rt[1:] / Rt[:-1])
+            pyro.sample("Rtr_drift", dist.LogNormal(0, Rtr_drift_scale),
+                        obs=Rtr[1:] / Rtr[:-1])
+        Rtrs = R0 * Rs * Rtr
 
-        # Sample inter-region spreading dynamics.
+        # Sample inter-region spreading dynamics coefficients.
         transit_rate = pyro.sample("transit_rate",
                                    dist.Exponential(1).expand(P).to_event(1))
 
@@ -165,38 +195,44 @@ class TimeSpaceStrainModel(nn.Module):
             strain_rate = pyro.sample("strain_rate",
                                       dist.Dirichlet(concentration))
 
-        # Sample infections as a factor graph.
+        # Sample the number of infections in each (time,region,strain) bucket.
+        # We express this as a factor graph
         with time_plate, region_plate, strain_plate:
             infections = pyro.sample(
                 "infections",
-                dist.ImproperUniform(constraints.positive, (), ()),
-            )
+                dist.ImproperUniform(constraints.positive, (T, R, S), ()))
+        # with linear dynamics that factorizes into many parts.
+        infection_od = pyro.sample("infection_od", dist.Beta(1, 3))
         with step_plate, region_plate, strain_plate:
-            pred = einsum(
-                "trs,tr,trRp,p,sS->tRS",
-                infections[:-1],
-                Rt[:-1],
-                self.transit_data[:-1],
-                transit_rate,
-                strain_rate,
-            )
-            pyro.sample("infections_step", MomentMatchedPoisson(pred),
-                        obs=infections[1:])
+            prev_infections = infections[:-1]
+            curr_infections = infections[1:]
+            pred_infections = einsum("trs,tr,trRp,p,sS->tRS",
+                                     prev_infections,
+                                     Rtrs[:-1],
+                                     self.transit_data[:-1],
+                                     transit_rate,
+                                     strain_rate)
+            pyro.sample("infections_step",
+                        RelaxedPoisson(pred_infections, overdispersion=infection_od),
+                        obs=curr_infections)
 
         # The remainder of the model concerns time-region local observations.
+        # The case counts and death counts are missing strain information.
         infections_sum = infections.sum(-1, True)
         strain_probs = (infections / infections_sum).unsqueeze(-2)
+        case_od = pyro.sample("case_od", dist.Beta(1, 3))
+        death_od = pyro.sample("death_od", dist.Beta(1, 3))
         with time_plate, region_plate:
             # Condition on case counts, marginalized over strains.
-            # TODO use overdispersed distribution.
             pyro.sample("case_obs",
-                        dist.Poission(infections_sum * case_rate),
+                        OverdispersedPoisson(infections_sum * case_rate,
+                                             overdispersion=case_od),
                         obs=self.case_data)
 
             # Condition on death counts, marginalized over strains.
-            # TODO use overdispersed distribution.
             pyro.sample("death_obs",
-                        dist.Poission(infections_sum * self.death_rate),
+                        OverdispersedPoisson(infections_sum * self.death_rate,
+                                             overdispersion=death_od),
                         obs=self.death_data)
 
             # Condition on strain counts.
