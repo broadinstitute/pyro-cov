@@ -14,7 +14,6 @@ from pyro.infer import SVI, JitTrace_ELBO, Trace_ELBO
 from pyro.infer.autoguide import AutoLowRankMultivariateNormal, AutoNormal
 from pyro.infer.reparam import HaarReparam
 from pyro.optim import ClippedAdam
-from torch.distributions import constraints
 
 logger = logging.getLogger(__name__)
 
@@ -99,11 +98,11 @@ class TimeSpaceStrainModel(nn.Module):
     :param Tensor sample_matrix: A projection matrix of shape ``(Rs,R)`` whose
         ``(c,f)`` entry is 1 iff fine region ``f`` is included in coarse
         sampling region ``c``.
-    :param Tensor strain_distance: An ``(S,S)``-shaped array of
-    genetic
-        distances between each pair of ``S``-many strains. This could be
-        constructed e.g. by estimating a coarse phylogeny among strains and
-        measuring the edge distance between each pair of strains.
+    :param Tensor mutation_matrix: An ``(S,S)``-shaped matrix of normalized
+        mutation rates among strains. This could be constructed e.g. by
+        estimating a coarse phylogeny among strains, and measuring the edge
+        distance between each pair of strains, and marginalizing over spanning
+        trees.
     """
     def __init__(
         self,
@@ -115,13 +114,13 @@ class TimeSpaceStrainModel(nn.Module):
         sample_region,
         sample_strain,
         sample_matrix,
-        strain_distance,
+        mutation_matrix,
         death_rate,
     ):
         T, R = case_data.shape
         assert death_data.shape == (T, R)
         P = transit_data.size(-1)
-        assert transit_data.shape == (T, R, R, P)
+        assert transit_data.shape == (R, R, P)
         assert isinstance(death_rate, float) and 0 < death_rate < 1
         assert transit_data.min() >= 0, "transit data must be nonnegative"
         N = len(sample_time)
@@ -131,9 +130,9 @@ class TimeSpaceStrainModel(nn.Module):
         S = 1 + sample_strain.max().item()
         Rc = 1 + sample_region.max().item()
         assert sample_matrix.shape == (Rc, R)
-        assert strain_distance.shape == (S, S)
+        assert mutation_matrix.shape == (S, S)
 
-        # Convert sparse sample data to dense multinomial observations.
+        logger.info("Converting sparse sample data to dense multinomial observations")
         strain_data = torch.zeros(T, Rc, S)
         i = sample_time.mul(Rc).add_(sample_region).mul_(S).add_(sample_strain)
         one = torch.ones(()).expand_as(i)
@@ -148,12 +147,14 @@ class TimeSpaceStrainModel(nn.Module):
         self.num_strains = S
         self.num_transit_covariates = P
 
+        super().__init__()
         self.register_buffer("case_data", case_data)
         self.register_buffer("death_data", death_data)
         self.register_buffer("transit_data", transit_data)
         self.register_buffer("strain_data", strain_data)
         self.register_buffer("strain_total", strain_total)
-        self.register_buffer("strain_distance", strain_distance)
+        self.register_buffer("sample_matrix", sample_matrix)
+        self.register_buffer("mutation_matrix", mutation_matrix)
         self.death_rate = death_rate
 
     def model(self):
@@ -197,34 +198,27 @@ class TimeSpaceStrainModel(nn.Module):
 
         # Sample inter-region spreading dynamics coefficients.
         transit_rate = pyro.sample("transit_rate",
-                                   dist.Exponential(1).expand(P).to_event(1))
+                                   dist.Exponential(1).expand([P]).to_event(1))
 
         # Sample mutation dynamics.
         mutation_rate = pyro.sample("mutation_rate", dist.LogNormal(-5, 5))
-        mutation_scale = pyro.sample("mutation_scale", dist.LogNormal(0, 1))
-        with strain_plate:
-            concentration = ((-mutation_rate) * self.strain_distance).exp()
-            concentration = concentration * mutation_scale
-            strain_rate = pyro.sample("strain_rate",
-                                      dist.Dirichlet(concentration))
+        mutation_matrix = torch.eye(S) + mutation_rate * self.mutation_matrix
 
         # Sample the number of infections in each (time,region,strain) bucket.
         # We express this as a factor graph
         with time_plate, region_plate, strain_plate:
-            infections = pyro.sample(
-                "infections",
-                dist.ImproperUniform(constraints.positive, (T, R, S), ()))
+            infections = pyro.sample("infections", dist.Exponential(1).mask(False))
         # with linear dynamics that factorizes into many parts.
         infection_od = pyro.sample("infection_od", dist.Beta(1, 3))
         with step_plate, region_plate, strain_plate:
             prev_infections = infections[:-1]
             curr_infections = infections[1:]
-            pred_infections = einsum("trs,tr,trRp,p,sS->tRS",
+            pred_infections = einsum("trs,trs,rRp,p,sS->tRS",
                                      prev_infections,
                                      Rtrs[:-1],
-                                     self.transit_data[:-1],
+                                     self.transit_data,
                                      transit_rate,
-                                     strain_rate)
+                                     mutation_matrix)
             pyro.sample("infections_step",
                         RelaxedPoisson(pred_infections, overdispersion=infection_od),
                         obs=curr_infections)
@@ -236,7 +230,7 @@ class TimeSpaceStrainModel(nn.Module):
             pyro.sample("case_obs",
                         OverdispersedPoisson(infections_sum * case_rate,
                                              overdispersion=case_od),
-                        obs=self.case_data)
+                        obs=self.case_data.unsqueeze(-1))
 
         # Condition on death counts, marginalized over strains.
         death_od = pyro.sample("death_od", dist.Beta(1, 3))
@@ -244,16 +238,17 @@ class TimeSpaceStrainModel(nn.Module):
             pyro.sample("death_obs",
                         OverdispersedPoisson(infections_sum * self.death_rate,
                                              overdispersion=death_od),
-                        obs=self.death_data)
+                        obs=self.death_data.unsqueeze(-1))
 
         # Condition on strain counts.
         # Note these are partitioned into coarse regions.
-        coarse_infections = einsum("trs,Rr->tRs", infections, self.sample_matrix)
-        strain_probs = (coarse_infections / coarse_infections.sum(-1, True)).unsqueeze(-2)
+        coarse_infections = einsum("trs,Rr->tRs", infections, self.sample_matrix) + 1e-6
+        strain_probs = coarse_infections / coarse_infections.sum(-1, True)
+        strain_total = self.strain_total.max().item()
         with time_plate, coarse_region_plate:
             pyro.sample("strains",
-                        dist.Multinomial(self.strain_total, strain_probs),
-                        obs=self.strain_obs.unsqueeze(-2))
+                        dist.Multinomial(strain_total, strain_probs.unsqueeze(-2)),
+                        obs=self.strain_data.unsqueeze(-2))
 
     def fit(
         self,
@@ -278,8 +273,11 @@ class TimeSpaceStrainModel(nn.Module):
         model = self.model
         if haar:
             def time_reparam(site):
-                if not site["is_observed"]:
-                    return HaarReparam(dim=-3 - site["fn"].event_dim)
+                if site["is_observed"]:
+                    return
+                if type(site["fn"]).__name__ == "_Subsample":
+                    return
+                return HaarReparam(dim=-3 - site["fn"].event_dim)
             model = poutine.reparam(model, time_reparam)
         if guide_rank == 0:
             guide = AutoNormal(model, init_scale=init_scale)
