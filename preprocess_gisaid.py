@@ -17,7 +17,7 @@ from pyrophylo.align import Differ
 from pyrophylo.cluster import SoftminimaxClustering
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(format="%(relativeCreated) 9d %(message)s", level=logging.DEBUG)
+logging.basicConfig(format="%(relativeCreated) 9d %(message)s", level=logging.INFO)
 
 
 def ln_sf(source, target):
