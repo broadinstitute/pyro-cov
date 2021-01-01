@@ -1,6 +1,7 @@
 import argparse
 import datetime
 import logging
+import math
 import os
 
 import pandas as pd
@@ -101,7 +102,62 @@ def gisaid_to_jhu_location(gisaid_columns, jhu_us_df, jhu_global_df):
     # FIXME we should use inclusion-exlcusion in case some GISAID regions are
     # sub-regions of other GISAID regions.
 
-    return sample_region, sample_matrix
+    return sample_region, sample_matrix, jhu_locations
+
+
+def extract_transit_features(args, us_df, global_df, region_tuples):
+    R = len(us_df) + len(global_df)
+    assert len(region_tuples) == R
+
+    # Extract geometric features.
+    lat = torch.cat([torch.from_numpy(us_df["Lat"].to_numpy()),
+                     torch.from_numpy(global_df["Lat"].to_numpy())]).float()
+    lon = torch.cat([torch.from_numpy(us_df["Long_"].to_numpy()),
+                     torch.from_numpy(global_df["Long"].to_numpy())]).float()
+    lat.mul_(math.pi / 180)
+    lon.mul_(math.pi / 180)
+    earth_radius_km = 6.371e6
+    xyz = torch.stack([lat.cos() * lon.cos(),
+                       lat.cos() * lon.sin(),
+                       lat.sin()], dim=-1).mul_(earth_radius_km)
+    distance_km = torch.cdist(xyz, xyz)
+    radii_km = torch.tensor([float(r) for r in args.radii_km.split(",")])
+    geometric_features = (distance_km[..., None] / radii_km).square().mul(-0.5).exp()
+
+    # Extract political features.
+    political_features = torch.tensor(R, R, 3)
+    for i, ti in enumerate(region_tuples):
+        for j, tj in enumerate(region_tuples[:i]):
+            if ti[:1] == tj[:1]:
+                continue
+            # Same country.
+            political_features[i, j, 0] = 1
+            political_features[j, i, 0] = 1
+            if ti[:2] != tj[:2]:
+                continue
+            # Same province/state.
+            political_features[i, j, 1] = 1
+            political_features[j, i, 1] = 1
+            if ti[:3] != tj[:3]:
+                continue
+            # Same city.
+            political_features[i, j, 2] = 1
+            political_features[j, i, 2] = 1
+
+    def cross_features(x, y):
+        cross = x[..., None] * y[..., None, :]
+        return cross.reshape(*cross.shape[:-2], -1)
+
+    features = torch.cat([
+        geometric_features,
+        political_features,
+        cross_features(geometric_features, political_features),
+    ], dim=-1)
+    assert features.shape[:2] == (R, R)
+    features.diagonal(0, 1).fill_(0)
+
+    logger.info(f"Created {features.size(-1)} transit features")
+    return features
 
 
 def read_csv(basename):
@@ -149,14 +205,18 @@ def main(args):
     strain_time.clamp_(min=0).floor_divide_(7)
 
     # Match geographic regions across JUH and GISAID data.
-    sample_region, sample_matrix = gisaid_to_jhu_location(
+    sample_region, sample_matrix, region_tuples = gisaid_to_jhu_location(
         columns, us_cases_df, global_cases_df)
+
+    # Extract transit fetures (geographic + political).
+    transit_data = extract_transit_features(
+        args, us_cases_df, global_cases_df, region_tuples)
 
     # Create a model.
     model = TimeSpaceStrainModel(
         case_data=case_data,
         death_data=death_data,
-        transit_data="TODO",
+        transit_data=transit_data,
         sample_time=strain_time,
         sample_region=sample_region,
         sample_strain=clustering["classes"],
@@ -181,6 +241,7 @@ if __name__ == "__main__":
     parser.add_argument("--learning-rate", default=0.02, type=float)
     parser.add_argument("--num-steps", default=1001, type=int)
     parser.add_argument("--log-every", default=100, type=int)
+    parser.add_argument("--radii-km", default="10,30,100,300,1000")
     parser.add_argument("-f", "--force", action="store_true")
     args = parser.parse_args()
     args.start_date = datetime.datetime.strptime(args.start_date, "%Y-%m-%d")
