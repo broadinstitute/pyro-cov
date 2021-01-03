@@ -118,10 +118,10 @@ class SoftminimaxClustering:
                 logger.info(f"temperature = {temperature:0.1f}")
             if temperature == 0:
                 logits = -distance[v1, v2]
-                tree = SpanningTree(logits).mode()
+                tree = SpanningTree(logits).mode
                 rate = self.mean.new_zeros(V, V)
                 rate[tree[:, 0], tree[:, 1]] = 1
             else:
                 logits = distance[v1, v2].mul_(-1 / temperature)
-                rate = SpanningTree(logits.double()).edge_mean().to(distance.dtype)
+                rate = SpanningTree(logits.double()).edge_mean.to(distance.dtype)
             return rate
