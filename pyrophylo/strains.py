@@ -11,7 +11,7 @@ import torch
 import torch.nn as nn
 from opt_einsum import contract as einsum
 from pyro.infer import SVI, JitTrace_ELBO, Trace_ELBO
-from pyro.infer.autoguide import AutoLowRankMultivariateNormal, AutoNormal
+from pyro.infer.autoguide import AutoLowRankMultivariateNormal, AutoNormal, init_to_sample
 from pyro.infer.reparam import HaarReparam
 from pyro.optim import ClippedAdam
 
@@ -219,6 +219,7 @@ class TimeSpaceStrainModel(nn.Module):
                                      self.transit_data,
                                      transit_rate,
                                      mutation_matrix)
+            pred_infections.data.clamp_(min=1e-3)
             pyro.sample("infections_step",
                         RelaxedPoisson(pred_infections, overdispersion=infection_od),
                         obs=curr_infections)
@@ -280,10 +281,17 @@ class TimeSpaceStrainModel(nn.Module):
                 return HaarReparam(dim=-3 - site["fn"].event_dim)
             model = poutine.reparam(model, time_reparam)
         if guide_rank == 0:
-            guide = AutoNormal(model, init_scale=init_scale)
+            guide = AutoNormal(
+                model,
+                init_scale=init_scale,
+                init_loc_fn=self._init_loc_fn,
+            )
         elif guide_rank is None or isinstance(guide_rank, int):
-            guide = AutoLowRankMultivariateNormal(model, init_scale=init_scale,
-                                                  rank=guide_rank)
+            guide = AutoLowRankMultivariateNormal(
+                model,
+                init_scale=init_scale,
+                rank=guide_rank,
+            )
         else:
             raise ValueError(f"Invalid guide_rank: {guide_rank}")
         Elbo = JitTrace_ELBO if jit else Trace_ELBO
@@ -298,11 +306,16 @@ class TimeSpaceStrainModel(nn.Module):
         for step in range(num_steps):
             loss = svi.step() / self.case_data.numel()
             losses.append(loss)
-            if log_every and step % log_every == 100:
-                logger.info("step {step: >5d} loss = {loss:0.4g}")
+            if log_every and step % log_every == 0:
+                logger.info(f"step {step: >5d} loss = {loss:0.4g}")
         elapsed = default_timer() - start_time
-        logger.info("SVI took {:0.1f} seconds, {:0.1f} step/sec"
-                    .format(elapsed, (1 + num_steps) / elapsed))
+        logger.info(f"SVI took {elapsed:0.1f} seconds, "
+                    f"{(1 + num_steps) / elapsed:0.1f} step/sec")
 
         self.guide = guide
         return losses
+
+    def _init_loc_fn(self, site):
+        if site["name"] == "infections":
+            return torch.ones(site["fn"].shape())
+        return init_to_sample(site)
