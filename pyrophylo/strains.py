@@ -273,13 +273,7 @@ class TimeSpaceStrainModel(nn.Module):
         logger.info("Running inference...")
         model = self.model
         if haar:
-            def time_reparam(site):
-                if site["is_observed"]:
-                    return
-                if type(site["fn"]).__name__ == "_Subsample":
-                    return
-                return HaarReparam(dim=-3 - site["fn"].event_dim)
-            model = poutine.reparam(model, time_reparam)
+            model = poutine.reparam(model, self._haar_reparam)
         if guide_rank == 0:
             guide = AutoNormal(
                 model,
@@ -315,7 +309,17 @@ class TimeSpaceStrainModel(nn.Module):
         self.guide = guide
         return losses
 
-    def _init_loc_fn(self, site):
+    @staticmethod
+    def _init_loc_fn(site):
         if site["name"] == "infections":
             return torch.ones(site["fn"].shape())
         return init_to_sample(site)
+
+    @staticmethod
+    def _haar_reparam(site):
+        if site["is_observed"]:
+            return
+        for f in site["cond_indep_stack"]:
+            if f.name == "time":
+                return HaarReparam(dim=f.dim - site["fn"].event_dim,
+                                   experimental_allow_batch=True)
