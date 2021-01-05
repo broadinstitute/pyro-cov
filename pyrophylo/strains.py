@@ -124,6 +124,7 @@ class TimeSpaceStrainModel(nn.Module):
         assert isinstance(death_rate, float) and 0 < death_rate < 1
         assert transit_data.min() >= 0, "transit data must be nonnegative"
         N = len(sample_time)
+        assert sample_time.max().item() <= T, "GISAID data is too far ahead of JHU data"
         assert sample_time.shape == (N,)
         assert sample_region.shape == (N,)
         assert sample_strain.shape == (N,)
@@ -134,7 +135,8 @@ class TimeSpaceStrainModel(nn.Module):
 
         logger.info("Aggregating sparse samples into multinomial observations")
         strain_data = torch.zeros(T, Rc, S)
-        i = sample_time.mul(Rc).add_(sample_region).mul_(S).add_(sample_strain)
+        i = (sample_time.clamp(max=T - 1).mul_(Rc).add_(sample_region)
+                                         .mul_(S).add_(sample_strain))
         one = torch.ones(()).expand_as(i)
         strain_data.reshape(-1).scatter_add_(0, i, one)
         strain_total = strain_data.sum(-1)
@@ -164,7 +166,6 @@ class TimeSpaceStrainModel(nn.Module):
     def model(self):
         T = self.num_time_steps
         R = self.num_regions
-        Rc = self.num_coarse_regions
         S = self.num_strains
         P = self.num_transit_covariates
         time_plate = pyro.plate("time", T, dim=-3)

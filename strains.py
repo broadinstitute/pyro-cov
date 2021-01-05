@@ -234,14 +234,19 @@ def main(args):
         mutation_matrix=clustering["transition_matrix"],
         death_rate=args.death_rate,
     )
+    if args.cuda:
+        torch.set_default_tensor_type(torch.cuda.FloatTensor)
+        model.cuda()
 
     # Train.
     model.fit(
         haar=args.haar,
+        guide_rank=args.guide_rank,
         learning_rate=args.learning_rate,
+        learning_rate_decay=args.learning_rate_decay,
         num_steps=args.num_steps,
-        log_every=args.log_every,
         jit=args.jit,
+        log_every=args.log_every,
     )
     torch.save(model, args.model_file_out)
 
@@ -252,11 +257,14 @@ if __name__ == "__main__":
     parser.add_argument("--start-date", default="2019-12-01")
     parser.add_argument("--radii-km", default="10,30,100,300,1000")
     parser.add_argument("--death-rate", default=0.03, type=float)
+    parser.add_argument("-r", "--guide-rank", default=0, type=int)
     parser.add_argument("--haar", default=True, action="store_true")
     parser.add_argument("--no-haar", action="store_false", dest="haar")
-    parser.add_argument("--learning-rate", default=0.05, type=float)
-    parser.add_argument("--num-steps", default=1001, type=int)
+    parser.add_argument("-lr", "--learning-rate", default=0.01, type=float)
+    parser.add_argument("-lrd", "--learning-rate-decay", default=0.1, type=float)
+    parser.add_argument("-n", "--num-steps", default=2001, type=int)
     parser.add_argument("--jit", action="store_true")
+    parser.add_argument("--cuda", action="store_true")
     parser.add_argument("-l", "--log-every", default=1, type=int)
     parser.add_argument("-f", "--force", action="store_true")
     args = parser.parse_args()

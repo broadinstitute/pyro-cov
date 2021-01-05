@@ -52,6 +52,8 @@ def parallel_map(fn, args):
 def update_shards(args):
     shard_names = [f"results/gisaid.{i:03d}-of-{args.num_shards:03d}.json"
                    for i in range(args.num_shards)]
+    if not os.path.exists("results"):
+        os.makedirs("results")
     if args.force or not all(map(os.path.exists, shard_names)):
         args.force = True
         infile = os.path.expanduser("~/data/gisaid/provision.json")
