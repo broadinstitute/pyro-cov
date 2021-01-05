@@ -43,6 +43,29 @@ GISAID_TO_JHU = {
     "usa": ("us",),
     "viet nam": ("vietnam",),
 }
+JHU_TO_UN = {
+    "bolivia": "bolivia (plurinational state of)",
+    "brunei": "brunei darussalam",
+    "burma": "myanmar",
+    "congo (brazzaville)": "congo",
+    "congo (kinshasa)": "democratic republic of the congo",
+    "cote d'ivoire": "côte d'ivoire",
+    "diamond princess": None,  # cruise ship
+    "iran": "iran (islamic republic of)",
+    "korea, south": "republic of korea",
+    "kosovo": "serbia",
+    "laos": "lao people's democratic republic",
+    "moldova": "republic of moldova",
+    "ms zaandam": None,  # cruise ship
+    "russia": "russian federation",
+    "syria": "syrian arab republic",
+    "taiwan*": "china, taiwan province of china",
+    "tanzania": "united republic of tanzania",
+    "us": "united states of america",
+    "venezuela": "venezuela (bolivarian republic of)",
+    "vietnam": "viet nam",
+    "west bank and gaza": "israel",
+}
 
 
 def gisaid_to_jhu_location(gisaid_columns, jhu_us_df, jhu_global_df):
@@ -172,7 +195,9 @@ def read_csv(basename):
 
 
 def to_torch(df, *, columns):
-    df = df[df.columns[columns]]
+    if isinstance(columns, slice):
+        columns = df.columns[columns]
+    df = df[columns]
     return torch.from_numpy(df.to_numpy()).float()
 
 
@@ -193,6 +218,27 @@ def main(args):
                             to_torch(global_deaths_df, columns=slice(4, None))]).T
     assert case_data.shape == death_data.shape
     start_date = parse_date(us_cases_df.columns[11])
+
+    # Load population data from JHU and UN. These are used as upper bounds only.
+    population = None
+    if args.population_file_in:
+        us_pop = to_torch(us_deaths_df, columns="Population")
+        df = pd.read_csv(args.population_file_in, header=0)
+        df = df[df["Time"] == 2020]
+        df = df[df["Variant"] == "High"]
+        pop = {k.lower(): v * 1000
+               for k, v in zip(df["Location"].to_list(), df["PopTotal"].to_list())}
+        global_pop = []
+        for name in global_cases_df["Country/Region"].tolist():
+            name = name.lower()
+            name = JHU_TO_UN.get(name, name)
+            if name is None:  # cruise ship
+                global_pop.append(10000.)
+            else:
+                global_pop.append(float(pop[name]))
+        global_pop = torch.tensor(global_pop)
+        population = torch.cat([us_pop, global_pop])
+        population.clamp_(min=10000.)
 
     # Convert from cumulative to density.
     case_data[1:] -= case_data[:-1].clone()
@@ -224,6 +270,7 @@ def main(args):
 
     # Create a model.
     model = TimeSpaceStrainModel(
+        population=population,
         case_data=case_data,
         death_data=death_data,
         transit_data=transit_data,
@@ -267,6 +314,10 @@ if __name__ == "__main__":
     parser.add_argument("--cuda", action="store_true")
     parser.add_argument("-l", "--log-every", default=1, type=int)
     parser.add_argument("-f", "--force", action="store_true")
+    parser.add_argument("--population-file-in")
+    # Ignore population for now.
+    # parser.add_argument("--population-file-in",
+    #                     default="data/WPP2019_TotalPopulationBySex.csv")
     args = parser.parse_args()
     args.start_date = datetime.datetime.strptime(args.start_date, "%Y-%m-%d")
 

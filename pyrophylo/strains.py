@@ -10,10 +10,12 @@ import pyro.poutine as poutine
 import torch
 import torch.nn as nn
 from opt_einsum import contract as einsum
+from pyro.distributions.transforms import HaarTransform
 from pyro.infer import SVI, JitTrace_ELBO, Trace_ELBO
-from pyro.infer.autoguide import AutoLowRankMultivariateNormal, AutoNormal, init_to_sample
+from pyro.infer.autoguide import AutoLowRankMultivariateNormal, AutoNormal, init_to_median
 from pyro.infer.reparam import HaarReparam
 from pyro.optim import ClippedAdam
+from torch.distributions import biject_to, constraints
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +105,8 @@ class TimeSpaceStrainModel(nn.Module):
         estimating a coarse phylogeny among strains, and measuring the edge
         distance between each pair of strains, and marginalizing over spanning
         trees.
+    :param Tensor population: An optional ``(R,)``-shaped vector upper bounds
+        on the population of each region.
     """
     def __init__(
         self,
@@ -116,9 +120,12 @@ class TimeSpaceStrainModel(nn.Module):
         sample_matrix,
         mutation_matrix,
         death_rate,
+        population=None,
     ):
         T, R = case_data.shape
         assert death_data.shape == (T, R)
+        if population is not None:
+            assert population.shape == (R,)
         P = transit_data.size(-1)
         assert transit_data.shape == (R, R, P)
         assert isinstance(death_rate, float) and 0 < death_rate < 1
@@ -153,6 +160,10 @@ class TimeSpaceStrainModel(nn.Module):
         self.num_transit_covariates = P
 
         super().__init__()
+        if population is None:
+            self.population = None
+        else:
+            self.register_buffer("population", population[:, None])
         self.register_buffer("case_data", case_data)
         self.register_buffer("death_data", death_data)
         self.register_buffer("transit_data", transit_data)
@@ -211,7 +222,9 @@ class TimeSpaceStrainModel(nn.Module):
         # Sample the number of infections in each (time,region,strain) bucket.
         # We express this as a factor graph
         with time_plate, region_plate, strain_plate:
-            infections = pyro.sample("infections", dist.Exponential(1).mask(False))
+            uniform = (dist.Exponential(1.) if self.population is None else
+                       dist.Uniform(0., self.population))
+            infections = pyro.sample("infections", uniform.mask(False))
         # with linear dynamics that factorizes into many parts.
         infection_od = pyro.sample("infection_od", dist.Beta(1, 3))
         with step_plate, region_plate, strain_plate:
@@ -230,6 +243,9 @@ class TimeSpaceStrainModel(nn.Module):
 
         # Condition on case counts, marginalized over strains.
         infections_sum = infections.sum(-1, True)
+        if self.population is not None:
+            # Soft bound infections within each region to population bound.
+            infections_sum = infections_sum.div(-self.population).expm1().mul(-self.population)
         case_od = pyro.sample("case_od", dist.Beta(1, 3))
         with time_plate, region_plate:
             pyro.sample("case_obs",
@@ -312,11 +328,24 @@ class TimeSpaceStrainModel(nn.Module):
         self.guide = guide
         return losses
 
-    @staticmethod
-    def _init_loc_fn(site):
+    def _init_loc_fn(self, site):
         if site["name"] == "infections":
             return torch.ones(site["fn"].shape())
-        return init_to_sample(site)
+        if site["name"] == "infections_haar":
+            support = (constraints.positive if self.population is None else
+                       constraints.interval(0, self.population))
+            x = torch.ones(site["fn"].shape())
+            x = biject_to(support).inv(x)
+            x = HaarTransform(dim=-3 - site["fn"].event_dim, flip=True)(x)
+            return x
+        if site["name"].endswith("_od"):
+            return torch.full(site["fn"].shape(), 0.5)
+        try:
+            return site["fn"].mean
+        except (AttributeError, NotImplementedError):
+            pass
+        logger.info("Randomly initializing {}".format(site["name"]))
+        return init_to_median(site)
 
     @staticmethod
     def _haar_reparam(site):
@@ -324,5 +353,5 @@ class TimeSpaceStrainModel(nn.Module):
             return
         for f in site["cond_indep_stack"]:
             if f.name == "time":
-                return HaarReparam(dim=f.dim - site["fn"].event_dim,
+                return HaarReparam(dim=f.dim - site["fn"].event_dim, flip=True,
                                    experimental_allow_batch=True)
