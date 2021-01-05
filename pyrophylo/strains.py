@@ -132,12 +132,15 @@ class TimeSpaceStrainModel(nn.Module):
         assert sample_matrix.shape == (Rc, R)
         assert mutation_matrix.shape == (S, S)
 
-        logger.info("Converting sparse sample data to dense multinomial observations")
+        logger.info("Aggregating sparse samples into multinomial observations")
         strain_data = torch.zeros(T, Rc, S)
         i = sample_time.mul(Rc).add_(sample_region).mul_(S).add_(sample_strain)
         one = torch.ones(()).expand_as(i)
         strain_data.reshape(-1).scatter_add_(0, i, one)
         strain_total = strain_data.sum(-1)
+        strain_mask = (strain_total > 0)
+        strain_data = strain_data[strain_mask]
+        strain_total = strain_total[strain_mask]
 
         logger.info(f"Creating model over {T} time steps x {R} regions x {S} strains "
                     f"= {T * R * S} buckets")
@@ -151,6 +154,7 @@ class TimeSpaceStrainModel(nn.Module):
         self.register_buffer("case_data", case_data)
         self.register_buffer("death_data", death_data)
         self.register_buffer("transit_data", transit_data)
+        self.register_buffer("strain_mask", strain_mask)
         self.register_buffer("strain_data", strain_data)
         self.register_buffer("strain_total", strain_total)
         self.register_buffer("sample_matrix", sample_matrix)
@@ -166,7 +170,6 @@ class TimeSpaceStrainModel(nn.Module):
         time_plate = pyro.plate("time", T, dim=-3)
         step_plate = pyro.plate("step", T - 1, dim=-3)
         region_plate = pyro.plate("region", R, dim=-2)
-        coarse_region_plate = pyro.plate("coarse_region", Rc, dim=-2)
         strain_plate = pyro.plate("strain", S, dim=-1)
 
         # Sample confirmed case response rate parameters.
@@ -245,11 +248,10 @@ class TimeSpaceStrainModel(nn.Module):
         # Note these are partitioned into coarse regions.
         coarse_infections = einsum("trs,Rr->tRs", infections, self.sample_matrix) + 1e-6
         strain_probs = coarse_infections / coarse_infections.sum(-1, True)
-        strain_total = self.strain_total.max().item()
-        with time_plate, coarse_region_plate:
-            pyro.sample("strains",
-                        dist.Multinomial(strain_total, strain_probs.unsqueeze(-2)),
-                        obs=self.strain_data.unsqueeze(-2))
+        pyro.sample("strains",
+                    dist.Multinomial(self.strain_total.max().item(),
+                                     strain_probs[self.strain_mask]).to_event(1),
+                    obs=self.strain_data)
 
     def fit(
         self,

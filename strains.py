@@ -241,6 +241,7 @@ def main(args):
         learning_rate=args.learning_rate,
         num_steps=args.num_steps,
         log_every=args.log_every,
+        jit=args.jit,
     )
     torch.save(model, args.model_file_out)
 
@@ -255,6 +256,7 @@ if __name__ == "__main__":
     parser.add_argument("--no-haar", action="store_false", dest="haar")
     parser.add_argument("--learning-rate", default=0.05, type=float)
     parser.add_argument("--num-steps", default=1001, type=int)
+    parser.add_argument("--jit", action="store_true")
     parser.add_argument("-l", "--log-every", default=1, type=int)
     parser.add_argument("-f", "--force", action="store_true")
     args = parser.parse_args()
