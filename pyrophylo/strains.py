@@ -20,7 +20,7 @@ from torch.distributions import biject_to, constraints
 logger = logging.getLogger(__name__)
 
 
-def OverdispersedPoisson(rate, overdispersion=0):
+def OverdispersedPoisson(rate, overdispersion=0, *, gamma_poisson=False):
     if isinstance(overdispersion, (int, float)) and overdispersion == 0:
         return dist.Poisson(rate)
     # Negative Binomial
@@ -33,7 +33,10 @@ def OverdispersedPoisson(rate, overdispersion=0):
     q = (1 + overdispersion * rate).reciprocal()
     p = 1 - q
     r = rate * q / p
-    return dist.NegativeBinomial(r, p)
+    if gamma_poisson:
+        return dist.GammaPoisson(r, q / p)
+    else:
+        return dist.NegativeBinomial(r, p)
 
 
 def RelaxedPoisson(rate, overdispersion=0):
