@@ -122,6 +122,7 @@ class TimeSpaceStrainModel(nn.Module):
         mutation_matrix,
         death_rate,
         population=None,
+        normal_approx=False,
     ):
         T, R = case_data.shape
         assert death_data.shape == (T, R)
@@ -140,6 +141,8 @@ class TimeSpaceStrainModel(nn.Module):
         Rc = 1 + sample_region.max().item()
         assert sample_matrix.shape == (Rc, R)
         assert mutation_matrix.shape == (S, S)
+        assert isinstance(normal_approx, bool)
+        self.normal_approx = normal_approx
 
         logger.info("Aggregating sparse samples into multinomial observations")
         strain_data = torch.zeros(T, Rc, S)
@@ -252,18 +255,30 @@ class TimeSpaceStrainModel(nn.Module):
             infections_sum = infections_sum.div(-self.population).expm1().mul(-self.population)
         case_od = pyro.sample("case_od", dist.Beta(1, 3))
         with time_plate, region_plate:
-            pyro.sample("case_obs",
-                        OverdispersedPoisson(infections_sum * case_rate,
-                                             overdispersion=case_od),
-                        obs=self.case_data.unsqueeze(-1))
+            if self.normal_approx:
+                rate = infections * case_rate
+                pyro.sample("case_obs",
+                            dist.Normal(rate.log1p(), (1 / rate + case_od).sqrt()),
+                            obs=self.case_data.log1p().unsqueeze(-1))
+            else:
+                pyro.sample("case_obs",
+                            OverdispersedPoisson(infections_sum * case_rate,
+                                                 overdispersion=case_od),
+                            obs=self.case_data.unsqueeze(-1))
 
         # Condition on death counts, marginalized over strains.
         death_od = pyro.sample("death_od", dist.Beta(1, 3))
         with time_plate, region_plate:
-            pyro.sample("death_obs",
-                        OverdispersedPoisson(infections_sum * self.death_rate,
-                                             overdispersion=death_od),
-                        obs=self.death_data.unsqueeze(-1))
+            if self.normal_approx:
+                rate = infections * self.death_rate
+                pyro.sample("death_obs",
+                            dist.Normal(rate.log1p(), (1 / rate + death_od).sqrt()),
+                            obs=self.death_data.log1p().unsqueeze(-1))
+            else:
+                pyro.sample("death_obs",
+                            OverdispersedPoisson(infections_sum * self.death_rate,
+                                                 overdispersion=death_od),
+                            obs=self.death_data.unsqueeze(-1))
 
         # Condition on strain counts.
         # Note these are partitioned into coarse regions.

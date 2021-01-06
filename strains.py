@@ -304,6 +304,7 @@ if __name__ == "__main__":
     parser.add_argument("--start-date", default="2019-12-01")
     parser.add_argument("--radii-km", default="10,30,100,300,1000")
     parser.add_argument("--death-rate", default=0.03, type=float)
+    parser.add_argument("--normal-approx", action="store_true")
     parser.add_argument("-r", "--guide-rank", default=0, type=int)
     parser.add_argument("--haar", default=True, action="store_true")
     parser.add_argument("--no-haar", action="store_false", dest="haar")
