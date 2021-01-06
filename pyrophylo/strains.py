@@ -138,10 +138,12 @@ class TimeSpaceStrainModel(nn.Module):
         assert sample_time.shape == (N,)
         assert sample_region.shape == (N,)
         assert sample_strain.shape == (N,)
-        S = 1 + sample_strain.max().item()
-        Rc = 1 + sample_region.max().item()
+        Rc = sample_matrix.size(0)
         assert sample_matrix.shape == (Rc, R)
+        assert sample_region.max().item() < Rc
+        S = mutation_matrix.size(0)
         assert mutation_matrix.shape == (S, S)
+        assert sample_strain.max().item() < S
         assert isinstance(normal_approx, bool)
         self.normal_approx = normal_approx
 
@@ -222,10 +224,13 @@ class TimeSpaceStrainModel(nn.Module):
         # Sample inter-region spreading dynamics coefficients.
         transit_rate = pyro.sample("transit_rate",
                                    dist.Exponential(1).expand([P]).to_event(1))
+        transit_matrix = torch.eye(R) + self.transit_data @ transit_rate
+        transit_matrix = transit_matrix / transit_matrix.sum(-1, True)
 
         # Sample mutation dynamics.
         mutation_rate = pyro.sample("mutation_rate", dist.LogNormal(-5, 5))
-        mutation_matrix = torch.eye(S) + mutation_rate * self.mutation_matrix
+        mutation_matrix = torch.eye(S) + self.mutation_matrix * mutation_rate
+        mutation_matrix = mutation_matrix / mutation_matrix.sum(-1, True)
 
         # Sample the number of infections in each (time,region,strain) bucket.
         # We express this as a factor graph
@@ -238,11 +243,10 @@ class TimeSpaceStrainModel(nn.Module):
         with step_plate, region_plate, strain_plate:
             prev_infections = infections[:-1]
             curr_infections = infections[1:]
-            pred_infections = einsum("trs,trs,rRp,p,sS->tRS",
+            pred_infections = einsum("trs,trs,rR,sS->tRS",
                                      prev_infections,
                                      Rtrs[:-1],
-                                     self.transit_data,
-                                     transit_rate,
+                                     transit_matrix,
                                      mutation_matrix)
             pred_infections.data.clamp_(min=1e-3)
             pyro.sample("infections_step",
@@ -352,8 +356,8 @@ class TimeSpaceStrainModel(nn.Module):
     def _init_loc_fn(self, site):
         name = site["name"]
 
+        # Heuristic initialization.
         if name.startswith("infections"):
-            # Heuristically initialize infection counts.
             x = (self.case_data + self.death_data)[..., None] * self.strain_mean
             x = x.clamp_(min=1).expand(site["fn"].shape())
             if name == "infections":
@@ -364,13 +368,20 @@ class TimeSpaceStrainModel(nn.Module):
                     x = t(x)
                 return x
             raise NotImplementedError(f"Unknown variable: {name}")
-
+        if name == "transit_rate":
+            return torch.full(site["fn"].shape(), 1e-3)
+        if name == "mutation_rate":
+            return torch.full(site["fn"].shape(), 1e-3)
         if name.endswith("_od"):
             return torch.full(site["fn"].shape(), 0.5)
+
+        # Deterministic initialization.
         try:
             return site["fn"].mean
         except (AttributeError, NotImplementedError):
             pass
+
+        # Random low-variance initialization.
         logger.info(f"Randomly initializing {name}")
         return init_to_median(site)
 
@@ -399,3 +410,113 @@ class TimeSpaceStrainModel(nn.Module):
             if site["type"] == "sample":
                 result[name] = site["value"].detach()
         return result
+
+
+@torch.no_grad()
+def simulate(
+    num_time_steps,
+    num_regions,
+    num_strains,
+    *,
+    num_transit_covariates=4,
+    overdispersion=0.5,
+    transit_rate=1e-2,
+    mutation_rate=1e-2,
+    initial_infected=10,
+    min_total_infected=1000,
+    max_total_infected=10000,
+    case_rate=0.25,
+    death_rate=0.03,
+    prelude=10,
+):
+    """
+    Generate a dataset for testing :class:`TimeSpaceStrainModel`.
+    """
+    assert 0 < overdispersion < 1
+    assert min_total_infected < max_total_infected
+    T = num_time_steps
+    R = num_regions
+    S = num_strains
+    P = num_transit_covariates
+
+    # Sample a coarse phylogeny.
+    mutation_matrix = torch.zeros(S, S)
+    for i in range(1, S):
+        j = torch.ones(i).multinomial(1).item()
+        mutation_matrix[i, j] = mutation_matrix[j, i] = 1
+    mutation_matrix = torch.eye(S) + mutation_matrix * mutation_rate
+    mutation_matrix /= mutation_matrix.sum(-1, True)
+
+    # Generate random transit features.
+    transit_data = torch.rand(R, R, P).pow(2)
+    transit_rate = torch.randn(P).exp() * transit_rate
+    transit_matrix = torch.eye(R) + transit_data @ transit_rate
+    transit_matrix /= transit_matrix.sum(-1, True)
+
+    # Sequentially simulate infections.
+    reproduction_number = torch.tensor((min_total_infected / initial_infected) ** (1 / T))
+    infected = torch.zeros(prelude + T, R, S)
+    infected[0, 0, 0] = initial_infected
+    success = False
+    for attempt in range(100):
+        for t in range(1, prelude + T):
+            rate = einsum("rs,,rR,sS->RS",
+                          infected[t - 1],
+                          reproduction_number,
+                          transit_matrix,
+                          mutation_matrix)
+            rate.clamp_(min=1e-3)
+            infected[t] = OverdispersedPoisson(rate, overdispersion).sample()
+        total = int(infected[prelude:].sum())
+        logger.info(f"Sampled {total} infections with R0 = {reproduction_number:0.2f}")
+        if total < min_total_infected:
+            reproduction_number *= 2 ** (1 / T)
+        elif total > max_total_infected:
+            reproduction_number *= 0.5 ** (1 / T)
+        else:
+            success = True
+            break
+    if not success:
+        raise ValueError(f"Failed to generate between {min_total_infected} "
+                         f"and {max_total_infected} infections.")
+    infected = infected[prelude:].clone()
+    infected = infected.round()
+
+    # Simulate aggregate observations.
+    infected_sum = infected.sum(-1)
+    case_data = OverdispersedPoisson((infected_sum * case_rate).clamp_(min=1e-6),
+                                     overdispersion).sample()
+    death_data = OverdispersedPoisson((infected_sum * death_rate).clamp_(min=1e-6),
+                                      overdispersion).sample()
+    case_data = torch.min(case_data, infected_sum)
+    death_data = torch.min(death_data, infected_sum)
+
+    # Simulate genetic sequence data.
+    sequence_rate = torch.zeros(R).uniform_().pow(4)
+    sequence_count = dist.Binomial(case_data, sequence_rate).sample()
+    sample_time = []
+    sample_region = []
+    sample_strain = []
+    for t in range(T):
+        for r in range(R):
+            count = int(sequence_count[t, r])
+            if count > 0:
+                strain = infected[t, r].multinomial(count, replacement=True)
+                sample_strain.append(strain)
+                sample_time.append(torch.full_like(strain, t))
+                sample_region.append(torch.full_like(strain, r))
+    sample_time = torch.cat(sample_time)
+    sample_region = torch.cat(sample_region)
+    sample_strain = torch.cat(sample_strain)
+
+    return {
+        "case_data": case_data,
+        "death_data": death_data,
+        "transit_data": transit_data,
+        "sample_time": sample_time,
+        "sample_region": sample_region,
+        "sample_strain": sample_strain,
+        "sample_matrix": torch.eye(R),
+        "mutation_matrix": mutation_matrix,
+        "death_rate": death_rate,
+    }
