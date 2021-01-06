@@ -280,6 +280,7 @@ def main(args):
         sample_matrix=sample_matrix,
         mutation_matrix=clustering["transition_matrix"],
         death_rate=args.death_rate,
+        normal_approx=args.normal_approx,
     )
     if args.cuda:
         torch.set_default_tensor_type(torch.cuda.FloatTensor)
@@ -295,7 +296,10 @@ def main(args):
         jit=args.jit,
         log_every=args.log_every,
     )
-    torch.save(model, args.model_file_out)
+    torch.save({
+        "args": args,
+        "model": model,
+    }, args.model_file_out)
 
 
 if __name__ == "__main__":
