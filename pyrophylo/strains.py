@@ -14,6 +14,7 @@ from pyro.infer import SVI, JitTrace_ELBO, Trace_ELBO
 from pyro.infer.autoguide import AutoLowRankMultivariateNormal, AutoNormal, init_to_median
 from pyro.infer.reparam import HaarReparam
 from pyro.optim import ClippedAdam
+from pyro.poutine.util import prune_subsample_sites
 
 logger = logging.getLogger(__name__)
 
@@ -381,3 +382,20 @@ class TimeSpaceStrainModel(nn.Module):
             if f.name == "time":
                 return HaarReparam(dim=f.dim - site["fn"].event_dim, flip=True,
                                    experimental_allow_batch=True)
+
+    @torch.no_grad()
+    def median(self):
+        """
+        Predicts using variational median values for sampled latent variables.
+
+        :returns: A dict mapping sample site name to value.
+        :rtype: dict
+        """
+        result = self.guide.median()
+        with poutine.condition(data=result):
+            trace = poutine.trace(self.guide.model).get_trace()
+        trace = prune_subsample_sites(trace)
+        for name, site in trace.nodes.items():
+            if site["type"] == "sample":
+                result[name] = site["value"].detach()
+        return result

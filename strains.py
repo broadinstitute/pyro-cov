@@ -316,7 +316,9 @@ if __name__ == "__main__":
     parser.add_argument("-lrd", "--learning-rate-decay", default=0.1, type=float)
     parser.add_argument("-n", "--num-steps", default=2001, type=int)
     parser.add_argument("--jit", action="store_true")
-    parser.add_argument("--cuda", action="store_true")
+    parser.add_argument("--cuda", action="store_true",
+                        default=torch.cuda.is_available())
+    parser.add_argument("--cpu", dest="cuda", action="store_false")
     parser.add_argument("-l", "--log-every", default=1, type=int)
     parser.add_argument("-f", "--force", action="store_true")
     parser.add_argument("--population-file-in")
