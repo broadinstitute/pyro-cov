@@ -10,12 +10,10 @@ import pyro.poutine as poutine
 import torch
 import torch.nn as nn
 from opt_einsum import contract as einsum
-from pyro.distributions.transforms import HaarTransform
 from pyro.infer import SVI, JitTrace_ELBO, Trace_ELBO
 from pyro.infer.autoguide import AutoLowRankMultivariateNormal, AutoNormal, init_to_median
 from pyro.infer.reparam import HaarReparam
 from pyro.optim import ClippedAdam
-from torch.distributions import biject_to, constraints
 
 logger = logging.getLogger(__name__)
 
@@ -149,6 +147,8 @@ class TimeSpaceStrainModel(nn.Module):
                                          .mul_(S).add_(sample_strain))
         one = torch.ones(()).expand_as(i)
         strain_data.reshape(-1).scatter_add_(0, i, one)
+        strain_mean = strain_data.sum([0, 1])
+        strain_mean /= strain_mean.sum()
         strain_total = strain_data.sum(-1)
         strain_mask = (strain_total > 0)
         strain_data = strain_data[strain_mask]
@@ -173,6 +173,7 @@ class TimeSpaceStrainModel(nn.Module):
         self.register_buffer("strain_mask", strain_mask)
         self.register_buffer("strain_data", strain_data)
         self.register_buffer("strain_total", strain_total)
+        self.register_buffer("strain_mean", strain_mean)
         self.register_buffer("sample_matrix", sample_matrix)
         self.register_buffer("mutation_matrix", mutation_matrix)
         self.death_rate = death_rate
@@ -331,23 +332,30 @@ class TimeSpaceStrainModel(nn.Module):
         self.guide = guide
         return losses
 
+    @torch.no_grad()
     def _init_loc_fn(self, site):
-        if site["name"] == "infections":
-            return torch.ones(site["fn"].shape())
-        if site["name"] == "infections_haar":
-            support = (constraints.positive if self.population is None else
-                       constraints.interval(0, self.population))
-            x = torch.ones(site["fn"].shape())
-            x = biject_to(support).inv(x)
-            x = HaarTransform(dim=-3 - site["fn"].event_dim, flip=True)(x)
-            return x
-        if site["name"].endswith("_od"):
+        name = site["name"]
+
+        if name.startswith("infections"):
+            # Heuristically initialize infection counts.
+            x = (self.case_data + self.death_data)[..., None] * self.strain_mean
+            x = x.clamp_(min=1).expand(site["fn"].shape())
+            if name == "infections":
+                return x
+            if name == "infections_haar":
+                assert isinstance(site["fn"], dist.TransformedDistribution)
+                for t in site["fn"].transforms:
+                    x = t(x)
+                return x
+            raise NotImplementedError(f"Unknown variable: {name}")
+
+        if name.endswith("_od"):
             return torch.full(site["fn"].shape(), 0.5)
         try:
             return site["fn"].mean
         except (AttributeError, NotImplementedError):
             pass
-        logger.info("Randomly initializing {}".format(site["name"]))
+        logger.info(f"Randomly initializing {name}")
         return init_to_median(site)
 
     @staticmethod
