@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 def OverdispersedPoisson(rate, overdispersion=0, *, gamma_poisson=False):
+    rate = rate.clamp(min=1e-6)
     if isinstance(overdispersion, (int, float)) and overdispersion == 0:
         return dist.Poisson(rate)
     # Negative Binomial
@@ -465,7 +466,6 @@ def simulate(
                           reproduction_number,
                           transit_matrix,
                           mutation_matrix)
-            rate.clamp_(min=1e-3)
             infected[t] = OverdispersedPoisson(rate, overdispersion).sample()
         total = int(infected[prelude:].sum())
         logger.info(f"Sampled {total} infections with R0 = {reproduction_number:0.2f}")
@@ -484,10 +484,8 @@ def simulate(
 
     # Simulate aggregate observations.
     infected_sum = infected.sum(-1)
-    case_data = OverdispersedPoisson((infected_sum * case_rate).clamp_(min=1e-6),
-                                     overdispersion).sample()
-    death_data = OverdispersedPoisson((infected_sum * death_rate).clamp_(min=1e-6),
-                                      overdispersion).sample()
+    case_data = OverdispersedPoisson(infected_sum * case_rate, overdispersion).sample()
+    death_data = OverdispersedPoisson(infected_sum * death_rate, overdispersion).sample()
     case_data = torch.min(case_data, infected_sum)
     death_data = torch.min(death_data, infected_sum)
 
