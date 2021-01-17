@@ -287,7 +287,7 @@ def main(args):
         model.cuda()
 
     # Train.
-    model.fit(
+    losses = model.fit(
         haar=args.haar,
         guide_rank=args.guide_rank,
         learning_rate=args.learning_rate,
@@ -299,6 +299,7 @@ def main(args):
     torch.save({
         "args": args,
         "model": model,
+        "losses": losses,
     }, args.model_file_out)
 
 
@@ -312,9 +313,9 @@ if __name__ == "__main__":
     parser.add_argument("-r", "--guide-rank", default=0, type=int)
     parser.add_argument("--haar", default=True, action="store_true")
     parser.add_argument("--no-haar", action="store_false", dest="haar")
-    parser.add_argument("-lr", "--learning-rate", default=0.01, type=float)
+    parser.add_argument("-lr", "--learning-rate", default=0.02, type=float)
     parser.add_argument("-lrd", "--learning-rate-decay", default=0.1, type=float)
-    parser.add_argument("-n", "--num-steps", default=2001, type=int)
+    parser.add_argument("-n", "--num-steps", default=1501, type=int)
     parser.add_argument("--jit", action="store_true")
     parser.add_argument("--cuda", action="store_true",
                         default=torch.cuda.is_available())

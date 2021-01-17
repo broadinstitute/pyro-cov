@@ -20,7 +20,6 @@ logger = logging.getLogger(__name__)
 
 
 def OverdispersedPoisson(rate, overdispersion=0, *, gamma_poisson=False):
-    rate = rate.clamp(min=1e-6)
     if isinstance(overdispersion, (int, float)) and overdispersion == 0:
         return dist.Poisson(rate)
     # Negative Binomial
@@ -30,7 +29,9 @@ def OverdispersedPoisson(rate, overdispersion=0, *, gamma_poisson=False):
     #   1 - p = 1 / (1 + o*rate)
     #   p = 1 - 1 / (1 + o*rate)
     #   r = rate * (1-p) / p
+    finfo = torch.finfo(rate.dtype)
     q = (1 + overdispersion * rate).reciprocal()
+    q = q.clamp(min=finfo.eps, max=1 - finfo.eps)
     p = 1 - q
     r = rate * q / p
     if gamma_poisson:
@@ -240,7 +241,7 @@ class TimeSpaceStrainModel(nn.Module):
                        dist.Uniform(0., self.population))
             infections = pyro.sample("infections", uniform.mask(False))
         # with linear dynamics that factorizes into many parts.
-        infection_od = pyro.sample("infection_od", dist.Beta(1, 3))
+        infection_od = pyro.sample("infection_od", dist.Beta(1, 9))
         with step_plate, region_plate, strain_plate:
             prev_infections = infections[:-1]
             curr_infections = infections[1:]
@@ -259,7 +260,7 @@ class TimeSpaceStrainModel(nn.Module):
         if self.population is not None:
             # Soft bound infections within each region to population bound.
             infections_sum = infections_sum.div(-self.population).expm1().mul(-self.population)
-        case_od = pyro.sample("case_od", dist.Beta(1, 3))
+        case_od = pyro.sample("case_od", dist.Beta(1, 9))
         with time_plate, region_plate:
             if self.normal_approx:
                 rate = infections * case_rate
@@ -273,7 +274,7 @@ class TimeSpaceStrainModel(nn.Module):
                             obs=self.case_data.unsqueeze(-1))
 
         # Condition on death counts, marginalized over strains.
-        death_od = pyro.sample("death_od", dist.Beta(1, 3))
+        death_od = pyro.sample("death_od", dist.Beta(1, 9))
         with time_plate, region_plate:
             if self.normal_approx:
                 rate = infections * self.death_rate
@@ -312,6 +313,9 @@ class TimeSpaceStrainModel(nn.Module):
 
         After this is called, the ``.guide`` attribute can
         be used to generate samples, medians, or quantiles.
+
+        :returns: A history of losses during training.
+        :rtype: list
         """
         # Configure variational inference.
         logger.info("Running inference...")
