@@ -19,6 +19,7 @@ DIRNAME = os.path.expanduser(
 # See explore-jhu-time-series.ipynb
 GISAID_TO_JHU = {
     "aruba": ("netherlands", "aruba"),
+    "bermuda": ("united kingdom", "bermuda"),
     "crimea": ("ukraine",),  # or "russia"?
     "curacao": ("netherlands", "curacao"),
     "czech repubic": ("czechia",),
@@ -29,7 +30,9 @@ GISAID_TO_JHU = {
     "gibraltar": ("united kingdom", "gibraltar"),
     "guadeloupe": ("france", "guadeloupe"),
     "guam": ("us", "guam"),
+    "guyane francaise": ("france", "french guiana"),
     "hong kong": ("china", "hong kong"),
+    "mayotte": ("france", "mayotte"),
     "myanmar": ("burma",),
     "palestine": ("israel",),  # ?
     "republic of congo": ("congo (brazzaville)",),
@@ -38,6 +41,7 @@ GISAID_TO_JHU = {
     "saint martin": ("france", "st martin"),
     "south korea": ("korea, south",),
     "st eustatius": ("netherlands", "bonaire, sint eustatius and saba"),
+    "st. lucia": ("saint lucia",),
     "taiwan": ("china",),  # ?
     "trinidad": ("trinidad and tobago",),
     "usa": ("us",),
@@ -91,7 +95,7 @@ def gisaid_to_jhu_location(gisaid_columns, jhu_us_df, jhu_global_df):
     assert len(jhu_locations) == len(jhu_us_df) + len(jhu_global_df)
 
     # Extract location tuples from GISAID data.
-    gisaid_to_jhu = {key: tuple(key.lower().split(" / ")[1:])
+    gisaid_to_jhu = {key: tuple(p.strip() for p in key.lower().split("/")[1:])
                      for key in set(gisaid_columns["location"])}
 
     # Ensure each GISAID location maps to a prefix of some JHU tuple.
