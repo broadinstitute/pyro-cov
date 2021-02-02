@@ -289,6 +289,9 @@ def main(args):
     if args.cuda:
         torch.set_default_tensor_type(torch.cuda.FloatTensor)
         model.cuda()
+    else:
+        print("WARNING it looks like you don't have a GPU or haven't set --cuda. "
+              "Training on CPU may take a very long time...")
 
     # Train.
     losses = model.fit(
