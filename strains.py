@@ -8,6 +8,7 @@ import pickle
 import pandas as pd
 import torch
 
+from pyrophylo.pangolin import classify
 from pyrophylo.strains import TimeSpaceStrainModel
 
 logger = logging.getLogger(__name__)
@@ -74,23 +75,6 @@ JHU_TO_UN = {
     "west bank and gaza": "israel",
 }
 
-# See https://cov-lineages.org/lineages.html
-PANGOLIN_ALIASES = {
-    "C": "B.1.1.1",
-    "D": "B.1.1.25",
-    "E": "B.1.416",
-    "F": "B.1.36.17",
-    "G": "B.1.258.2",
-    "H": "B.1.1.67",
-    "I": "B.1.1.217",
-    "J": "B.1.1.250",
-    "K": "B.1.1.277",  # FIXME
-    "L": "B.1.1.10",
-    "M": "B.1.1.294",
-    "N": "B.1.1.33",
-    "P": "B.1.1.28",
-}
-
 
 def gisaid_to_jhu_location(gisaid_columns, jhu_us_df, jhu_global_df):
     """
@@ -153,34 +137,6 @@ def gisaid_to_jhu_location(gisaid_columns, jhu_us_df, jhu_global_df):
     # sub-regions of other GISAID regions.
 
     return sample_region, sample_matrix, jhu_locations
-
-
-def classify(lineage):
-    # Construct a class tensor.
-    names = sorted(set(lineage))
-    position = {name: i for i, name in enumerate(names)}
-    classes = torch.zeros(len(lineage), dtype=torch.long)
-    for i, name in enumerate(lineage):
-        classes[i] = position[name]
-
-    # Construct a tree.
-    short_to_long = dict(zip(names, names))
-    for name in names:
-        prefix = name[0]
-        if prefix not in "AB":
-            short_to_long[name] = PANGOLIN_ALIASES[prefix] + name[1:]
-    long_to_short = {v: k for k, v in short_to_long.items()}
-    assert len(short_to_long) == len(long_to_short)
-    mutation_matrix = torch.zeros(len(names), len(names))
-    for x, longx in short_to_long.items():
-        i = position[x]
-        longy = longx.rsplit(".", 1)[0]
-        if longy != longx:
-            j = position[long_to_short[longy]]
-            mutation_matrix[i, j] = 1
-            mutation_matrix[j, i] = 1
-
-    return classes, mutation_matrix
 
 
 def extract_transit_features(args, us_df, global_df, region_tuples):
@@ -305,7 +261,12 @@ def main(args):
     strain_time = torch.tensor(columns["day"], dtype=torch.long)
 
     # Extract classes and mutation matrix.
-    classes, mutation_matrix = classify(columns["lineage"])
+    classes, edges = classify(columns["lineage"])
+    num_classes = classes.max().item() + 1
+    mutation_matrix = torch.zeros(num_classes, num_classes)
+    for i, j in edges:
+        mutation_matrix[i, j] = 1
+        mutation_matrix[j, i] = 1
 
     # Convert from daily to weekly observations.
     T, R = case_data.shape
