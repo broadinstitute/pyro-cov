@@ -39,7 +39,7 @@ def main(args):
             date = parse_date(datum["covv_collection_date"])
             if date < args.start_date:
                 continue  # Drop rows before start date.
-            if datum["covv_lineage"] is None:
+            if datum["covv_lineage"] in (None, "None"):
                 continue  # Drop rows with unknown lineage.
 
             # Collate.
