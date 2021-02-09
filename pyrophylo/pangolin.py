@@ -20,8 +20,8 @@ PANGOLIN_ALIASES = {
     "P": "B.1.1.28",
 }
 
-DECOMPRESS = {}
-COMPRESS = {}
+DECOMPRESS = PANGOLIN_ALIASES.copy()
+COMPRESS = {v: k for k, v in DECOMPRESS.items()}
 
 
 def decompress(name):
@@ -33,7 +33,7 @@ def decompress(name):
     except KeyError:
         pass
     if name[0] in "AB":
-        DECOMPRESS[name] = COMPRESS[name] = name
+        DECOMPRESS[name] = name
         return name
     for key, value in PANGOLIN_ALIASES.items():
         if name.startswith(key):
@@ -48,7 +48,7 @@ def compress(name):
     """
     Compress a full lineage like B.1.1.1.10 to an alias like C.10.
     """
-    return COMPRESS[name]
+    return COMPRESS.get(name, name)
 
 
 def _get_parent(longname):
@@ -60,7 +60,7 @@ def find_edges(names):
     Given a set of short lineages, return a list of pairs of parent-child
     relationships among lineages.
     """
-    short_to_long = {name: decompress(name) for name in names}
+    short_to_long = {compress(name): decompress(name) for name in names}
     long_to_short = {v: k for k, v in short_to_long.items()}
     assert len(short_to_long) == len(long_to_short)
     edges = [("A", "B")]

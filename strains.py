@@ -2,141 +2,17 @@ import argparse
 import datetime
 import logging
 import math
-import os
 import pickle
 
 import pandas as pd
 import torch
 
-from pyrophylo.pangolin import classify
+from pyrophylo import pangolin
+from pyrophylo.geo import JHU_TO_UN, gisaid_to_jhu_location, parse_date, pd_to_torch, read_csv
 from pyrophylo.strains import TimeSpaceStrainModel
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(format="%(relativeCreated) 9d %(message)s", level=logging.INFO)
-
-DIRNAME = os.path.expanduser(
-    "~/github/CSSEGISandData/COVID-19/"
-    "csse_covid_19_data/csse_covid_19_time_series")
-
-# See explore-jhu-time-series.ipynb
-GISAID_TO_JHU = {
-    "aruba": ("netherlands", "aruba"),
-    "bermuda": ("united kingdom", "bermuda"),
-    "crimea": ("ukraine",),  # or "russia"?
-    "curacao": ("netherlands", "curacao"),
-    "czech repubic": ("czechia",),
-    "czech republic": ("czechia",),
-    "côte d'ivoire": ("cote d'ivoire",),
-    "democratic republic of the congo": ("congo (kinshasa)",),
-    "republic of the congo": ("congo (brazzaville)",),
-    "faroe islands": ("denmark", "faroe islands"),
-    "french guiana": ("france", "french guiana"),
-    "gibraltar": ("united kingdom", "gibraltar"),
-    "guadeloupe": ("france", "guadeloupe"),
-    "guam": ("us", "guam"),
-    "guyane francaise": ("france", "french guiana"),
-    "hong kong": ("china", "hong kong"),
-    "mayotte": ("france", "mayotte"),
-    "myanmar": ("burma",),
-    "palestine": ("israel",),  # ?
-    "republic of congo": ("congo (brazzaville)",),
-    "reunion": ("france", "reunion"),
-    "saint barthélemy": ("france", "saint barthelemy"),
-    "saint martin": ("france", "st martin"),
-    "south korea": ("korea, south",),
-    "st eustatius": ("netherlands", "bonaire, sint eustatius and saba"),
-    "st. lucia": ("saint lucia",),
-    "taiwan": ("china",),  # ?
-    "trinidad": ("trinidad and tobago",),
-    "usa": ("us",),
-    "viet nam": ("vietnam",),
-}
-JHU_TO_UN = {
-    "bolivia": "bolivia (plurinational state of)",
-    "brunei": "brunei darussalam",
-    "burma": "myanmar",
-    "congo (brazzaville)": "congo",
-    "congo (kinshasa)": "democratic republic of the congo",
-    "cote d'ivoire": "côte d'ivoire",
-    "diamond princess": None,  # cruise ship
-    "iran": "iran (islamic republic of)",
-    "korea, south": "republic of korea",
-    "kosovo": "serbia",
-    "laos": "lao people's democratic republic",
-    "moldova": "republic of moldova",
-    "ms zaandam": None,  # cruise ship
-    "russia": "russian federation",
-    "syria": "syrian arab republic",
-    "taiwan*": "china, taiwan province of china",
-    "tanzania": "united republic of tanzania",
-    "us": "united states of america",
-    "venezuela": "venezuela (bolivarian republic of)",
-    "vietnam": "viet nam",
-    "west bank and gaza": "israel",
-}
-
-
-def gisaid_to_jhu_location(gisaid_columns, jhu_us_df, jhu_global_df):
-    """
-    Fuzzily match GISAID locations with Johns Hopkins locations.
-    """
-    logger.info("Joining GISAID and JHU region codes")
-
-    # Extract location tuples from JHU data.
-    jhu_locations = []
-    for i, row in jhu_us_df[["Country_Region", "Province_State", "Admin2"]].iterrows():
-        a, b, c = row
-        if isinstance(c, str):
-            jhu_locations.append((a.lower(), b.lower(), c.lower()))
-        else:
-            jhu_locations.append((a.lower(), b.lower()))
-    for i, row in jhu_global_df[["Country/Region", "Province/State"]].iterrows():
-        a, b = row
-        if isinstance(b, str):
-            jhu_locations.append((a.lower(), b.lower()))
-        else:
-            jhu_locations.append((a.lower(),))
-    assert len(jhu_locations) == len(jhu_us_df) + len(jhu_global_df)
-
-    # Extract location tuples from GISAID data.
-    gisaid_to_jhu = {key: tuple(p.strip() for p in key.lower().split("/")[1:])
-                     for key in set(gisaid_columns["location"])}
-
-    # Ensure each GISAID location maps to a prefix of some JHU tuple.
-    jhu_prefixes = set(jhu_locations) | {()}
-    for value in jhu_locations:
-        for i in range(1, len(value)):
-            jhu_prefixes.add(value[:i])
-    for key, value in list(gisaid_to_jhu.items()):
-        if value and value[0] in GISAID_TO_JHU:
-            value = GISAID_TO_JHU[value[0]] + value[1:]
-        while value not in jhu_prefixes:
-            value = value[:-1]
-            if not value:
-                raise ValueError(f"Failed to find GISAID loctaion '{key}' in JHU data")
-        gisaid_to_jhu[key] = value
-
-    # Construct a matrix projecting GISAID locations to JHU locations.
-    gisaid_keys = {key: i for i, key in enumerate(sorted(gisaid_to_jhu))}
-    gisaid_values = {gisaid_to_jhu[key]: i for key, i in gisaid_keys.items()}
-    logger.info(f"Matching {len(gisaid_keys)} GISAID regions to {len(gisaid_values)} JHU fuzzy regions")
-    sample_matrix = torch.zeros(len(gisaid_to_jhu), len(jhu_locations))
-    for j, value in enumerate(jhu_locations):
-        for length in range(1 + len(value)):
-            fuzzy_value = value[:length]
-            i = gisaid_values.get(fuzzy_value, None)
-            if i is not None:
-                sample_matrix[i, j] = 1
-
-    # Construct a sample_region of GISAID locations.
-    sample_region = torch.empty(len(gisaid_columns["location"]), dtype=torch.long)
-    for i, key in enumerate(gisaid_columns["location"]):
-        sample_region[i] = gisaid_keys[key]
-
-    # FIXME we should use inclusion-exlcusion in case some GISAID regions are
-    # sub-regions of other GISAID regions.
-
-    return sample_region, sample_matrix, jhu_locations
 
 
 def extract_transit_features(args, us_df, global_df, region_tuples):
@@ -198,39 +74,23 @@ def extract_transit_features(args, us_df, global_df, region_tuples):
     return features
 
 
-def read_csv(basename):
-    return pd.read_csv(os.path.join(DIRNAME, basename), header=0)
-
-
-def to_torch(df, *, columns):
-    if isinstance(columns, slice):
-        columns = df.columns[columns]
-    df = df[columns]
-    return torch.from_numpy(df.to_numpy()).float()
-
-
-def parse_date(string):
-    month, day, year_since_2000 = map(int, string.split("/"))
-    return datetime.datetime(day=day, month=month, year=2000 + year_since_2000)
-
-
 def main(args):
     # Load time series data from JHU.
     us_cases_df = read_csv("time_series_covid19_confirmed_US.csv")
     us_deaths_df = read_csv("time_series_covid19_deaths_US.csv")
     global_cases_df = read_csv("time_series_covid19_confirmed_global.csv")
     global_deaths_df = read_csv("time_series_covid19_deaths_global.csv")
-    case_data = torch.cat([to_torch(us_cases_df, columns=slice(11, None)),
-                           to_torch(global_cases_df, columns=slice(4, None))]).T
-    death_data = torch.cat([to_torch(us_deaths_df, columns=slice(12, None)),
-                            to_torch(global_deaths_df, columns=slice(4, None))]).T
+    case_data = torch.cat([pd_to_torch(us_cases_df, columns=slice(11, None)),
+                           pd_to_torch(global_cases_df, columns=slice(4, None))]).T
+    death_data = torch.cat([pd_to_torch(us_deaths_df, columns=slice(12, None)),
+                            pd_to_torch(global_deaths_df, columns=slice(4, None))]).T
     assert case_data.shape == death_data.shape
     start_date = parse_date(us_cases_df.columns[11])
 
     # Load population data from JHU and UN. These are used as upper bounds only.
     population = None
     if args.population_file_in:
-        us_pop = to_torch(us_deaths_df, columns="Population")
+        us_pop = pd_to_torch(us_deaths_df, columns="Population")
         df = pd.read_csv(args.population_file_in, header=0)
         df = df[df["Time"] == 2020]
         df = df[df["Variant"] == "High"]
@@ -261,7 +121,8 @@ def main(args):
     strain_time = torch.tensor(columns["day"], dtype=torch.long)
 
     # Extract classes and mutation matrix.
-    classes, edges = classify(columns["lineage"])
+    columns["lineage"] = list(map(pangolin.compress, columns["lineage"]))
+    classes, edges = pangolin.classify(columns["lineage"])
     num_classes = classes.max().item() + 1
     mutation_matrix = torch.zeros(num_classes, num_classes)
     for i, j in edges:
