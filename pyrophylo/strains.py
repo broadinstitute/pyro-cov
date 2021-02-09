@@ -34,6 +34,7 @@ def OverdispersedPoisson(rate, overdispersion=0, *, gamma_poisson=False):
     #   p = 1 - 1 / (1 + o*rate)
     #   r = rate * (1-p) / p
     finfo = torch.finfo(rate.dtype)
+    rate = rate.clamp(min=1e-3)
     q = (1 + overdispersion * rate).reciprocal()
     q = q.clamp(min=finfo.eps, max=1 - finfo.eps)
     p = 1 - q
@@ -130,7 +131,6 @@ class TimeSpaceStrainModel(nn.Module):
         mutation_matrix,
         death_rate,
         population=None,
-        normal_approx=False,
     ):
         T, R = case_data.shape
         assert death_data.shape == (T, R)
@@ -151,8 +151,6 @@ class TimeSpaceStrainModel(nn.Module):
         S = mutation_matrix.size(0)
         assert mutation_matrix.shape == (S, S)
         assert sample_strain.max().item() < S
-        assert isinstance(normal_approx, bool)
-        self.normal_approx = normal_approx
 
         logger.info("Aggregating sparse samples into multinomial observations")
         strain_data = torch.zeros(T, Rc, S)
@@ -251,12 +249,12 @@ class TimeSpaceStrainModel(nn.Module):
         # Sample the number of infections in each (time,region,strain) bucket.
         # We express this as a factor graph
         with time_plate, region_plate, strain_plate:
-            uniform = (
+            uniform_dist = (
                 dist.Exponential(1.0)
                 if self.population is None
                 else dist.Uniform(0.0, self.population)
             )
-            infections = pyro.sample("infections", uniform.mask(False))
+            infections = pyro.sample("infections", uniform_dist.mask(False))
         # with linear dynamics that factorizes into many parts.
         infection_od = pyro.sample("infection_od", dist.Beta(1, 9))
         with step_plate, region_plate, strain_plate:
@@ -267,7 +265,7 @@ class TimeSpaceStrainModel(nn.Module):
                 prev_infections,
                 Rtrs[:-1],
                 transit_matrix,
-                mutation_matrix,
+                mutation_matrix
             )
             pred_infections.data.clamp_(min=1e-3)
             pyro.sample(
@@ -285,49 +283,36 @@ class TimeSpaceStrainModel(nn.Module):
             )
         case_od = pyro.sample("case_od", dist.Beta(1, 9))
         with time_plate, region_plate:
-            if self.normal_approx:
-                rate = infections * case_rate
-                pyro.sample(
-                    "case_obs",
-                    dist.Normal(rate.log1p(), (1 / rate + case_od).sqrt()),
-                    obs=self.case_data.log1p().unsqueeze(-1),
-                )
-            else:
-                pyro.sample(
-                    "case_obs",
-                    OverdispersedPoisson(
-                        infections_sum * case_rate, overdispersion=case_od
-                    ),
-                    obs=self.case_data.unsqueeze(-1),
-                )
+            pyro.sample(
+                "case_obs",
+                OverdispersedPoisson(
+                    infections_sum * case_rate, overdispersion=case_od
+                ),
+                obs=self.case_data.unsqueeze(-1),
+            )
 
         # Condition on death counts, marginalized over strains.
         death_od = pyro.sample("death_od", dist.Beta(1, 9))
         with time_plate, region_plate:
-            if self.normal_approx:
-                rate = infections * self.death_rate
-                pyro.sample(
-                    "death_obs",
-                    dist.Normal(rate.log1p(), (1 / rate + death_od).sqrt()),
-                    obs=self.death_data.log1p().unsqueeze(-1),
-                )
-            else:
-                pyro.sample(
-                    "death_obs",
-                    OverdispersedPoisson(
-                        infections_sum * self.death_rate, overdispersion=death_od
-                    ),
-                    obs=self.death_data.unsqueeze(-1),
-                )
+            pyro.sample(
+                "death_obs",
+                OverdispersedPoisson(
+                    infections_sum * self.death_rate, overdispersion=death_od
+                ),
+                obs=self.death_data.unsqueeze(-1),
+            )
 
         # Condition on strain counts.
         # Note these are partitioned into coarse regions.
+        strain_dispersion = pyro.sample("strain_dispersion", dist.Exponential(1.))
         coarse_infections = einsum("trs,Rr->tRs", infections, self.sample_matrix) + 1e-6
         strain_probs = coarse_infections / coarse_infections.sum(-1, True)
+        concentration = strain_probs[self.strain_mask] / strain_dispersion
         pyro.sample(
             "strains",
-            dist.Multinomial(
-                self.strain_total.max().item(), strain_probs[self.strain_mask]
+            dist.DirichletMultinomial(
+                total_count=self.strain_total.max().item(),
+                concentration=concentration,
             ).to_event(1),
             obs=self.strain_data,
         )
@@ -517,6 +502,7 @@ def simulate(
                 mutation_matrix,
             )
             infected[t] = OverdispersedPoisson(rate, overdispersion).sample()
+            infected[t]
         total = int(infected[prelude:].sum())
         logger.info(f"Sampled {total} infections with R0 = {reproduction_number:0.2f}")
         if total < min_total_infected:
