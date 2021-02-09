@@ -6,7 +6,7 @@ from pyrophylo.sketch import AMSSketcher, ClockSketcher
 
 
 def random_string(size):
-    probs = torch.tensor([1., 1., 1., 1., 0.05])
+    probs = torch.tensor([1.0, 1.0, 1.0, 1.0, 0.05])
     probs /= probs.sum()
     string = "".join("ACGTN"[i] for i in dist.Categorical(probs).sample([size]))
     return string

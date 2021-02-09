@@ -11,7 +11,11 @@ import torch
 import torch.nn as nn
 from opt_einsum import contract as einsum
 from pyro.infer import SVI, JitTrace_ELBO, Trace_ELBO
-from pyro.infer.autoguide import AutoLowRankMultivariateNormal, AutoNormal, init_to_median
+from pyro.infer.autoguide import (
+    AutoLowRankMultivariateNormal,
+    AutoNormal,
+    init_to_median,
+)
 from pyro.infer.reparam import HaarReparam
 from pyro.optim import ClippedAdam
 from pyro.poutine.util import prune_subsample_sites
@@ -112,6 +116,7 @@ class TimeSpaceStrainModel(nn.Module):
     :param Tensor population: An optional ``(R,)``-shaped vector upper bounds
         on the population of each region.
     """
+
     def __init__(
         self,
         *,
@@ -151,19 +156,26 @@ class TimeSpaceStrainModel(nn.Module):
 
         logger.info("Aggregating sparse samples into multinomial observations")
         strain_data = torch.zeros(T, Rc, S)
-        i = (sample_time.clamp(max=T - 1).mul_(Rc).add_(sample_region)
-                                         .mul_(S).add_(sample_strain))
+        i = (
+            sample_time.clamp(max=T - 1)
+            .mul_(Rc)
+            .add_(sample_region)
+            .mul_(S)
+            .add_(sample_strain)
+        )
         one = torch.ones(()).expand_as(i)
         strain_data.reshape(-1).scatter_add_(0, i, one)
         strain_mean = strain_data.sum([0, 1])
         strain_mean /= strain_mean.sum()
         strain_total = strain_data.sum(-1)
-        strain_mask = (strain_total > 0)
+        strain_mask = strain_total > 0
         strain_data = strain_data[strain_mask]
         strain_total = strain_total[strain_mask]
 
-        logger.info(f"Creating model over {T} time steps x {R} regions x {S} strains "
-                    f"= {T * R * S} buckets")
+        logger.info(
+            f"Creating model over {T} time steps x {R} regions x {S} strains "
+            f"= {T * R * S} buckets"
+        )
         self.num_time_steps = T
         self.num_regions = R
         self.num_coarse_regions = Rc
@@ -219,13 +231,15 @@ class TimeSpaceStrainModel(nn.Module):
         # that varies slowly in time via a log-Brownian motion.
         Rtr_drift_scale = pyro.sample("Rtr_drift_scale", dist.LogNormal(-2, 2))
         with step_plate, region_plate:
-            pyro.sample("Rtr_drift", dist.LogNormal(0, Rtr_drift_scale),
-                        obs=Rtr[1:] / Rtr[:-1])
+            pyro.sample(
+                "Rtr_drift", dist.LogNormal(0, Rtr_drift_scale), obs=Rtr[1:] / Rtr[:-1]
+            )
         Rtrs = R0 * Rs * Rtr
 
         # Sample inter-region spreading dynamics coefficients.
-        transit_rate = pyro.sample("transit_rate",
-                                   dist.Exponential(1).expand([P]).to_event(1))
+        transit_rate = pyro.sample(
+            "transit_rate", dist.Exponential(1).expand([P]).to_event(1)
+        )
         transit_matrix = torch.eye(R) + self.transit_data @ transit_rate
         transit_matrix = transit_matrix / transit_matrix.sum(-1, True)
 
@@ -237,64 +251,86 @@ class TimeSpaceStrainModel(nn.Module):
         # Sample the number of infections in each (time,region,strain) bucket.
         # We express this as a factor graph
         with time_plate, region_plate, strain_plate:
-            uniform = (dist.Exponential(1.) if self.population is None else
-                       dist.Uniform(0., self.population))
+            uniform = (
+                dist.Exponential(1.0)
+                if self.population is None
+                else dist.Uniform(0.0, self.population)
+            )
             infections = pyro.sample("infections", uniform.mask(False))
         # with linear dynamics that factorizes into many parts.
         infection_od = pyro.sample("infection_od", dist.Beta(1, 9))
         with step_plate, region_plate, strain_plate:
             prev_infections = infections[:-1]
             curr_infections = infections[1:]
-            pred_infections = einsum("trs,trs,rR,sS->tRS",
-                                     prev_infections,
-                                     Rtrs[:-1],
-                                     transit_matrix,
-                                     mutation_matrix)
+            pred_infections = einsum(
+                "trs,trs,rR,sS->tRS",
+                prev_infections,
+                Rtrs[:-1],
+                transit_matrix,
+                mutation_matrix,
+            )
             pred_infections.data.clamp_(min=1e-3)
-            pyro.sample("infections_step",
-                        RelaxedPoisson(pred_infections, overdispersion=infection_od),
-                        obs=curr_infections)
+            pyro.sample(
+                "infections_step",
+                RelaxedPoisson(pred_infections, overdispersion=infection_od),
+                obs=curr_infections,
+            )
 
         # Condition on case counts, marginalized over strains.
         infections_sum = infections.sum(-1, True)
         if self.population is not None:
             # Soft bound infections within each region to population bound.
-            infections_sum = infections_sum.div(-self.population).expm1().mul(-self.population)
+            infections_sum = (
+                infections_sum.div(-self.population).expm1().mul(-self.population)
+            )
         case_od = pyro.sample("case_od", dist.Beta(1, 9))
         with time_plate, region_plate:
             if self.normal_approx:
                 rate = infections * case_rate
-                pyro.sample("case_obs",
-                            dist.Normal(rate.log1p(), (1 / rate + case_od).sqrt()),
-                            obs=self.case_data.log1p().unsqueeze(-1))
+                pyro.sample(
+                    "case_obs",
+                    dist.Normal(rate.log1p(), (1 / rate + case_od).sqrt()),
+                    obs=self.case_data.log1p().unsqueeze(-1),
+                )
             else:
-                pyro.sample("case_obs",
-                            OverdispersedPoisson(infections_sum * case_rate,
-                                                 overdispersion=case_od),
-                            obs=self.case_data.unsqueeze(-1))
+                pyro.sample(
+                    "case_obs",
+                    OverdispersedPoisson(
+                        infections_sum * case_rate, overdispersion=case_od
+                    ),
+                    obs=self.case_data.unsqueeze(-1),
+                )
 
         # Condition on death counts, marginalized over strains.
         death_od = pyro.sample("death_od", dist.Beta(1, 9))
         with time_plate, region_plate:
             if self.normal_approx:
                 rate = infections * self.death_rate
-                pyro.sample("death_obs",
-                            dist.Normal(rate.log1p(), (1 / rate + death_od).sqrt()),
-                            obs=self.death_data.log1p().unsqueeze(-1))
+                pyro.sample(
+                    "death_obs",
+                    dist.Normal(rate.log1p(), (1 / rate + death_od).sqrt()),
+                    obs=self.death_data.log1p().unsqueeze(-1),
+                )
             else:
-                pyro.sample("death_obs",
-                            OverdispersedPoisson(infections_sum * self.death_rate,
-                                                 overdispersion=death_od),
-                            obs=self.death_data.unsqueeze(-1))
+                pyro.sample(
+                    "death_obs",
+                    OverdispersedPoisson(
+                        infections_sum * self.death_rate, overdispersion=death_od
+                    ),
+                    obs=self.death_data.unsqueeze(-1),
+                )
 
         # Condition on strain counts.
         # Note these are partitioned into coarse regions.
         coarse_infections = einsum("trs,Rr->tRs", infections, self.sample_matrix) + 1e-6
         strain_probs = coarse_infections / coarse_infections.sum(-1, True)
-        pyro.sample("strains",
-                    dist.Multinomial(self.strain_total.max().item(),
-                                     strain_probs[self.strain_mask]).to_event(1),
-                    obs=self.strain_data)
+        pyro.sample(
+            "strains",
+            dist.Multinomial(
+                self.strain_total.max().item(), strain_probs[self.strain_mask]
+            ).to_event(1),
+            obs=self.strain_data,
+        )
 
     def fit(
         self,
@@ -338,8 +374,9 @@ class TimeSpaceStrainModel(nn.Module):
             raise ValueError(f"Invalid guide_rank: {guide_rank}")
         Elbo = JitTrace_ELBO if jit else Trace_ELBO
         elbo = Elbo(max_plate_nesting=3, ignore_jit_warnings=True)
-        optim = ClippedAdam({"lr": learning_rate,
-                             "lrd": learning_rate_decay ** (1 / num_steps)})
+        optim = ClippedAdam(
+            {"lr": learning_rate, "lrd": learning_rate_decay ** (1 / num_steps)}
+        )
         svi = SVI(model, guide, optim, elbo)
 
         # Run inference.
@@ -351,8 +388,10 @@ class TimeSpaceStrainModel(nn.Module):
             if log_every and step % log_every == 0:
                 logger.info(f"step {step: >5d} loss = {loss:0.4g}")
         elapsed = default_timer() - start_time
-        logger.info(f"SVI took {elapsed:0.1f} seconds, "
-                    f"{(1 + num_steps) / elapsed:0.1f} step/sec")
+        logger.info(
+            f"SVI took {elapsed:0.1f} seconds, "
+            f"{(1 + num_steps) / elapsed:0.1f} step/sec"
+        )
 
         self.guide = guide
         return losses
@@ -396,8 +435,11 @@ class TimeSpaceStrainModel(nn.Module):
             return
         for f in site["cond_indep_stack"]:
             if f.name == "time":
-                return HaarReparam(dim=f.dim - site["fn"].event_dim, flip=True,
-                                   experimental_allow_batch=True)
+                return HaarReparam(
+                    dim=f.dim - site["fn"].event_dim,
+                    flip=True,
+                    experimental_allow_batch=True,
+                )
 
     @torch.no_grad()
     def median(self):
@@ -459,17 +501,21 @@ def simulate(
     transit_matrix /= transit_matrix.sum(-1, True)
 
     # Sequentially simulate infections.
-    reproduction_number = torch.tensor((min_total_infected / initial_infected) ** (1 / T))
+    reproduction_number = torch.tensor(
+        (min_total_infected / initial_infected) ** (1 / T)
+    )
     infected = torch.zeros(prelude + T, R, S)
     infected[0, 0, 0] = initial_infected
     success = False
     for attempt in range(100):
         for t in range(1, prelude + T):
-            rate = einsum("rs,,rR,sS->RS",
-                          infected[t - 1],
-                          reproduction_number,
-                          transit_matrix,
-                          mutation_matrix)
+            rate = einsum(
+                "rs,,rR,sS->RS",
+                infected[t - 1],
+                reproduction_number,
+                transit_matrix,
+                mutation_matrix,
+            )
             infected[t] = OverdispersedPoisson(rate, overdispersion).sample()
         total = int(infected[prelude:].sum())
         logger.info(f"Sampled {total} infections with R0 = {reproduction_number:0.2f}")
@@ -481,15 +527,19 @@ def simulate(
             success = True
             break
     if not success:
-        raise ValueError(f"Failed to generate between {min_total_infected} "
-                         f"and {max_total_infected} infections.")
+        raise ValueError(
+            f"Failed to generate between {min_total_infected} "
+            f"and {max_total_infected} infections."
+        )
     infected = infected[prelude:].clone()
     infected = infected.round()
 
     # Simulate aggregate observations.
     infected_sum = infected.sum(-1)
     case_data = OverdispersedPoisson(infected_sum * case_rate, overdispersion).sample()
-    death_data = OverdispersedPoisson(infected_sum * death_rate, overdispersion).sample()
+    death_data = OverdispersedPoisson(
+        infected_sum * death_rate, overdispersion
+    ).sample()
     case_data = torch.min(case_data, infected_sum)
     death_data = torch.min(death_data, infected_sum)
 

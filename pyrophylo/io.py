@@ -74,8 +74,7 @@ def _apply(fn, args):
     return fn(*args)
 
 
-def read_nexus_trees(filename, *, format="newick", max_num_trees=math.inf,
-                     processes=0):
+def read_nexus_trees(filename, *, format="newick", max_num_trees=math.inf, processes=0):
     """
     Parse and iterate over newick trees stored in a nexus file.
     This streams the file and thus can handle larger files than
@@ -102,8 +101,9 @@ def read_nexus_trees(filename, *, format="newick", max_num_trees=math.inf,
         raise ValueError(f"unknown format: {format}")
 
     if processes != 0:
-        trees = read_nexus_trees(filename, format="_raw_" + format,
-                                 max_num_trees=max_num_trees)
+        trees = read_nexus_trees(
+            filename, format="_raw_" + format, max_num_trees=max_num_trees
+        )
         with mp.Pool(processes) as pool:
             handler = functools.partial(_apply, handlers["tree"])
             yield from pool.imap(handler, trees)
@@ -143,9 +143,9 @@ def stack_nexus_trees(filename, *, max_num_trees=math.inf, processes=0):
     """
     Loads a batch of trees from a nexus file.
     """
-    trees = read_nexus_trees(filename, format="torch",
-                             max_num_trees=max_num_trees,
-                             processes=processes)
+    trees = read_nexus_trees(
+        filename, format="torch", max_num_trees=max_num_trees, processes=processes
+    )
     return Phylogeny.stack(trees)
 
 
@@ -159,9 +159,9 @@ def read_newick_tree(filename):
     return Phylogeny.from_bio_phylo(tree)
 
 
-def read_alignment(filename, format=None, *,
-                   max_taxa=math.inf,
-                   max_characters=math.inf):
+def read_alignment(
+    filename, format=None, *, max_taxa=math.inf, max_characters=math.inf
+):
     """
     Reads a single alignment file to a torch tensor of probabilites.
 
@@ -198,7 +198,7 @@ def read_alignment(filename, format=None, *,
         alignment = alignment[:, :num_characters]
     logger.info(f"parsing {num_taxa} taxa x {num_characters} characters")
     codebook = _get_codebook()
-    probs = torch.full((num_taxa, num_characters, 5), 1/5)
+    probs = torch.full((num_taxa, num_characters, 5), 1 / 5)
     for i in range(num_taxa):
         seq = alignment[i].seq
         if not VALID_CODES.issuperset(seq):
@@ -256,26 +256,26 @@ def _read_alignment_beast(filename):
 # See https://www.bioinformatics.org/sms/iupac.html
 NUCLEOTIDE_CODES = {
     #    [  A,   C,   G,   T, gap]
-    "?": [1/5, 1/5, 1/5, 1/5, 1/5],  # missing
-    "n": [1/5, 1/5, 1/5, 1/5, 1/5],  # missing
-    "A": [1/1, 0.0, 0.0, 0.0, 0.0],  # adenine
-    "C": [0.0, 1/1, 0.0, 0.0, 0.0],  # cytosine
-    "G": [0.0, 0.0, 1/1, 0.0, 0.0],  # guanine
-    "T": [0.0, 0.0, 0.0, 1/1, 0.0],  # thymine
-    "U": [0.0, 0.0, 0.0, 1/1, 0.0],  # uracil
-    "R": [1/2, 0.0, 1/2, 0.0, 0.0],
-    "Y": [0.0, 1/2, 0.0, 1/2, 0.0],
-    "S": [0.0, 1/2, 1/2, 0.0, 0.0],
-    "W": [1/2, 0.0, 0.0, 1/2, 0.0],
-    "K": [0.0, 0.0, 1/2, 1/2, 0.0],
-    "M": [1/2, 1/2, 0.0, 0.0, 0.0],
-    "B": [0.0, 1/3, 1/3, 1/3, 0.0],
-    "D": [1/3, 0.0, 1/3, 1/3, 0.0],
-    "H": [1/3, 1/3, 0.0, 1/3, 0.0],
-    "V": [1/3, 1/3, 1/3, 0.0, 0.0],
-    "N": [1/4, 1/4, 1/4, 1/4, 0.0],
-    "-": [0.0, 0.0, 0.0, 0.0, 1/1],  # gap
-    ".": [0.0, 0.0, 0.0, 0.0, 1/1],  # gap
+    "?": [1 / 5, 1 / 5, 1 / 5, 1 / 5, 1 / 5],  # missing
+    "n": [1 / 5, 1 / 5, 1 / 5, 1 / 5, 1 / 5],  # missing
+    "A": [1 / 1, 0.0, 0.0, 0.0, 0.0],  # adenine
+    "C": [0.0, 1 / 1, 0.0, 0.0, 0.0],  # cytosine
+    "G": [0.0, 0.0, 1 / 1, 0.0, 0.0],  # guanine
+    "T": [0.0, 0.0, 0.0, 1 / 1, 0.0],  # thymine
+    "U": [0.0, 0.0, 0.0, 1 / 1, 0.0],  # uracil
+    "R": [1 / 2, 0.0, 1 / 2, 0.0, 0.0],
+    "Y": [0.0, 1 / 2, 0.0, 1 / 2, 0.0],
+    "S": [0.0, 1 / 2, 1 / 2, 0.0, 0.0],
+    "W": [1 / 2, 0.0, 0.0, 1 / 2, 0.0],
+    "K": [0.0, 0.0, 1 / 2, 1 / 2, 0.0],
+    "M": [1 / 2, 1 / 2, 0.0, 0.0, 0.0],
+    "B": [0.0, 1 / 3, 1 / 3, 1 / 3, 0.0],
+    "D": [1 / 3, 0.0, 1 / 3, 1 / 3, 0.0],
+    "H": [1 / 3, 1 / 3, 0.0, 1 / 3, 0.0],
+    "V": [1 / 3, 1 / 3, 1 / 3, 0.0, 0.0],
+    "N": [1 / 4, 1 / 4, 1 / 4, 1 / 4, 0.0],
+    "-": [0.0, 0.0, 0.0, 0.0, 1 / 1],  # gap
+    ".": [0.0, 0.0, 0.0, 0.0, 1 / 1],  # gap
 }
 VALID_CODES = set(NUCLEOTIDE_CODES)
 

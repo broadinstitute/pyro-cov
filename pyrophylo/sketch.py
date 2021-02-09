@@ -21,11 +21,11 @@ def murmur64(h):
         h ^= h >> 33
     else:
         h ^= h >> 33
-        h *= 0xff51afd7ed558ccd
-        h &= 0xffffffffffffffff
+        h *= 0xFF51AFD7ED558CCD
+        h &= 0xFFFFFFFFFFFFFFFF
         h ^= h >> 33
-        h *= 0xc4ceb9fe1a85ec53
-        h &= 0xffffffffffffffff
+        h *= 0xC4CEB9FE1A85EC53
+        h &= 0xFFFFFFFFFFFFFFFF
         h ^= h >> 33
     return h
 
@@ -48,6 +48,7 @@ class AMSSketcher:
     """
     Clustering via AMS sketching of k-mer counts followed by LSH.
     """
+
     def __init__(self, *, min_k=2, max_k=12, bits=16, backend="cpp"):
         assert 1 <= min_k <= max_k
         assert max_k * 2 <= 64, "max_k is too large"
@@ -74,7 +75,7 @@ class AMSSketcher:
 
     def soft_to_hard_hashes(self, soft_hashes):
         assert soft_hashes.dim() == 2
-        soft_hashes = soft_hashes[:, :self.bits]
+        soft_hashes = soft_hashes[:, : self.bits]
         signs = (soft_hashes > soft_hashes.median(0).values).float()
         powers_of_two = 2 ** torch.arange(self.bits, dtype=torch.float)
         hard_hashes = (signs @ powers_of_two).long()
@@ -147,6 +148,7 @@ class ClockSketcher:
     Sketches each bag of k-mers as bank of 8-bit clocks plus a single total
     k-mer counter.
     """
+
     def __init__(self, k, *, num_clocks=256, backend="cpp"):
         assert num_clocks > 0 and num_clocks % 64 == 0
         self.k = k
@@ -217,12 +219,12 @@ def _get_cpp_module():
     global _cpp_module
     if _cpp_module is None:
         from torch.utils.cpp_extension import load
+
         assert __file__.endswith(".py")
         path = __file__[:-3] + ".cpp"
-        _cpp_module = load(name="cpp_sketch",
-                           sources=[path],
-                           extra_cflags=['-O2'],
-                           verbose=False)
+        _cpp_module = load(
+            name="cpp_sketch", sources=[path], extra_cflags=["-O2"], verbose=False
+        )
     return _cpp_module
 
 

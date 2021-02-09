@@ -10,6 +10,7 @@ class SubstitutionModel(PyroModule):
 
     This returns a continuous time transition matrix.
     """
+
     @pyro_method
     def matrix_exp(self, dt):
         m = self().to(dt.dtype)
@@ -31,15 +32,16 @@ class JukesCantor69(SubstitutionModel):
     [1] T.H. Jukes, C.R. Cantor (1969) "Evolution of protein molecules"
     [2] https://en.wikipedia.org/wiki/Models_of_DNA_evolution#JC69_model_(Jukes_and_Cantor_1969)
     """
+
     def __init__(self, *, dim=4):
         assert isinstance(dim, int) and dim > 0
         super().__init__()
         self.dim = dim
-        self.rate = PyroSample(dist.Exponential(1.))
+        self.rate = PyroSample(dist.Exponential(1.0))
 
     def forward(self):
         D = self.dim
-        return self.rate * (1. / D - torch.eye(D))
+        return self.rate * (1.0 / D - torch.eye(D))
 
     @pyro_method
     def matrix_exp(self, dt):
@@ -68,13 +70,15 @@ class GeneralizedTimeReversible(SubstitutionModel):
     This provides a weak Dirichlet(2) prior over the steady state distribution
     and a weak Exponential(1) prior over mutation rates.
     """
+
     def __init__(self, *, dim=4):
         assert isinstance(dim, int) and dim > 0
         super().__init__()
         self.dim = dim
-        self.stationary = PyroSample(dist.Dirichlet(torch.full((dim,), 2.)))
+        self.stationary = PyroSample(dist.Dirichlet(torch.full((dim,), 2.0)))
         self.rates = PyroSample(
-            dist.Exponential(torch.ones(dim * (dim - 1) // 2)).to_event(1))
+            dist.Exponential(torch.ones(dim * (dim - 1) // 2)).to_event(1)
+        )
         i = torch.arange(dim)
         self._index = (i > i[:, None]).nonzero(as_tuple=False).T
 

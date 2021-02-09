@@ -36,8 +36,9 @@ def test_interpolate_lmve_smoke(size, duration):
     while t0 < duration + 0.9:
         t1 = t0 + 0.2
         while t1 < duration + 0.9:
-            actual = _interpolate_lmve(torch.tensor(t0), torch.tensor(t1),
-                                       matrix, log_vector)
+            actual = _interpolate_lmve(
+                torch.tensor(t0), torch.tensor(t1), matrix, log_vector
+            )
             assert actual.shape == log_vector.shape
             t1 += 1
         t0 += 1

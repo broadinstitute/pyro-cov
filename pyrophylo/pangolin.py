@@ -37,7 +37,7 @@ def decompress(name):
         return name
     for key, value in PANGOLIN_ALIASES.items():
         if name.startswith(key):
-            result = value + name[len(key):]
+            result = value + name[len(key) :]
             DECOMPRESS[name] = result
             COMPRESS[result] = name
             return result

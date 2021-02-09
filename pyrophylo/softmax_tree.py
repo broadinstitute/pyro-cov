@@ -17,6 +17,7 @@ class SoftmaxTree(dist.Distribution):
         parametrizing the independent Bernoulli distributions over bits
         in each leaf's embedding.
     """
+
     has_rsample = True  # only wrt times, not parents
 
     def __init__(self, leaf_times, bit_times, logits):

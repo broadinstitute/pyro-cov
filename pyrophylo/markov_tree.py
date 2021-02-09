@@ -8,8 +8,8 @@ from pyro.distributions.util import broadcast_shape
 from pyro.ops.special import safe_log
 from pyro.util import warn_if_nan
 
-from .util import deduplicate_tensor, weak_memoize_by_id
 from .phylo import Phylogeny
+from .util import deduplicate_tensor, weak_memoize_by_id
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +30,7 @@ class MarkovTree(dist.TorchDistribution):
         nearest integer; the "naive" method allows non-integer times but
         linearly approximates matrix exponentials within short time intervals.
     """
+
     arg_constraints = {
         "transition": constraints.IndependentConstraint(constraints.simplex, 2),
     }
@@ -53,7 +54,8 @@ class MarkovTree(dist.TorchDistribution):
     @constraints.dependent_property
     def support(self):
         return constraints.IndependentConstraint(
-            constraints.integer_interval(0, self.num_states), 1)
+            constraints.integer_interval(0, self.num_states), 1
+        )
 
     def log_prob(self, leaf_state):
         """
@@ -98,8 +100,7 @@ def markov_log_prob(phylo, leaf_state, state_trans):
     batch_shape = phylo.batch_shape
     if batch_shape:
         # TODO vectorize.
-        return torch.stack([markov_log_prob(p, leaf_state, state_trans)
-                            for p in phylo])
+        return torch.stack([markov_log_prob(p, leaf_state, state_trans) for p in phylo])
     num_nodes = phylo.num_nodes
     num_leaves = phylo.num_leaves
     num_states = state_trans.size(-1)
@@ -227,6 +228,7 @@ class MarkovTreeLikelihood:
     :param Tensor leaf_state: int tensor of states of all leaf nodes.
         Nonnegative values are observed. The value ``-1`` denods missing data.
     """
+
     def __init__(
         self,
         phylo,  # batched Phylogeny
@@ -263,7 +265,7 @@ class MarkovTreeLikelihood:
 
         # Collapse parent-grandparent relationships of zero duration,
         # as required by the propagation algorithm in .__call__().
-        has_parent = (parents != -1)
+        has_parent = parents != -1
         while True:
             has_gparent = has_parent & has_parent[parents]
             ptimes = times[parents]
@@ -280,9 +282,12 @@ class MarkovTreeLikelihood:
         leaves = leaves[order]
         leaf_state = leaf_state[order]
         ones = torch.ones(()).expand_as(leaves)
-        leaf_strata = torch.zeros(T1 - T0 + 2) \
-                           .scatter_add_(0, times[leaves] - T0 + 1, ones) \
-                           .cumsum(0).long()
+        leaf_strata = (
+            torch.zeros(T1 - T0 + 2)
+            .scatter_add_(0, times[leaves] - T0 + 1, ones)
+            .cumsum(0)
+            .long()
+        )
         assert leaf_strata[0] == 0
         assert leaf_strata[-1] == len(leaves)
 
@@ -330,7 +335,7 @@ class MarkovTreeLikelihood:
                 # TODO Lazily convert between (exp,shift) <--> log representations.
 
             # Add new leaf lineages ("birth").
-            beg, end = leaf_strata[t - T0:t - T0 + 2]
+            beg, end = leaf_strata[t - T0 : t - T0 + 2]
             new_nodes = leaves[beg:end]
             if new_nodes.numel():
                 new_logps = _log_one_hot(new_nodes.shape + (N,), leaf_state[beg:end])
@@ -341,7 +346,9 @@ class MarkovTreeLikelihood:
             pi = parents[nodes]
             to_merge = times[pi] == t
             if to_merge.any():
-                nodes, order = torch.where(to_merge, pi, nodes).unique(return_inverse=True)
+                nodes, order = torch.where(to_merge, pi, nodes).unique(
+                    return_inverse=True
+                )
                 order = order.unsqueeze(-1).expand_as(logps)
                 logps = logps.new_zeros(nodes.shape + (N,)).scatter_add(0, order, logps)
         assert nodes.shape == (self.batch_size,)
@@ -357,4 +364,4 @@ markov_tree_likelihood = weak_memoize_by_id(MarkovTreeLikelihood)
 
 
 def _log_one_hot(shape, index):
-    return torch.full(shape, -math.inf).scatter_(-1, index.unsqueeze(-1), 0.)
+    return torch.full(shape, -math.inf).scatter_(-1, index.unsqueeze(-1), 0.0)

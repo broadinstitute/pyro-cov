@@ -8,7 +8,13 @@ import pandas as pd
 import torch
 
 from pyrophylo import pangolin
-from pyrophylo.geo import JHU_TO_UN, gisaid_to_jhu_location, parse_date, pd_to_torch, read_csv
+from pyrophylo.geo import (
+    JHU_TO_UN,
+    gisaid_to_jhu_location,
+    parse_date,
+    pd_to_torch,
+    read_csv,
+)
 from pyrophylo.strains import TimeSpaceStrainModel
 
 logger = logging.getLogger(__name__)
@@ -21,16 +27,24 @@ def extract_transit_features(args, us_df, global_df, region_tuples):
     logger.info(f"Extracting transit features among {R} regions")
 
     # Extract geometric features.
-    lat = torch.cat([torch.from_numpy(us_df["Lat"].to_numpy()),
-                     torch.from_numpy(global_df["Lat"].to_numpy())]).float()
-    lon = torch.cat([torch.from_numpy(us_df["Long_"].to_numpy()),
-                     torch.from_numpy(global_df["Long"].to_numpy())]).float()
+    lat = torch.cat(
+        [
+            torch.from_numpy(us_df["Lat"].to_numpy()),
+            torch.from_numpy(global_df["Lat"].to_numpy()),
+        ]
+    ).float()
+    lon = torch.cat(
+        [
+            torch.from_numpy(us_df["Long_"].to_numpy()),
+            torch.from_numpy(global_df["Long"].to_numpy()),
+        ]
+    ).float()
     lat.mul_(math.pi / 180)
     lon.mul_(math.pi / 180)
     earth_radius_km = 6.371e6
-    xyz = torch.stack([lat.cos() * lon.cos(),
-                       lat.cos() * lon.sin(),
-                       lat.sin()], dim=-1).mul_(earth_radius_km)
+    xyz = torch.stack(
+        [lat.cos() * lon.cos(), lat.cos() * lon.sin(), lat.sin()], dim=-1
+    ).mul_(earth_radius_km)
     xyz[xyz.sum(-1).isnan()] = 0
     distance_km = torch.cdist(xyz, xyz)
     radii_km = torch.tensor([float(r) for r in args.radii_km.split(",")])
@@ -51,22 +65,28 @@ def extract_transit_features(args, us_df, global_df, region_tuples):
     same_country = place[:, 0] == place[:, None, 0]
     same_state = place[:, 1] == place[:, None, 1]
     same_city = place[:, 2] == place[:, None, 2]
-    political_features = torch.stack([
-        same_country,
-        same_country & same_state,
-        same_country & same_state & same_city,
-    ], dim=-1)
+    political_features = torch.stack(
+        [
+            same_country,
+            same_country & same_state,
+            same_country & same_state & same_city,
+        ],
+        dim=-1,
+    )
     assert political_features.shape == (R, R, 3)
 
     def cross_features(x, y):
         cross = x[..., None] * y[..., None, :]
         return cross.reshape(*cross.shape[:-2], -1)
 
-    features = torch.cat([
-        geometric_features,
-        political_features,
-        cross_features(geometric_features, political_features),
-    ], dim=-1)
+    features = torch.cat(
+        [
+            geometric_features,
+            political_features,
+            cross_features(geometric_features, political_features),
+        ],
+        dim=-1,
+    )
     assert features.shape[:2] == (R, R)
     features.diagonal(dim1=0, dim2=1).fill_(0)
 
@@ -80,10 +100,18 @@ def main(args):
     us_deaths_df = read_csv("time_series_covid19_deaths_US.csv")
     global_cases_df = read_csv("time_series_covid19_confirmed_global.csv")
     global_deaths_df = read_csv("time_series_covid19_deaths_global.csv")
-    case_data = torch.cat([pd_to_torch(us_cases_df, columns=slice(11, None)),
-                           pd_to_torch(global_cases_df, columns=slice(4, None))]).T
-    death_data = torch.cat([pd_to_torch(us_deaths_df, columns=slice(12, None)),
-                            pd_to_torch(global_deaths_df, columns=slice(4, None))]).T
+    case_data = torch.cat(
+        [
+            pd_to_torch(us_cases_df, columns=slice(11, None)),
+            pd_to_torch(global_cases_df, columns=slice(4, None)),
+        ]
+    ).T
+    death_data = torch.cat(
+        [
+            pd_to_torch(us_deaths_df, columns=slice(12, None)),
+            pd_to_torch(global_deaths_df, columns=slice(4, None)),
+        ]
+    ).T
     assert case_data.shape == death_data.shape
     start_date = parse_date(us_cases_df.columns[11])
 
@@ -94,19 +122,21 @@ def main(args):
         df = pd.read_csv(args.population_file_in, header=0)
         df = df[df["Time"] == 2020]
         df = df[df["Variant"] == "High"]
-        pop = {k.lower(): v * 1000
-               for k, v in zip(df["Location"].to_list(), df["PopTotal"].to_list())}
+        pop = {
+            k.lower(): v * 1000
+            for k, v in zip(df["Location"].to_list(), df["PopTotal"].to_list())
+        }
         global_pop = []
         for name in global_cases_df["Country/Region"].tolist():
             name = name.lower()
             name = JHU_TO_UN.get(name, name)
             if name is None:  # cruise ship
-                global_pop.append(10000.)
+                global_pop.append(10000.0)
             else:
                 global_pop.append(float(pop[name]))
         global_pop = torch.tensor(global_pop)
         population = torch.cat([us_pop, global_pop])
-        population.clamp_(min=10000.)
+        population.clamp_(min=10000.0)
 
     # Convert from cumulative to density.
     case_data[1:] -= case_data[:-1].clone()
@@ -132,18 +162,20 @@ def main(args):
     # Convert from daily to weekly observations.
     T, R = case_data.shape
     T //= 7
-    case_data = case_data[:T * 7].reshape(T, 7, R).sum(-2)
-    death_data = death_data[:T * 7].reshape(T, 7, R).sum(-2)
+    case_data = case_data[: T * 7].reshape(T, 7, R).sum(-2)
+    death_data = death_data[: T * 7].reshape(T, 7, R).sum(-2)
     strain_time += (args.start_date - start_date).days
     strain_time.clamp_(min=0).floor_divide_(7)
 
     # Match geographic regions across JUH and GISAID data.
     sample_region, sample_matrix, region_tuples = gisaid_to_jhu_location(
-        columns, us_cases_df, global_cases_df)
+        columns, us_cases_df, global_cases_df
+    )
 
     # Extract transit fetures (geographic + political).
     transit_data = extract_transit_features(
-        args, us_cases_df, global_cases_df, region_tuples)
+        args, us_cases_df, global_cases_df, region_tuples
+    )
 
     # Create a model.
     model = TimeSpaceStrainModel(
@@ -163,8 +195,10 @@ def main(args):
         torch.set_default_tensor_type(torch.cuda.FloatTensor)
         model.cuda()
     else:
-        print("WARNING it looks like you don't have a GPU or haven't set --cuda. "
-              "Training on CPU may take a very long time...")
+        print(
+            "WARNING it looks like you don't have a GPU or haven't set --cuda. "
+            "Training on CPU may take a very long time..."
+        )
 
     # Train.
     losses = model.fit(
@@ -176,11 +210,14 @@ def main(args):
         jit=args.jit,
         log_every=args.log_every,
     )
-    torch.save({
-        "args": args,
-        "model": model,
-        "losses": losses,
-    }, args.model_file_out)
+    torch.save(
+        {
+            "args": args,
+            "model": model,
+            "losses": losses,
+        },
+        args.model_file_out,
+    )
 
 
 if __name__ == "__main__":
@@ -197,8 +234,9 @@ if __name__ == "__main__":
     parser.add_argument("-lrd", "--learning-rate-decay", default=0.1, type=float)
     parser.add_argument("-n", "--num-steps", default=1501, type=int)
     parser.add_argument("--jit", action="store_true")
-    parser.add_argument("--cuda", action="store_true",
-                        default=torch.cuda.is_available())
+    parser.add_argument(
+        "--cuda", action="store_true", default=torch.cuda.is_available()
+    )
     parser.add_argument("--cpu", dest="cuda", action="store_false")
     parser.add_argument("-l", "--log-every", default=1, type=int)
     parser.add_argument("-f", "--force", action="store_true")

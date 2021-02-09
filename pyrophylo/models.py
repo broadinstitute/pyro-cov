@@ -11,8 +11,16 @@ from pyrophylo.markov_tree import MarkovTree
 class CountyModel(CompartmentalModel):
     # Let's explicitly input all data needed for inference;
     # that way the model can be saved and loaded for later prediction.
-    def __init__(self, county_names, population, distance_matrix,
-                 init_cases, new_cases, trees, leaf_to_county):
+    def __init__(
+        self,
+        county_names,
+        population,
+        distance_matrix,
+        init_cases,
+        new_cases,
+        trees,
+        leaf_to_county,
+    ):
         N = len(county_names)
         T = len(new_cases)
         assert population.shape == (N,)
@@ -32,9 +40,9 @@ class CountyModel(CompartmentalModel):
         self.leaf_to_county = leaf_to_county
 
     def global_model(self):
-        tau = 14.  # recovery time
+        tau = 14.0  # recovery time
         # Assume basic reproductive number around 2.
-        R0 = pyro.sample("R0", dist.LogNormal(math.log(2), 1.))
+        R0 = pyro.sample("R0", dist.LogNormal(math.log(2), 1.0))
         # Assume about 40% response rate.
         rho = pyro.sample("rho", dist.Beta(4, 6))
         # Assume all distributions are overdispersed.
@@ -42,7 +50,7 @@ class CountyModel(CompartmentalModel):
 
         # Let's use a Gaussian kernel with learnable radius.
         radius = self.distance_matrix.mean()
-        radius = pyro.sample("radius", dist.LogNormal(math.log(radius), 1.))
+        radius = pyro.sample("radius", dist.LogNormal(math.log(radius), 1.0))
         coupling = self.distance_matrix.div(radius).pow(2).mul(-0.5).exp()
 
         return R0, tau, rho, od, coupling
@@ -64,15 +72,20 @@ class CountyModel(CompartmentalModel):
 
         with self.region_plate:
             # Sample flows between compartments.
-            S2I = pyro.sample("S2I_{}".format(t),
-                              infection_dist(individual_rate=R0 / tau,
-                                             num_susceptible=state["S"],
-                                             num_infectious=I_coupled,
-                                             population=pop_coupled,
-                                             overdispersion=od))
-            I2R = pyro.sample("I2R_{}".format(t),
-                              binomial_dist(state["I"], 1 / tau,
-                                            overdispersion=od))
+            S2I = pyro.sample(
+                "S2I_{}".format(t),
+                infection_dist(
+                    individual_rate=R0 / tau,
+                    num_susceptible=state["S"],
+                    num_infectious=I_coupled,
+                    population=pop_coupled,
+                    overdispersion=od,
+                ),
+            )
+            I2R = pyro.sample(
+                "I2R_{}".format(t),
+                binomial_dist(state["I"], 1 / tau, overdispersion=od),
+            )
 
             # Update compartments with flows.
             state["S"] = state["S"] - S2I
@@ -80,9 +93,11 @@ class CountyModel(CompartmentalModel):
 
             # Condition on aggregate observations.
             t_is_observed = isinstance(t, slice) or t < self.duration
-            pyro.sample("obs_{}".format(t),
-                        binomial_dist(S2I, rho, overdispersion=od),
-                        obs=self.new_cases[t] if t_is_observed else None)
+            pyro.sample(
+                "obs_{}".format(t),
+                binomial_dist(S2I, rho, overdispersion=od),
+                obs=self.new_cases[t] if t_is_observed else None,
+            )
 
     def finalize(self, params, prev, curr):
         R0, tau, rho, od, coupling = params
@@ -102,8 +117,11 @@ class CountyModel(CompartmentalModel):
             provenance = provenance.unsqueeze(-4)
 
         # Tree likelihood.
-        pyro.sample("geolocation",
-                    dist.MixtureSameFamily(
-                        dist.Categorical(torch.ones(self.trees.batch_shape)),
-                        MarkovTree(self.trees, provenance)),
-                    obs=self.leaf_to_county)
+        pyro.sample(
+            "geolocation",
+            dist.MixtureSameFamily(
+                dist.Categorical(torch.ones(self.trees.batch_shape)),
+                MarkovTree(self.trees, provenance),
+            ),
+            obs=self.leaf_to_county,
+        )

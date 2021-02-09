@@ -21,6 +21,7 @@ class Phylogeny:
         must be first and have null id ``-1``.
     :param Tensor leaves: int tensor of ids of all leaf nodes.
     """
+
     _fields = ("times", "parents", "leaves")
 
     def __init__(self, times, parents, leaves):
@@ -29,7 +30,9 @@ class Phylogeny:
         num_leaves = (num_nodes + 1) // 2
         assert parents.shape == times.shape
         assert leaves.shape == times.shape[:-1] + (num_leaves,)
-        assert (times[..., :-1] <= times[..., 1:]).all(), "expected nodes ordered by time"
+        assert (
+            times[..., :-1] <= times[..., 1:]
+        ).all(), "expected nodes ordered by time"
         assert (parents[..., 0] == -1).all(), "expected root node first"
         assert (parents[..., 1:] >= 0).all(), "multiple root nodes"
         if __debug__:
@@ -75,7 +78,7 @@ class Phylogeny:
 
     def num_lineages(self):
         _parents = self.parents[..., 1:]
-        sign = torch.ones_like(self.parents).scatter_(-1, _parents, -1.)
+        sign = torch.ones_like(self.parents).scatter_(-1, _parents, -1.0)
         num_lineages = sign.flip(-1).cumsum(-1).flip(-1)
         return num_lineages
 
@@ -143,8 +146,10 @@ class Phylogeny:
         :rtype: Phylogeny
         """
         phylogenies = list(phylogenies)
-        kwargs = {name: torch.stack([getattr(x, name) for x in phylogenies])
-                  for name in Phylogeny._fields}
+        kwargs = {
+            name: torch.stack([getattr(x, name) for x in phylogenies])
+            for name in Phylogeny._fields
+        }
         return Phylogeny(**kwargs)
 
     @staticmethod
@@ -192,8 +197,9 @@ class Phylogeny:
         assert clades[0] not in clade_to_parent, "invalid root"
         clade_to_id = {clade: i for i, clade in enumerate(clades)}
         times = torch.tensor([float(clade_to_time[clade]) for clade in clades])
-        parents = torch.tensor([-1] + [clade_to_id[clade_to_parent[clade]]
-                                       for clade in clades[1:]])
+        parents = torch.tensor(
+            [-1] + [clade_to_id[clade_to_parent[clade]] for clade in clades[1:]]
+        )
 
         # Construct leaf index ordered by clade.name.
         leaves = [clade for clade in clades if len(clade) == 0]
@@ -208,8 +214,9 @@ class Phylogeny:
         Generate a random (arbitrarily distributed) phylogeny for testing.
         """
         if num_samples is not None:
-            return Phylogeny.stack(Phylogeny.generate(num_leaves)
-                                   for _ in range(num_samples))
+            return Phylogeny.stack(
+                Phylogeny.generate(num_leaves) for _ in range(num_samples)
+            )
         num_nodes = 2 * num_leaves - 1
         times = torch.randn(num_nodes)
         nodes = list(range(num_leaves))

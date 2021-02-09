@@ -43,8 +43,9 @@ def print_dot():
 
 def load_data(args):
     filename = os.path.expanduser(args.alignment_infile)
-    probs = read_alignment(filename, max_taxa=args.max_taxa,
-                           max_characters=args.max_characters)
+    probs = read_alignment(
+        filename, max_taxa=args.max_taxa, max_characters=args.max_characters
+    )
     eps = torch.finfo(probs.dtype).eps
 
     # Optionally treat indels as missing data.
@@ -70,8 +71,9 @@ def load_data(args):
 
 def pretrain_model(args, model):
     logger.info(f"Pretraining model via SVI for {args.pre_steps} steps")
-    logger.info("model has {} parameters".format(
-        sum(p.numel() for p in model.parameters())))
+    logger.info(
+        "model has {} parameters".format(sum(p.numel() for p in model.parameters()))
+    )
 
     # Pretrain the model via SVI with an AutoDelta guide.
     optim = ClippedAdam({"lr": args.learning_rate, "betas": (0.8, 0.9)})
@@ -93,8 +95,7 @@ def train_guide(args, model):
     logger.info(f"Training model+guide via SVI for {args.num_steps} steps")
 
     # Configure a guide.
-    guide_config = {"init_loc_fn": model.init_loc_fn,
-                    "init_scale": args.init_scale}
+    guide_config = {"init_loc_fn": model.init_loc_fn, "init_scale": args.init_scale}
     if args.guide_map:
         guide = AutoDelta(model, init_loc_fn=model.init_loc_fn)
     elif args.guide_rank == 0:
@@ -103,17 +104,21 @@ def train_guide(args, model):
         guide_config["rank"] = args.guide_rank
         guide = AutoLowRankMultivariateNormal(model, **guide_config)
     guide()
-    logger.info("guide has {} parameters".format(
-        sum(p.numel() for p in guide.parameters())))
+    logger.info(
+        "guide has {} parameters".format(sum(p.numel() for p in guide.parameters()))
+    )
     history = {}
     if args.debug_grads:
         for name, param in guide.named_parameters():
+
             @param.register_hook
             def print_grad_norm(grad, name=name, param=param):
                 print(f"{name}: [{grad.data.min():0.3g}, {grad.data.max():0.3g}]")
+
     if args.debug_time:
         for name, param in guide.named_parameters():
             if "internal_times" in name and "scales" not in name:
+
                 @param.register_hook
                 def print_time_grad(grad, name=name, param=param):
                     value, root = param.data.max(-1)
@@ -124,10 +129,14 @@ def train_guide(args, model):
                     print(f"{name}[root] value={value:0.3g}, grad={grad:0.3g}")
 
     # Train the guide via SVI.
-    optim = ClippedAdam({"lr": args.learning_rate,
-                         "lrd": args.learning_rate_decay ** (1 / args.num_steps),
-                         "clip_norm": args.clip_norm,
-                         "betas": (0.8, 0.99)})
+    optim = ClippedAdam(
+        {
+            "lr": args.learning_rate,
+            "lrd": args.learning_rate_decay ** (1 / args.num_steps),
+            "clip_norm": args.clip_norm,
+            "betas": (0.8, 0.99),
+        }
+    )
     svi = SVI(model, guide, optim, Trace_ELBO())
     losses = []
     for step in range(args.num_steps):
@@ -145,10 +154,12 @@ def train_guide(args, model):
         if value.numel() == 1:
             message.append(f"{name} = {value:0.3g}")
         else:
-            message.append(f"{name}.shape:{tuple(value.shape)}, "
-                           f"lb mean ub: {value.min().item():0.3g} "
-                           f"{value.mean().item():0.3g} "
-                           f"{value.max().item():0.3g}")
+            message.append(
+                f"{name}.shape:{tuple(value.shape)}, "
+                f"lb mean ub: {value.min().item():0.3g} "
+                f"{value.mean().item():0.3g} "
+                f"{value.max().item():0.3g}"
+            )
     logger.info("\n".join(message))
 
     return guide, losses, history
@@ -177,10 +188,9 @@ def _predict_task(args):
 def predict(args, model, guide):
     logger.info(f"Drawing {args.num_samples} posterior samples")
     map_ = mp.Pool().map if args.parallel else map
-    samples = list(map_(_predict_task, [
-        (args, model, guide, i)
-        for i in range(args.num_samples)
-    ]))
+    samples = list(
+        map_(_predict_task, [(args, model, guide, i) for i in range(args.num_samples)])
+    )
     trees = Phylogeny.stack([tree for tree, _ in samples])
     codes = torch.stack([codes for _, codes in samples])
     return trees, codes
@@ -194,20 +204,21 @@ def sample_model_mcmc(args, model):
     frozen_model = poutine.block(model, hide_fn=lambda msg: "decoder." in msg["name"])
 
     # Run mcmc.
-    kernel = NUTS(frozen_model,
-                  step_size=args.init_scale,
-                  full_mass=[("internal_times", "subs_model.rate")],
-                  init_strategy=model.init_loc_fn,
-                  max_plate_nesting=model.max_plate_nesting,
-                  max_tree_depth=args.max_tree_depth)
-    mcmc = MCMC(kernel,
-                num_samples=args.num_samples,
-                num_chains=args.num_chains)
+    kernel = NUTS(
+        frozen_model,
+        step_size=args.init_scale,
+        full_mass=[("internal_times", "subs_model.rate")],
+        init_strategy=model.init_loc_fn,
+        max_plate_nesting=model.max_plate_nesting,
+        max_tree_depth=args.max_tree_depth,
+    )
+    mcmc = MCMC(kernel, num_samples=args.num_samples, num_chains=args.num_chains)
     mcmc.run()
     samples = mcmc.get_samples()
     with torch.no_grad():
-        predictive = Predictive(model, samples,
-                                return_sites=["codes", "times", "parents"])
+        predictive = Predictive(
+            model, samples, return_sites=["codes", "times", "parents"]
+        )
         samples = predictive(mode="predict")
 
         # Convert to a stacked Phylogeny object.
@@ -240,10 +251,14 @@ def evaluate(args, trees):
     #     http://proceedings.mlr.press/v70/dinh17a.html
     counts = Counter(t.hash_topology() for t in trees)
     top_k = counts.most_common(args.top_k)
-    logger.info("Estimated posterior distribution for the top {} trees:\n{}"
-                .format(args.top_k,
-                        ", ".join("{:0.3g}".format(count / args.num_samples)
-                                  for key, count in top_k)))
+    logger.info(
+        "Estimated posterior distribution for the top {} trees:\n{}".format(
+            args.top_k,
+            ", ".join(
+                "{:0.3g}".format(count / args.num_samples) for key, count in top_k
+            ),
+        )
+    )
     if args.print_trees:
         for i, (tree, count) in enumerate(top_k):
             logger.info(f"Tree {i}:\n{pretty_tree(tree)}")
@@ -257,9 +272,13 @@ def main(args):
     # Run the pipeline.
     leaf_times, leaf_logits = load_data(args)
     args.embedding_dim = min(args.embedding_dim, len(leaf_times))
-    model = BetheModel(leaf_times, leaf_logits,
-                       embedding_dim=args.embedding_dim,
-                       bp_iters=args.bp_iters, min_dt=args.min_dt)
+    model = BetheModel(
+        leaf_times,
+        leaf_logits,
+        embedding_dim=args.embedding_dim,
+        bp_iters=args.bp_iters,
+        min_dt=args.min_dt,
+    )
     if args.subs_rate is not None:
         model.subs_model.rate = args.subs_rate
     losses = pretrain_model(args, model)

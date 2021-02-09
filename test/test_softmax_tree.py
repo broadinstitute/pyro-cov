@@ -32,8 +32,7 @@ def model(leaf_times, leaf_states, num_features):
     # Note this is where our coalescent model assumes geographically
     # homogeneous reproductive rate, which is not realistic.
     # See appendix of (Vaughan et al. 2014) for discussion of this assumption.
-    phylogeny = pyro.sample("phylogeny",
-                            dist.Coalescent(coal_params, leaf_times))
+    phylogeny = pyro.sample("phylogeny", dist.Coalescent(coal_params, leaf_times))
 
     # This is compatible with subsampling features, but not leaves.
     subs_params = pyro.sample("subs_params", dist.GTRGamma("TODO"))  # global
@@ -42,8 +41,7 @@ def model(leaf_times, leaf_states, num_features):
         # This is simpler (because it is time-homogeneous)
         # but more complex in that it is batched.
         # This computes mutation likelihood via dynamic programming.
-        pyro.sample("leaf_times", MarkovTree(phylogeny, subs_params),
-                    obs=leaf_states)
+        pyro.sample("leaf_times", MarkovTree(phylogeny, subs_params), obs=leaf_states)
 
 
 def guide(leaf_times, leaf_states, num_features, *, logits_fn=None):
@@ -55,8 +53,9 @@ def guide(leaf_times, leaf_states, num_features, *, logits_fn=None):
     pyro.sample("coal_params", dist.Delta(aux["TODO"]))  # global
     pyro.sample("subs_params", dist.Delta(aux["TODO"]))  # global
     # These are the times of each bit in the embedding vector.
-    bit_times = pyro.sample("bit_times", dist.Delta(aux["TODO"]),
-                            infer={"is_auxiliary": True})
+    bit_times = pyro.sample(
+        "bit_times", dist.Delta(aux["TODO"]), infer={"is_auxiliary": True}
+    )
 
     # Learn parameters of the discrete distributions,
     # possibly conditioned on continuous latents.
@@ -67,9 +66,8 @@ def guide(leaf_times, leaf_states, num_features, *, logits_fn=None):
         # Fully local guide, compatible with subsampling features but not leaves.
         with pyro.plate("leaves", len(leaf_times)):
             logits = pyro.param(
-                "logits",
-                lambda: torch.randn(leaf_times.shape),
-                event_dim=0)
+                "logits", lambda: torch.randn(leaf_times.shape), event_dim=0
+            )
     assert len(logits) == len(leaf_times)
 
     pyro.sample("phylogeny", SoftmaxTree(bit_times, logits))

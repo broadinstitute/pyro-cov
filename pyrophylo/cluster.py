@@ -17,6 +17,7 @@ class SoftminimaxClustering:
         \operatorname{min}_{z\in\text{clusters}}
         \|x-z\|_{p_{\text{feature}}}^{p_{\text{edge}}
     """
+
     def __init__(self, *, p_feature=1, p_edge=4):
         self.p_feature = p_feature
         self.p_edge = p_edge
@@ -36,7 +37,7 @@ class SoftminimaxClustering:
         U, V = UV.unbind(-1)
 
         mass = torch.ones(K + 1, dtype=torch.float)
-        mean = data[:K + 1].clone()
+        mean = data[: K + 1].clone()
         for i in range(K, N):
             # Insert the datapoint as a new cluster.
             mean[K] = data[i]
@@ -57,7 +58,9 @@ class SoftminimaxClustering:
 
             if log_every and i % log_every == 0:
                 p = mass / mass.sum()
-                perplexity = p.log().clamp(min=torch.finfo(p.dtype).min).neg().mul(p).sum().exp()
+                perplexity = (
+                    p.log().clamp(min=torch.finfo(p.dtype).min).neg().mul(p).sum().exp()
+                )
                 logger.info(f"step {i: >6d}/{N} perplexity = {perplexity:0.2f}")
 
         mass, i = mass[:K].sort(descending=True)
@@ -81,7 +84,11 @@ class SoftminimaxClustering:
         for step in range(num_steps):
             batch = data[torch.randperm(len(data))[:batch_size]].float()
             optim.zero_grad()
-            loss = torch.cdist(batch, mean, p=self.p_feature).min(-1).values.norm(self.p_edge)
+            loss = (
+                torch.cdist(batch, mean, p=self.p_feature)
+                .min(-1)
+                .values.norm(self.p_edge)
+            )
             loss.backward()
             optim.step()
             losses.append(loss.item())

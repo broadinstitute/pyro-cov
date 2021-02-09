@@ -8,8 +8,8 @@ import torch
 logger = logging.getLogger(__name__)
 
 JHU_DIRNAME = os.path.expanduser(
-    "~/github/CSSEGISandData/COVID-19/"
-    "csse_covid_19_data/csse_covid_19_time_series")
+    "~/github/CSSEGISandData/COVID-19/" "csse_covid_19_data/csse_covid_19_time_series"
+)
 
 # To update see explore-jhu-time-series.ipynb
 GISAID_TO_JHU = {
@@ -114,8 +114,10 @@ def gisaid_to_jhu_location(gisaid_columns, jhu_us_df, jhu_global_df):
     assert len(jhu_locations) == len(jhu_us_df) + len(jhu_global_df)
 
     # Extract location tuples from GISAID data.
-    gisaid_to_jhu = {key: tuple(p.strip() for p in key.lower().split("/")[1:])
-                     for key in set(gisaid_columns["location"])}
+    gisaid_to_jhu = {
+        key: tuple(p.strip() for p in key.lower().split("/")[1:])
+        for key in set(gisaid_columns["location"])
+    }
 
     # Ensure each GISAID location maps to a prefix of some JHU tuple.
     jhu_prefixes = set(jhu_locations) | {()}
@@ -134,7 +136,9 @@ def gisaid_to_jhu_location(gisaid_columns, jhu_us_df, jhu_global_df):
     # Construct a matrix projecting GISAID locations to JHU locations.
     gisaid_keys = {key: i for i, key in enumerate(sorted(gisaid_to_jhu))}
     gisaid_values = {gisaid_to_jhu[key]: i for key, i in gisaid_keys.items()}
-    logger.info(f"Matching {len(gisaid_keys)} GISAID regions to {len(gisaid_values)} JHU fuzzy regions")
+    logger.info(
+        f"Matching {len(gisaid_keys)} GISAID regions to {len(gisaid_values)} JHU fuzzy regions"
+    )
     sample_matrix = torch.zeros(len(gisaid_to_jhu), len(jhu_locations))
     for j, value in enumerate(jhu_locations):
         for length in range(1 + len(value)):

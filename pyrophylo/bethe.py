@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 # TODO move upstream to Pyro
 class UnorderedCoalescentTimes(dist.CoalescentTimes):
-    support = constraints.less_than(0.)
+    support = constraints.less_than(0.0)
 
     def __init__(self, leaf_times, rate):
         if not (leaf_times == 0).all():
@@ -51,7 +51,7 @@ class Encoder(nn.Module):
         self.log_scale = nn.Parameter(torch.zeros(embedding_dim))
 
     def forward(self, probs):
-        shape = probs.shape[:-len(self.shape)] + (self.shape.numel(),)
+        shape = probs.shape[: -len(self.shape)] + (self.shape.numel(),)
         loc = self.linear(probs.reshape(shape))
         scale = self.log_scale.exp()
         return loc, scale
@@ -77,10 +77,12 @@ class BetheModel(PyroModule):
     A phylogenetic tree model that marginalizes over tree structure and relaxes
     over the states of internal nodes.
     """
+
     max_plate_nesting = 2
 
-    def __init__(self, leaf_times, leaf_logits, *,
-                 embedding_dim=20, bp_iters=30, min_dt=0.01):
+    def __init__(
+        self, leaf_times, leaf_logits, *, embedding_dim=20, bp_iters=30, min_dt=0.01
+    ):
         super().__init__()
         assert leaf_times.dim() == 1
         assert (leaf_times[:-1] <= leaf_times[1:]).all()
@@ -116,28 +118,32 @@ class BetheModel(PyroModule):
 
         if mode in ("train", "pretrain"):
             # Condition on observations.
-            pyro.factor("leaf_likelihood",
-                        einsum("lcd,lcd->", probs[:L], self.leaf_logits))
+            pyro.factor(
+                "leaf_likelihood", einsum("lcd,lcd->", probs[:L], self.leaf_logits)
+            )
 
             # Add hierarchical elbo terms.
             pyro.factor("entropy", -(probs * probs.log()).sum())
             pyro.factor("hierarchy", self.encoder.expected_log_prob(codes, probs))
         if mode == "pretrain":  # If we're training only self.decoder,
-            return              # then we can ignore the rest of the model.
+            return  # then we can ignore the rest of the model.
 
         # Sample constant coalescent rate from the Jeffreys prior.
         coalescent_rate = pyro.sample(
             "coalescent_rate",
             dist.TransformedDistribution(
                 dist.ImproperUniform(constraints.real, (), ()),
-                dist.transforms.ExpTransform()))
+                dist.transforms.ExpTransform(),
+            ),
+        )
 
         # Sample times of internal nodes.
         internal_times = pyro.sample(
-            "internal_times",
-            UnorderedCoalescentTimes(self.leaf_times, coalescent_rate))
-        times = pyro.deterministic("times",
-                                   torch.cat([self.leaf_times, internal_times]))
+            "internal_times", UnorderedCoalescentTimes(self.leaf_times, coalescent_rate)
+        )
+        times = pyro.deterministic(
+            "times", torch.cat([self.leaf_times, internal_times])
+        )
 
         # Account for random tree structure.
         # TODO try running this in double precision.
@@ -145,8 +151,9 @@ class BetheModel(PyroModule):
         tree_dist = dist.OneTwoMatching(logits, bp_iters=self.bp_iters)
         if mode == "train":
             # During training, analytically marginalize over trees.
-            pyro.factor("tree_likelihood",
-                        tree_dist.log_partition_function.to(times.dtype))
+            pyro.factor(
+                "tree_likelihood", tree_dist.log_partition_function.to(times.dtype)
+            )
         elif mode == "predict":
             # During prediction, simply sample a tree.
             # TODO implement OneTwoMatching.sample(); until then use .mode().
@@ -213,8 +220,9 @@ class BetheModel(PyroModule):
         leaf_codes *= L ** 0.5  # Force unit variance.
 
         # Heuristically initialize hierarchy.
-        clustering = AgglomerativeClustering(
-            distance_threshold=0, n_clusters=None).fit(leaf_codes)
+        clustering = AgglomerativeClustering(distance_threshold=0, n_clusters=None).fit(
+            leaf_codes
+        )
         children = clustering.children_
         assert children.shape == (L - 1, 2)
 
@@ -225,7 +233,9 @@ class BetheModel(PyroModule):
         codes[:L] = leaf_codes + torch.randn(L, E) * 0.01
         timescale = 0.1
         for p, (c1, c2) in enumerate(children):
-            times[L + p] = min(times[c1], times[c2]) - timescale * (0.5 + torch.rand(()))
+            times[L + p] = min(times[c1], times[c2]) - timescale * (
+                0.5 + torch.rand(())
+            )
             codes[L + p] = (codes[c1] + codes[c2]) / 2 + torch.randn(E) * 0.01
         assert times.isfinite().all()
         assert codes.isfinite().all()
@@ -245,7 +255,7 @@ class BetheModel(PyroModule):
             # Initialize to unit mutation rate.
             return torch.full(site["fn"].shape(), 1.0)
         if name.endswith("subs_model.stationary"):
-            D, = site["fn"].event_shape
+            (D,) = site["fn"].event_shape
             return torch.ones(D) / D
         if name.endswith("coalescent_rate"):
             return torch.ones(())

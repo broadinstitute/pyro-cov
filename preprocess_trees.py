@@ -5,14 +5,14 @@ import torch
 
 from pyrophylo.io import stack_nexus_trees
 
-
 if not os.path.exists("results"):
     os.makedirs("results")
 
 
 def main(args):
-    phylo = stack_nexus_trees(args.infile, max_num_trees=args.max_num_trees,
-                              processes=args.processes)
+    phylo = stack_nexus_trees(
+        args.infile, max_num_trees=args.max_num_trees, processes=args.processes
+    )
     torch.save(phylo, args.outfile)
 
 
