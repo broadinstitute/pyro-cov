@@ -265,7 +265,7 @@ class TimeSpaceStrainModel(nn.Module):
                 prev_infections,
                 Rtrs[:-1],
                 transit_matrix,
-                mutation_matrix
+                mutation_matrix,
             )
             pred_infections.data.clamp_(min=1e-3)
             pyro.sample(
@@ -304,7 +304,7 @@ class TimeSpaceStrainModel(nn.Module):
 
         # Condition on strain counts.
         # Note these are partitioned into coarse regions.
-        strain_dispersion = pyro.sample("strain_dispersion", dist.Exponential(1.))
+        strain_dispersion = pyro.sample("strain_dispersion", dist.Exponential(1.0))
         coarse_infections = einsum("trs,Rr->tRs", infections, self.sample_matrix) + 1e-6
         strain_probs = coarse_infections / coarse_infections.sum(-1, True)
         concentration = strain_probs[self.strain_mask] / strain_dispersion
