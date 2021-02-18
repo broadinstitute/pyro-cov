@@ -51,19 +51,28 @@ class KmerCounter(Counter):
 
     def __init__(self, *, backend="cpp"):
         super().__init__()
-        self.counts = Counter()
         self.backend = backend
+        self._pending = None
 
     def update(self, iterable=None, **kwds):
-        if isinstance(iterable, str):
-            if self.backend == "python":
-                iterable = get_32mers(iterable)
-            elif self.backend == "cpp":
-                iterable = _get_cpp_module().get_32mers(iterable)
-            else:
-                raise NotImplementedError(f"Unsupported backend: {self.backend}")
-            iterable = iterable.tolist()
-        super().update(iterable, **kwds)
+        if not isinstance(iterable, str):
+            super().update(iterable, **kwds)
+        elif self.backend == "python":
+            iterable = get_32mers(iterable).tolist()
+            super().update(iterable)
+        elif self.backend == "cpp":
+            if self._pending is None:
+                self._pending = _get_cpp_module().KmerCounter()
+            self._pending.update(iterable)
+        else:
+            raise NotImplementedError(f"Unsupported backend: {self.backend}")
+
+    def flush(self, truncate_below=None):
+        if self._pending is not None:
+            if truncate_below is not None:
+                self._pending.truncate_below(truncate_below)
+            self.update(self._pending.to_dict())
+            self._pending = None
 
 
 class AMSSketcher:

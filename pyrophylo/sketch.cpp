@@ -1,6 +1,8 @@
-#include <vector>
 #include <string>
+#include <unordered_map>
+#include <vector>
 
+#include <pybind11/stl.h>
 #include <torch/extension.h>
 
 inline uint64_t murmur64(uint64_t h) {
@@ -38,6 +40,48 @@ at::Tensor get_32mers(const std::string& seq) {
   }
   return out;
 }
+
+struct KmerCounter {
+  KmerCounter() : to_bits(256, false), counts() {
+    to_bits['A'] = 0;
+    to_bits['C'] = 1;
+    to_bits['G'] = 2;
+    to_bits['T'] = 3;
+  }
+
+  void update(const std::string& seq) {
+    int size = seq.size() - 32 + 1;
+    if (size <= 0) {
+      return;
+    }
+
+    int64_t kmer = 0;
+    for (int pos = 0; pos < 31; ++pos) {
+      kmer <<= 2;
+      kmer ^= to_bits[seq[pos]];
+    }
+    for (int pos = 0; pos < size; ++pos) {
+      kmer <<= 2;
+      kmer ^= to_bits[seq[pos + 31]];
+      counts[kmer] += 1;
+    }
+  }
+
+  void truncate_below(int64_t threshold) {
+    for (auto i = counts.begin(); i != counts.end();) {
+      if (i->second < threshold) {
+         counts.erase(i++);
+      } else {
+         ++i;
+      }
+    }
+  }
+
+  std::unordered_map<int64_t, int64_t> to_dict() const { return counts; }
+
+  std::vector<int64_t> to_bits;
+  std::unordered_map<int64_t, int64_t> counts;
+};
 
 void string_to_soft_hash(int min_k, int max_k, const std::string& seq, at::Tensor out) {
   static std::vector<uint64_t> to_bits(256, false);
@@ -125,4 +169,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("get_32mers", &get_32mers, "Extract list of 32-mers from a string");
   m.def("string_to_soft_hash", &string_to_soft_hash, "Convert a string to a soft hash");
   m.def("string_to_clock_hash", &string_to_clock_hash, "Convert a string to a clock hash");
+  py::class_<KmerCounter>(m, "KmerCounter")
+    .def(py::init<>())
+    .def("update", &KmerCounter::update)
+    .def("truncate_below", &KmerCounter::truncate_below)
+    .def("to_dict", &KmerCounter::to_dict);
 }

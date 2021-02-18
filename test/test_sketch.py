@@ -22,6 +22,7 @@ def test_kmer_counter():
         results[backend] = KmerCounter(backend=backend)
         for part in re.findall("[ACTG]+", string):
             results[backend].update(part)
+        results[backend].flush()
 
     expected = results["python"]
     actual = results["cpp"]
