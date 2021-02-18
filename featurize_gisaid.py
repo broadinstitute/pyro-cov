@@ -149,10 +149,11 @@ def main(args):
 
     kmer_counts = count_kmers(args, shard_names)
     num_lineages, num_kmers = kmer_counts["kmer_counts"].shape
-    total_kmers = kmer_counts["kmer_counts"].sum().item()
+    num_sequences = int(kmer_counts["lineage_counts"].sum())
+    total_kmers = int(kmer_counts["kmer_counts"].sum())
     logger.info(
         f"Counted {total_kmers:.4g} instances of {num_kmers} kmers "
-        f"among {num_lineages} lineages"
+        f"x {num_lineages} lineages among {num_sequences} sequences"
     )
 
 
