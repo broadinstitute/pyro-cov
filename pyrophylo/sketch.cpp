@@ -12,6 +12,33 @@ inline uint64_t murmur64(uint64_t h) {
   return h;
 }
 
+at::Tensor get_32mers(const std::string& seq) {
+  static std::vector<int64_t> to_bits(256, false);
+  to_bits['A'] = 0;
+  to_bits['C'] = 1;
+  to_bits['G'] = 2;
+  to_bits['T'] = 3;
+
+  int size = seq.size() - 32 + 1;
+  if (size <= 0) {
+    return at::empty(0, at::kLong);
+  }
+  at::Tensor out = at::empty(size, at::kLong);
+  int64_t * const out_data = static_cast<int64_t*>(out.data_ptr());
+
+  int64_t kmer = 0;
+  for (int pos = 0; pos < 31; ++pos) {
+    kmer <<= 2;
+    kmer ^= to_bits[seq[pos]];
+  }
+  for (int pos = 0; pos < size; ++pos) {
+    kmer <<= 2;
+    kmer ^= to_bits[seq[pos + 31]];
+    out_data[pos] = kmer;
+  }
+  return out;
+}
+
 void string_to_soft_hash(int min_k, int max_k, const std::string& seq, at::Tensor out) {
   static std::vector<uint64_t> to_bits(256, false);
   to_bits['A'] = 0;
@@ -95,6 +122,7 @@ void string_to_clock_hash(int k, const std::string& seq, at::Tensor clocks, at::
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+  m.def("get_32mers", &get_32mers, "Extract list of 32-mers from a string");
   m.def("string_to_soft_hash", &string_to_soft_hash, "Convert a string to a soft hash");
   m.def("string_to_clock_hash", &string_to_clock_hash, "Convert a string to a clock hash");
 }

@@ -1,8 +1,10 @@
+import re
+
 import pyro.distributions as dist
 import pytest
 import torch
 
-from pyrophylo.sketch import AMSSketcher, ClockSketcher
+from pyrophylo.sketch import AMSSketcher, ClockSketcher, KmerCounter
 
 
 def random_string(size):
@@ -10,6 +12,20 @@ def random_string(size):
     probs /= probs.sum()
     string = "".join("ACGTN"[i] for i in dist.Categorical(probs).sample([size]))
     return string
+
+
+def test_kmer_counter():
+    string = random_string(10000)
+
+    results = {}
+    for backend in ["python", "cpp"]:
+        results[backend] = KmerCounter(backend=backend)
+        for part in re.findall("[ACTG]+", string):
+            results[backend].update(part)
+
+    expected = results["python"]
+    actual = results["cpp"]
+    assert actual == expected
 
 
 @pytest.mark.parametrize("min_k,max_k", [(2, 2), (2, 4), (3, 12)])

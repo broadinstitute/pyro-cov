@@ -1,6 +1,6 @@
 import logging
 import re
-from collections import namedtuple
+from collections import Counter, namedtuple
 
 import torch
 
@@ -42,6 +42,28 @@ def count_bits(bits):
         index[b] = 1
         result[tuple(index)] += 1
     return result.reshape(-1)
+
+
+class KmerCounter(Counter):
+    """
+    Hard-coded to count 32-mers of DNA sequences.
+    """
+
+    def __init__(self, *, backend="cpp"):
+        super().__init__()
+        self.counts = Counter()
+        self.backend = backend
+
+    def update(self, iterable=None, **kwds):
+        if isinstance(iterable, str):
+            if self.backend == "python":
+                iterable = get_32mers(iterable)
+            elif self.backend == "cpp":
+                iterable = _get_cpp_module().get_32mers(iterable)
+            else:
+                raise NotImplementedError(f"Unsupported backend: {self.backend}")
+            iterable = iterable.tolist()
+        super().update(iterable, **kwds)
 
 
 class AMSSketcher:
@@ -226,6 +248,18 @@ def _get_cpp_module():
             name="cpp_sketch", sources=[path], extra_cflags=["-O2"], verbose=False
         )
     return _cpp_module
+
+
+def get_32mers(seq):
+    to_bits = {"A": 0, "C": 1, "G": 2, "T": 3}
+
+    if len(seq) < 32:
+        return torch.empty([0], dtype=torch.long)
+    seq = list(map(to_bits.__getitem__, seq))
+    seq = torch.tensor(seq, dtype=torch.long)
+    powers = torch.arange(62, -1, -2, dtype=torch.long)
+    seq = (seq.unfold(0, 32, 1) << powers).sum(-1)
+    return seq
 
 
 def string_to_soft_hash(min_k, max_k, seq, out):
