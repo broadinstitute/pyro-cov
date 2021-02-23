@@ -197,7 +197,7 @@ def extract_features(args, kmer_data):
     logger.info(f"dropped {mask.eq(0).long().sum():d} ambiguous features")
 
     # Deduplicate features.
-    unique = sorted(set(map(tuple, features.T.long().tolist())))
+    unique = sorted(set(map(tuple, features.T.long().tolist())), key=sum)
     features = torch.tensor(list(map(list, unique)), dtype=torch.float).T.contiguous()
     logger.info("extracted {} x {} features".format(*features.shape))
 
@@ -238,9 +238,9 @@ if __name__ == "__main__":
     parser.add_argument("--min-nchars", default=29000, type=int)
     parser.add_argument("--max-nchars", default=31000, type=int)
     parser.add_argument("--min-presence", default=0.1, type=float)
-    parser.add_argument("--min-lineage-population", default=50, type=int)
-    parser.add_argument("--quantize-min", default=0.25, type=float)
-    parser.add_argument("--quantize-max", default=0.75, type=float)
+    parser.add_argument("--min-lineage-population", default=100, type=int)
+    parser.add_argument("--quantize-min", default=0.2, type=float)
+    parser.add_argument("--quantize-max", default=0.8, type=float)
     parser.add_argument("--max-ambiguity", default=0.2, type=float)
     parser.add_argument("--num-shards", default=mp.cpu_count(), type=int)
     parser.add_argument("-l", "--log-every", default=1000, type=int)
