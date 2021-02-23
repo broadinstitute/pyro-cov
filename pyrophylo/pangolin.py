@@ -18,6 +18,7 @@ PANGOLIN_ALIASES = {
     "M": "B.1.1.294",
     "N": "B.1.1.33",
     "P": "B.1.1.28",
+    "R": "B.1.1.316",
 }
 
 DECOMPRESS = PANGOLIN_ALIASES.copy()
