@@ -19,6 +19,9 @@ test: lint data FORCE
 html/%.html: FORCE
 	jupyter nbconvert --to=html --output-dir=html $*.ipynb
 
+view/%.md: FORCE
+	jupyter nbconvert --to=markdown --output-dir=view $*.ipynb
+
 html: FORCE html/*.html
 	echo done
 
