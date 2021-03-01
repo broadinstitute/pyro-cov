@@ -1,4 +1,4 @@
-# Pyro experiments in phylogenetic inference
+# Pyro models for SARS-CoV-2 analysis
 
 ## Data
 

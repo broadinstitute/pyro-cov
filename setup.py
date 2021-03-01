@@ -1,6 +1,14 @@
+import re
 import sys
 
 from setuptools import find_packages, setup
+
+with open("pyrocov/__init__.py") as f:
+    for line in f:
+        match = re.match('^__version__ = "(.*)"$', line)
+        if match:
+            __version__ = match.group(1)
+            break
 
 try:
     long_description = open("README.md", encoding="utf-8").read()

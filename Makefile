@@ -16,4 +16,10 @@ format: FORCE
 test: lint data FORCE
 	pytest -n auto test
 
+html/%.html: FORCE
+	jupyter nbconvert --to=html --output-dir=html $*.ipynb
+
+html: FORCE html/*.html
+	echo done
+
 FORCE:
