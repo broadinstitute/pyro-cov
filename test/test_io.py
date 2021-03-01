@@ -5,7 +5,7 @@ import pytest
 import torch
 from Bio import Phylo
 
-from pyrophylo.io import read_alignment, read_nexus_trees, stack_nexus_trees
+from pyrocov.io import read_alignment, read_nexus_trees, stack_nexus_trees
 
 ROOT = os.path.dirname(os.path.dirname(__file__))
 FILENAME = os.path.join(ROOT, "data", "GTR4G_posterior.trees")

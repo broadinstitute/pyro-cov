@@ -2,8 +2,8 @@ import pyro.distributions as dist
 import pytest
 import torch
 
-from pyrophylo.markov_tree import MarkovTree, _interpolate_lmve, _mpm
-from pyrophylo.phylo import Phylogeny
+from pyrocov.markov_tree import MarkovTree, _interpolate_lmve, _mpm
+from pyrocov.phylo import Phylogeny
 
 
 def grad(output, inputs, **kwargs):

@@ -3,12 +3,12 @@ from collections import defaultdict
 import pyro.distributions as dist
 import torch
 
-from pyrophylo.phylo import Phylogeny
+from pyrocov.phylo import Phylogeny
 
 
 class SoftmaxTree(dist.Distribution):
     """
-    Samples a :class:`~pyrophylo.phylo.Phylogeny` given parameters of a tree
+    Samples a :class:`~pyrocov.phylo.Phylogeny` given parameters of a tree
     embedding.
 
     :param torch.Tensor bit_times: Tensor of times of each bit in the
@@ -64,7 +64,7 @@ class SoftmaxTree(dist.Distribution):
 
     def log_prob(self, phylogeny):
         """
-        :param ~pyrophylo.phylo.Phylogeny phylogeny:
+        :param ~pyrocov.phylo.Phylogeny phylogeny:
         """
         return self.entropy()  # Is this right?
 

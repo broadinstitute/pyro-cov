@@ -14,6 +14,6 @@ format: FORCE
 	isort .
 
 test: lint data FORCE
-	pytest -vx test
+	pytest -n auto test
 
 FORCE:

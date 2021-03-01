@@ -4,7 +4,7 @@ import pyro.distributions as dist
 import pytest
 import torch
 
-from pyrophylo.sketch import AMSSketcher, ClockSketcher, KmerCounter
+from pyrocov.sketch import AMSSketcher, ClockSketcher, KmerCounter
 
 
 def random_string(size):

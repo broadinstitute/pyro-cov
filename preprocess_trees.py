@@ -3,7 +3,7 @@ import os
 
 import torch
 
-from pyrophylo.io import stack_nexus_trees
+from pyrocov.io import stack_nexus_trees
 
 if not os.path.exists("results"):
     os.makedirs("results")

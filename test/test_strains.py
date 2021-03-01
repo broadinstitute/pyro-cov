@@ -1,6 +1,6 @@
 import pytest
 
-from pyrophylo.strains import TimeSpaceStrainModel, simulate
+from pyrocov.strains import TimeSpaceStrainModel, simulate
 
 
 @pytest.mark.parametrize("T", [32])
@@ -9,5 +9,5 @@ from pyrophylo.strains import TimeSpaceStrainModel, simulate
 def test_strains(T, R, S):
     dataset = simulate(T, R, S)
     model = TimeSpaceStrainModel(**dataset)
-    model.fit(num_steps=101)
+    model.fit(num_steps=101, haar=False)
     model.median()

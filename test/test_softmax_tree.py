@@ -7,9 +7,9 @@ import torch
 from pyro.infer import SVI, Trace_ELBO
 from pyro.optim import Adam
 
-from pyrophylo.markov_tree import MarkovTree
-from pyrophylo.phylo import Phylogeny
-from pyrophylo.softmax_tree import SoftmaxTree
+from pyrocov.markov_tree import MarkovTree
+from pyrocov.phylo import Phylogeny
+from pyrocov.softmax_tree import SoftmaxTree
 
 
 @pytest.mark.parametrize("num_bits", [2, 3, 4, 5, 10])

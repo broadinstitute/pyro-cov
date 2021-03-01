@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from pyrophylo.phylo import Phylogeny
+from pyrocov.phylo import Phylogeny
 
 
 @pytest.mark.parametrize("num_leaves", range(1, 50))

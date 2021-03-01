@@ -3,7 +3,7 @@ import pytest
 import torch
 from pyro.infer.autoguide import AutoDelta
 
-from pyrophylo.substitution import GeneralizedTimeReversible, JukesCantor69
+from pyrocov.substitution import GeneralizedTimeReversible, JukesCantor69
 
 
 @pytest.mark.parametrize("Model", [JukesCantor69, GeneralizedTimeReversible])

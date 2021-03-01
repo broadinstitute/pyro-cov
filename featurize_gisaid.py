@@ -14,8 +14,8 @@ from contextlib import ExitStack
 
 import torch
 
-from pyrophylo import pangolin
-from pyrophylo.sketch import KmerCounter
+from pyrocov import pangolin
+from pyrocov.sketch import KmerCounter
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(format="%(relativeCreated) 9d %(message)s", level=logging.INFO)

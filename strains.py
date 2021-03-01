@@ -7,15 +7,15 @@ import pickle
 import pandas as pd
 import torch
 
-from pyrophylo import pangolin
-from pyrophylo.geo import (
+from pyrocov import pangolin
+from pyrocov.geo import (
     JHU_TO_UN,
     gisaid_to_jhu_location,
     parse_date,
     pd_to_torch,
     read_csv,
 )
-from pyrophylo.strains import TimeSpaceStrainModel
+from pyrocov.strains import TimeSpaceStrainModel
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(format="%(relativeCreated) 9d %(message)s", level=logging.INFO)

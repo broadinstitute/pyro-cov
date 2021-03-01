@@ -10,12 +10,12 @@ except Exception as e:
     long_description = ""
 
 setup(
-    name="pyrophylo",
+    name="pyrocov",
     version="0.0.0",
-    description="Pyro tools for phylogenetic inference",
+    description="Pyro tools for Sars-CoV-2 analysis",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    packages=find_packages(include=["pyrophylo"]),
+    packages=find_packages(include=["pyrocov"]),
     url="http://pyro.ai",
     author="Pyro team at the Broad Institute of MIT and Harvard",
     author_email="fobermey@broadinstitute.org",
