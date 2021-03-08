@@ -20,8 +20,9 @@ update: FORCE
 	(cd ~/data/gisaid ; ./pull)
 	time nice python preprocess_gisaid.py
 	time nice nextclade \
-	  -i results/gisaid.subset.fasta \
-	  -o results/gisaid.subset.json
+	  --input-fasta results/gisaid.subset.fasta \
+	  --output-json results/gisaid.subset.json \
+	  --output-tsv results/gisaid.subset.tsv
 
 view/%.md: FORCE
 	jupyter nbconvert --to=markdown --output-dir=view $*.ipynb

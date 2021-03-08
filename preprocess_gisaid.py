@@ -90,7 +90,7 @@ def main(args):
     with open(args.fasta_file_out, "wt") as f:
         for lineage, samples in subsamples.items():
             for accession_id, sequence in samples.items():
-                f.write(f"> {lineage} {accession_id}\n")
+                f.write(f">{lineage} {accession_id}\n")
                 f.write(sequence)
                 f.write("\n")
 
