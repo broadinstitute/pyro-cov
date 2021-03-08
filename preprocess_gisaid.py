@@ -6,7 +6,10 @@ import json
 import logging
 import os
 import pickle
+import re
 from collections import Counter, defaultdict
+
+from pyrocov.hashsubset import RandomSubDict
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(format="%(relativeCreated) 9d %(message)s", level=logging.INFO)
@@ -33,6 +36,7 @@ def main(args):
     columns = defaultdict(list)
     stats = defaultdict(Counter)
     covv_fields = ["covv_" + key for key in FIELDS]
+    subsamples = defaultdict(lambda: RandomSubDict(args.samples_per_lineage))
 
     with open(args.gisaid_file_in) as f:
         for i, line in enumerate(f):
@@ -56,8 +60,19 @@ def main(args):
             stats["location"][datum["covv_location"]] += 1
             stats["lineage"][datum["covv_lineage"]] += 1
 
+            # Collect samples.
+            if args.fasta_file_out:
+                seq = datum["sequence"].replace("\n", "")
+                parts = re.findall("[ACGT]+", seq)
+                if args.min_nchars <= sum(map(len, parts)) <= args.max_nchars:
+                    subsamples[datum["covv_lineage"]][
+                        datum["covv_accession_id"]
+                    ] = datum["sequence"]
+
             if i % args.log_every == 0:
                 print(".", end="", flush=True)
+            if i >= args.truncate:
+                break
 
     num_dropped = i + 1 - len(columns["day"])
     logger.info(f"dropped {num_dropped}/{i+1} = {num_dropped/(i+1):0.2g}% rows")
@@ -70,6 +85,15 @@ def main(args):
     with open(args.stats_file_out, "wb") as f:
         pickle.dump(dict(stats), f)
 
+    num_sequences = sum(len(v) for v in subsamples.values())
+    logger.info(f"saving {num_sequences} sequences to {args.fasta_file_out}")
+    with open(args.fasta_file_out, "wt") as f:
+        for lineage, samples in subsamples.items():
+            for accession_id, sequence in samples.items():
+                f.write(f"> {lineage} {accession_id}\n")
+                f.write(sequence)
+                f.write("\n")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Preprocess GISAID data")
@@ -77,9 +101,14 @@ if __name__ == "__main__":
         "--gisaid-file-in", default=os.path.expanduser("~/data/gisaid/provision.json")
     )
     parser.add_argument("--columns-file-out", default="results/gisaid.columns.pkl")
+    parser.add_argument("--fasta-file-out", default="results/gisaid.subset.fasta")
     parser.add_argument("--stats-file-out", default="results/gisaid.stats.pkl")
     parser.add_argument("--start-date", default="2019-12-01")
+    parser.add_argument("--min-nchars", default=29000, type=int)
+    parser.add_argument("--max-nchars", default=31000, type=int)
+    parser.add_argument("-s", "--samples-per-lineage", default=10, type=int)
     parser.add_argument("-l", "--log-every", default=1000, type=int)
+    parser.add_argument("--truncate", default=int(1e10), type=int)
     args = parser.parse_args()
     args.start_date = parse_date(args.start_date)
     main(args)
