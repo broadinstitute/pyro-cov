@@ -9,6 +9,7 @@ import pickle
 import re
 from collections import Counter, defaultdict
 
+from pyrocov import pangolin
 from pyrocov.hashsubset import RandomSubDict
 
 logger = logging.getLogger(__name__)
@@ -47,8 +48,10 @@ def main(args):
             date = parse_date(datum["covv_collection_date"])
             if date < args.start_date:
                 continue  # Drop rows before start date.
-            if datum["covv_lineage"] in (None, "None"):
+            lineage = datum["covv_lineage"]
+            if lineage in (None, "None"):
                 continue  # Drop rows with unknown lineage.
+            lineage = pangolin.compress(lineage)
 
             # Collate.
             for covv_key, key in zip(covv_fields, FIELDS):
@@ -58,16 +61,14 @@ def main(args):
             # Aggregate statistics.
             stats["date"][datum["covv_collection_date"]] += 1
             stats["location"][datum["covv_location"]] += 1
-            stats["lineage"][datum["covv_lineage"]] += 1
+            stats["lineage"][lineage] += 1
 
             # Collect samples.
             if args.fasta_file_out:
                 seq = datum["sequence"].replace("\n", "")
                 parts = re.findall("[ACGT]+", seq)
                 if args.min_nchars <= sum(map(len, parts)) <= args.max_nchars:
-                    subsamples[datum["covv_lineage"]][
-                        datum["covv_accession_id"]
-                    ] = datum["sequence"]
+                    subsamples[lineage][datum["covv_accession_id"]] = datum["sequence"]
 
             if i % args.log_every == 0:
                 print(".", end="", flush=True)
