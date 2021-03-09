@@ -8,13 +8,15 @@ import torch
 logger = logging.getLogger(__name__)
 
 JHU_DIRNAME = os.path.expanduser(
-    "~/github/CSSEGISandData/COVID-19/" "csse_covid_19_data/csse_covid_19_time_series"
+    "~/github/CSSEGISandData/COVID-19/csse_covid_19_data/csse_covid_19_time_series"
 )
 
 # To update see explore-jhu-time-series.ipynb
 GISAID_TO_JHU = {
     "aruba": ("netherlands", "aruba"),
     "bermuda": ("united kingdom", "bermuda"),
+    "caribbean": ("dominican republic",),  # most populous island
+    "cote divoire": ("cote d'ivoire",),
     "crimea": ("ukraine",),  # or "russia"?
     "curacao": ("netherlands", "curacao"),
     "czech repubic": ("czechia",),
@@ -38,8 +40,11 @@ GISAID_TO_JHU = {
     "republic of congo": ("congo (brazzaville)",),
     "republic of the congo": ("congo (brazzaville)",),
     "reunion": ("france", "reunion"),
+    "saint barthelemy": ("france", "saint barthelemy"),
     "saint barthélemy": ("france", "saint barthelemy"),
     "saint martin": ("france", "st martin"),
+    "sint eustatius": ("netherlands", "bonaire, sint eustatius and saba"),
+    "sint maarten": ("france", "st martin"),
     "south korea": ("korea, south",),
     "st eustatius": ("netherlands", "bonaire, sint eustatius and saba"),
     "st. lucia": ("saint lucia",),
