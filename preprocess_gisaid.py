@@ -107,7 +107,7 @@ if __name__ == "__main__":
     parser.add_argument("--start-date", default="2019-12-01")
     parser.add_argument("--min-nchars", default=29000, type=int)
     parser.add_argument("--max-nchars", default=31000, type=int)
-    parser.add_argument("-s", "--samples-per-lineage", default=10, type=int)
+    parser.add_argument("-s", "--samples-per-lineage", default=20, type=int)
     parser.add_argument("-l", "--log-every", default=1000, type=int)
     parser.add_argument("--truncate", default=int(1e10), type=int)
     args = parser.parse_args()

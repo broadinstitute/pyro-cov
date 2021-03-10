@@ -35,11 +35,13 @@ GISAID_TO_JHU = {
     "kochani": ("north macedonia",),
     "mayotte": ("france", "mayotte"),
     "myanmar": ("burma",),
+    "netherlans": ("netherlands",),
     "palestine": ("israel",),  # ?
     "puerto rico": ("us", "puerto rico"),
     "republic of congo": ("congo (brazzaville)",),
     "republic of the congo": ("congo (brazzaville)",),
     "reunion": ("france", "reunion"),
+    "réunion": ("france", "reunion"),
     "saint barthelemy": ("france", "saint barthelemy"),
     "saint barthélemy": ("france", "saint barthelemy"),
     "saint martin": ("france", "st martin"),

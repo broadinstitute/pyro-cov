@@ -57,7 +57,7 @@ def RelaxedPoisson(rate, overdispersion=0):
     #   2*m + s**2 + log(exp(s**2) - 1) = log(rate) + log1p(o * rate)
     # ==> log(rate) = log1p(o * rate) - log(exp(s**2) - 1)
     # ==> (1 + o*rate) / rate = exp(s**2) - 1
-    # ==> s**2 = log(1 + (1 + o*rate) / rate) = log(1 + (1/rate + o))
+    # ==> s**2 = log(1 + (1 + o*rate) / rate) = log(1 + 1/rate + o)
     # ==> m = log(rate) - s**2/2
     s2 = rate.reciprocal().add(overdispersion).log1p()
     m = rate.log() - s2 / 2
