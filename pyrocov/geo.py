@@ -15,7 +15,10 @@ JHU_DIRNAME = os.path.expanduser(
 GISAID_TO_JHU = {
     "aruba": ("netherlands", "aruba"),
     "bermuda": ("united kingdom", "bermuda"),
+    "british virgin islands": ("united kingdom", "british virgin islands"),
+    "bonaire": ("netherlands", "bonaire, sint eustatius and saba"),
     "caribbean": ("dominican republic",),  # most populous island
+    "cayman islands": ("united kingdom", "cayman islands"),
     "cote divoire": ("cote d'ivoire",),
     "crimea": ("ukraine",),  # or "russia"?
     "curacao": ("netherlands", "curacao"),
@@ -42,6 +45,7 @@ GISAID_TO_JHU = {
     "republic of the congo": ("congo (brazzaville)",),
     "reunion": ("france", "reunion"),
     "réunion": ("france", "reunion"),
+    "romaina": ("romania",),
     "saint barthelemy": ("france", "saint barthelemy"),
     "saint barthélemy": ("france", "saint barthelemy"),
     "saint martin": ("france", "st martin"),
