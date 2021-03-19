@@ -226,7 +226,10 @@ def rank_map(args, dataset, initial_ranks):
     guide = fit_map(args, dataset)["guide"]
 
     # Fine tune a null hypothesis.
-    losses = {None: fit_map(args, dataset, guide)["losses"][-1]}
+    map_result = fit_map(args, dataset, guide)
+    log_rate_coef = map_result["guide"].median()["log_rate_coef"]
+    losses = {None: map_result["losses"][-1]}
+    del map_result
 
     # Evaluate on the most positive features.
     for i in range(-args.num_positive, 0):
@@ -247,6 +250,7 @@ def rank_map(args, dataset, initial_ranks):
         "initial_ranks": initial_ranks,
         "losses": losses,
         "log_likelihood": log_likelihood,
+        "log_rate_coef": log_rate_coef,
     }
     torch.save(result, "results/rank_mutations.pt")
 
