@@ -48,7 +48,7 @@ def load_data(args):
     logger.info("Training on {} feature matrix".format(aa_features["features"].shape))
 
     # Aggregate regions.
-    features = aa_features["features"]
+    features = aa_features["features"].to(device=args.device)
     lineages = list(map(pangolin.compress, columns["lineage"]))
     lineage_id_inv = list(map(pangolin.compress, aa_features["lineages"]))
     lineage_id = {k: i for i, k in enumerate(lineage_id_inv)}
@@ -283,4 +283,5 @@ if __name__ == "__main__":
     parser.add_argument("-f", "--force", action="store_true")
     parser.add_argument("-l", "--log-every", default=50, type=int)
     args = parser.parse_args()
+    args.device = "cuda" if args.cuda else "cpu"
     main(args)
