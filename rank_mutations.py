@@ -143,10 +143,8 @@ def fit_map(args, dataset, guide=None, without_feature=None):
         guide = AutoDelta(model, init_loc_fn=init_loc_fn)
         # Initialize guide so we can count parameters.
         guide(dataset["weekly_strains"], dataset["features"])
-        saved_guide = guide
     else:
         guide = copy.deepcopy(guide)
-        saved_guide = None
     num_params = sum(p.numel() for p in guide.parameters())
     logger.info(f"Training guide with {num_params} parameters:")
 
@@ -164,7 +162,11 @@ def fit_map(args, dataset, guide=None, without_feature=None):
             logger.info(
                 f"step {step: >4d} loss = {loss:0.6g}\tconc. = {concentration:0.3g}\t"
             )
-    return {"args": args, "guide": saved_guide, "losses": losses}
+    return {
+        "args": args,
+        "guide": guide if without_feature is None else None,
+        "losses": losses,
+    }
 
 
 def fit_svi(args, dataset):
