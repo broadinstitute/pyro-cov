@@ -1,10 +1,34 @@
+import glob
+import os
+import warnings
 from collections import Counter
 
 import torch
 
+PANGOLIN_REPO = os.environ.get(
+    "PANGOLIN_REPO", "~/github/cov-lineages/lineages-website"
+)
+
 # See https://cov-lineages.org/lineages.html or
-# https://github.com/cov-lineages/pangoLEARN/blob/master/pangoLEARN/supporting_information/lineage_notes.txt
+# https://github.com/cov-lineages/lineages-website/lineages/*.md
+# This list can be updated via update_aliases() below.
 PANGOLIN_ALIASES = {
+    "AA": "B.1.177.15",
+    "AB": "B.1.160.16",
+    "AC": "B.1.1.405",
+    "AD": "B.1.1.315",
+    "AE": "B.1.1.306",
+    "AF": "B.1.1.305",
+    "AG": "B.1.1.297",
+    "AH": "B.1.1.241",
+    "AJ": "B.1.1.240",
+    "AK": "B.1.1.232",
+    "AL": "B.1.1.231",
+    "AM": "B.1.1.216",
+    "AN": "B.1.1.200",
+    "AP": "B.1.1.70",
+    "AQ": "B.1.1.39",
+    "AS": "B.1.1.317",
     "C": "B.1.1.1",
     "D": "B.1.1.25",
     "E": "B.1.416",
@@ -13,16 +37,49 @@ PANGOLIN_ALIASES = {
     "H": "B.1.1.67",
     "I": "B.1.1.217",
     "J": "B.1.1.250",
-    "K.1": "B.1.1.277",
+    "K": "B.1.1.277",
     "L": "B.1.1.10",
     "M": "B.1.1.294",
     "N": "B.1.1.33",
     "P": "B.1.1.28",
     "R": "B.1.1.316",
+    "S": "B.1.1.217",
+    "U": "B.1.177.60",
+    "V": "B.1.177.54",
+    "W": "B.1.177.53",
+    "Y": "B.1.177.52",
+    "Z": "B.1.177.50",
 }
 
 DECOMPRESS = PANGOLIN_ALIASES.copy()
-COMPRESS = {v: k for k, v in DECOMPRESS.items()}
+COMPRESS = {}
+
+
+def update_aliases():
+    repo = os.path.expanduser(PANGOLIN_REPO)
+    for filename in glob.glob(f"{repo}/lineages/lineage_*.md"):
+        with open(filename) as f:
+            lineage = None
+            parent = None
+            for line in f:
+                line = line.strip()
+                if line.startswith("lineage: "):
+                    lineage = line.split()[-1]
+                elif line.startswith("parent: "):
+                    parent = line.split()[-1]
+            if lineage and "." in lineage and parent:
+                alias = lineage.rsplit(".", 1)[0]
+                if parent != alias:
+                    PANGOLIN_ALIASES[alias] = parent
+    return PANGOLIN_ALIASES
+
+
+try:
+    update_aliases()
+except Exception:
+    warnings.warn(
+        f"Failed to find {PANGOLIN_REPO}, pangolin aliases may be stale", RuntimeWarning
+    )
 
 
 def decompress(name):
@@ -33,14 +90,13 @@ def decompress(name):
         return DECOMPRESS[name]
     except KeyError:
         pass
-    if name[0] in "AB":
+    if name.split(".")[0] in ("A", "B"):
         DECOMPRESS[name] = name
         return name
     for key, value in PANGOLIN_ALIASES.items():
         if name.startswith(key):
             result = value + name[len(key) :]
             DECOMPRESS[name] = result
-            COMPRESS[result] = name
             return result
     raise ValueError(f"Unknown alias: {name}")
 
@@ -49,10 +105,23 @@ def compress(name):
     """
     Compress a full lineage like B.1.1.1.10 to an alias like C.10.
     """
-    return COMPRESS.get(name, name)
+    result = COMPRESS.get(name)
+    if result is None:
+        result = name
+        for key, value in PANGOLIN_ALIASES.items():
+            if key == "I":
+                continue  # obsolete
+            if name.startswith(value):
+                result = key + name[len(value) :]
+                COMPRESS[name] = result
+                break
+    return result
 
 
 def _get_parent(longname):
+    if longname == "B":
+        return "A"
+    assert "." in longname, longname
     return longname.rsplit(".", 1)[0]
 
 
@@ -61,20 +130,17 @@ def find_edges(names):
     Given a set of short lineages, return a list of pairs of parent-child
     relationships among lineages.
     """
-    short_to_long = {compress(name): decompress(name) for name in names}
-    long_to_short = {v: k for k, v in short_to_long.items()}
-    assert len(short_to_long) == len(long_to_short)
-    edges = [("A", "B")]
-    for x, longx in short_to_long.items():
-        longy = _get_parent(longx)
-        while longy not in names:
-            longy = _get_parent(longy)
-        if longy == longx:
-            continue
-        if longy != longx:
-            y = long_to_short[longy]
-            assert x != y
+    longnames = [decompress(name) for name in names]
+    edges = []
+    for x in longnames:
+        if x == "A":
+            continue  # A is root
+        y = _get_parent(x)
+        while y not in longnames:
+            y = _get_parent(y)
+        if y != x:
             edges.append((x, y) if x < y else (y, x))
+    edges = [(compress(x), compress(y)) for x, y in edges]
     assert len(set(edges)) == len(edges)
     assert len(edges) == len(names) - 1
     return edges

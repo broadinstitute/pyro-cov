@@ -26,6 +26,7 @@ GISAID_TO_JHU = {
     "czech republic": ("czechia",),
     "côte d'ivoire": ("cote d'ivoire",),
     "democratic republic of the congo": ("congo (kinshasa)",),
+    "england": ("united kingdom",),
     "faroe islands": ("denmark", "faroe islands"),
     "french guiana": ("france", "french guiana"),
     "gaborone": ("botswana",),
@@ -36,6 +37,8 @@ GISAID_TO_JHU = {
     "hong kong": ("china", "hong kong"),
     "kavadarci": ("north macedonia",),
     "kochani": ("north macedonia",),
+    "la reunion": ("france", "reunion"),
+    "martinique": ("france", "martinique"),
     "mayotte": ("france", "mayotte"),
     "myanmar": ("burma",),
     "netherlans": ("netherlands",),
@@ -56,6 +59,7 @@ GISAID_TO_JHU = {
     "st. lucia": ("saint lucia",),
     "taiwan": ("china",),  # ?
     "trinidad": ("trinidad and tobago",),
+    "united states": ("us",),
     "usa": ("us",),
     "viet nam": ("vietnam",),
 }

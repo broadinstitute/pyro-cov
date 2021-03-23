@@ -32,7 +32,7 @@ class MarkovTree(dist.TorchDistribution):
     """
 
     arg_constraints = {
-        "transition": constraints.IndependentConstraint(constraints.simplex, 2),
+        "transition": constraints.independent(constraints.simplex, 2),
     }
 
     def __init__(self, phylogeny, transition, *, method="likelihood"):
@@ -53,7 +53,7 @@ class MarkovTree(dist.TorchDistribution):
 
     @constraints.dependent_property
     def support(self):
-        return constraints.IndependentConstraint(
+        return constraints.independent(
             constraints.integer_interval(0, self.num_states), 1
         )
 

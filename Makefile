@@ -17,8 +17,9 @@ test: lint data FORCE
 	pytest -n auto test
 
 update: FORCE
-	(cd ~/github/CSSEGISandData/COVID-19 ; git pull)
-	(cd ~/github/owid/covid-19-data ; git pull)
+	python git_pull.py cov-lineages/lineages-website \
+	  CSSEGISandData/COVID-19 \
+	  owid/covid-19-data
 	(cd ~/data/gisaid ; ./pull)
 	time nice python preprocess_gisaid.py
 	time nice nextclade \
