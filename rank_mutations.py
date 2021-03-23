@@ -43,7 +43,6 @@ def load_data(args):
         columns = pickle.load(f)
     logger.info("Training on {} rows with columns:".format(len(columns["day"])))
     logger.info(", ".join(columns.keys()))
-    lineages = list(map(pangolin.compress, columns["lineage"]))
     aa_features = torch.load("results/nextclade.features.pt")
     logger.info("Training on {} feature matrix".format(aa_features["features"].shape))
 

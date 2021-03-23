@@ -1,5 +1,17 @@
 # Pyro models for SARS-CoV-2 analysis
 
+## Mutation analysis paper
+
+1. Work with GISAID to get a data agreement.
+2. Create a directory ~/data/gisaid/
+3. Create a data pull script ~/data/gisaid/pull
+4. Clone this repo into say ~/pyro-cov
+5. cd ~/pyro-cov
+6. make install  # installs dependencies
+7. conda install nodejs
+8. npm install --global @nextstrain/nextclade
+9. make update  # clones other data sources
+
 ## Data
 
 @dpark01 created a [Google Drive folder]() for data sharing.

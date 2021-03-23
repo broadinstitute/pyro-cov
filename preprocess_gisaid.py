@@ -22,7 +22,7 @@ def parse_date(string):
     return datetime.datetime.strptime(string, DATE_FORMATS[len(string)])
 
 
-FIELDS = ["accession_id", "collection_date", "location", "add_location", "lineage"]
+FIELDS = ["accession_id", "collection_date", "location", "add_location"]
 
 
 def main(args):
@@ -54,6 +54,7 @@ def main(args):
             lineage = pangolin.decompress(lineage)
 
             # Collate.
+            columns["lineage"].append(lineage)
             for covv_key, key in zip(covv_fields, FIELDS):
                 columns[key].append(datum[covv_key])
             columns["day"].append((date - args.start_date).days)
