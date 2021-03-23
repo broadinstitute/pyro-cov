@@ -56,6 +56,9 @@ def load_data(args):
     location_id = {}
     quotient = {}
     for day, location, lineage in zip(columns["day"], columns["location"], lineages):
+        if lineage not in lineage_id:
+            print(f"WARNING skipping unsampled lineage {lineage}")
+            continue
         parts = location.split("/")
         if len(parts) < 2:
             continue
