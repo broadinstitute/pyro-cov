@@ -81,17 +81,22 @@ def load_data(args):
     for (t, p, s), n in sparse_data.items():
         weekly_strains[t, p, s] = n
 
-    feature_groups = ['E', 'S', 'M', 'N', 'ORF']
-    feature_group_index = (-torch.ones(len(mutations))).long()
+    feature_groups = ['ORF7b', 'ORF7a', 'N', 'ORF8', 'ORF9b', 'ORF3a',
+                      'ORF1b', 'M', 'ORF1a', 'E', 'S', 'ORF6']
 
-    for f, feature in enumerate(mutations):
-        for g, group in enumerate(feature_groups):
-            if feature.startswith(group):
-                feature_group_index[f] = g
-        assert feature_group_index[f] != -1
+    if args.feature_groups:
+        feature_group_index = (-torch.ones(len(mutations))).long()
+
+        for f, feature in enumerate(mutations):
+            for g, group in enumerate(feature_groups):
+                if feature.startswith(group):
+                    feature_group_index[f] = g
+            assert feature_group_index[f] != -1
+    else:
+        feature_group_index = None
 
     return {"args": args, "weekly_strains": weekly_strains, "features": features,
-            "mutations": mutations, "feature_group_index": feature_group_index}
+            "mutations": mutations, "feature_group_index": feature_group_index, "feature_groups": feature_groups}
 
 
 def model(weekly_strains, features, feature_group_index=None, feature_scale=1.0):
@@ -107,7 +112,7 @@ def model(weekly_strains, features, feature_group_index=None, feature_scale=1.0)
     time -= time.max()
 
     if feature_group_index is not None:
-        feature_group_scale = feature_scale * pyro.sample("feature_group_scale", dist.Dirichlet(torch.ones(5)))
+        feature_group_scale = feature_scale * pyro.sample("feature_group_scale", dist.Dirichlet(torch.ones(12)))
         feature_group_scale = feature_group_scale.index_select(-1, feature_group_index)
     else:
         feature_group_scale = feature_scale * features.new_ones(F)
@@ -165,7 +170,7 @@ def fit_map(args, dataset, guide=None):
     logger.info(f"Training guide with {num_params} parameters:")
 
     optim = ClippedAdam({"lr": args.learning_rate, "betas": (0.8, 0.99),
-                         "lrd": 0.1 ** (1 / args.num_steps)})
+                         "lrd": args.lrd ** (1 / args.num_steps)})
     svi = SVI(model, guide, optim, Trace_ELBO())
     num_obs = dataset["weekly_strains"].count_nonzero()
     losses = []
@@ -193,7 +198,6 @@ def main(args):
         torch.set_default_tensor_type(torch.cuda.FloatTensor)
 
     dataset = load_data(args)
-    # dataset['feature_group_index'] = None
 
     guide = fit_map(args, dataset)['guide']
 
@@ -207,8 +211,10 @@ def main(args):
     print("sum(log_rate_coef_abs < 1.0e-3)", sum(log_rate_coef_abs < 1.0e-3).item())
     print("sum(log_rate_coef_abs < 1.0e-5)", sum(log_rate_coef_abs < 1.0e-5).item())
 
-    if 'feature_group_scale' in median:
+    if args.feature_groups in median:
         print("median[feature_group_scale]", median['feature_group_scale'].data.cpu().numpy())
+
+    print(args)
 
 
 if __name__ == "__main__":
@@ -225,10 +231,12 @@ if __name__ == "__main__":
         help="Reasonable values might be week, fortnight, or month",
     )
     parser.add_argument("--learning-rate", default=0.05, type=float)
-    parser.add_argument("--num-steps", default=901, type=int)
+    parser.add_argument("--lrd", default=0.1, type=float)
+    parser.add_argument("--num-steps", default=2001, type=int)
     parser.add_argument("--cpu", dest="cuda", action="store_false")
     parser.add_argument("-f", "--force", action="store_true")
-    parser.add_argument("-l", "--log-every", default=50, type=int)
+    parser.add_argument("--feature-groups", action="store_true")
+    parser.add_argument("-l", "--log-every", default=200, type=int)
     args = parser.parse_args()
     args.device = "cuda" if args.cuda else "cpu"
     main(args)
