@@ -2,14 +2,17 @@
 
 import argparse
 import datetime
+import glob
 import json
 import logging
 import os
 import pickle
 import re
 from collections import Counter, defaultdict
+from subprocess import check_call
 
 from pyrocov import pangolin
+from pyrocov.fasta import ShardedFastaWriter
 from pyrocov.hashsubset import RandomSubDict
 
 logger = logging.getLogger(__name__)
@@ -89,12 +92,22 @@ def main(args):
 
     num_sequences = sum(len(v) for v in subsamples.values())
     logger.info(f"saving {num_sequences} sequences to {args.fasta_file_out}")
-    with open(args.fasta_file_out, "wt") as f:
+    with ShardedFastaWriter(args.fasta_file_out) as f:
         for lineage, samples in subsamples.items():
             for accession_id, sequence in samples.items():
-                f.write(f">{lineage} {accession_id}\n")
-                f.write(sequence)
-                f.write("\n")
+                f.write(f"{lineage} {accession_id}", sequence)
+
+    for fasta_filename in glob.glob(args.fasta_file_out):
+        tsv_filename = fasta_filename.replace(".fasta", ".tsv")
+        cmd = [
+            "nextclade",
+            "--input-fasta",
+            fasta_filename,
+            "--output-tsv",
+            tsv_filename,
+        ]
+        logger.info(" ".join(cmd))
+        check_call(cmd)
 
 
 if __name__ == "__main__":
@@ -103,12 +116,12 @@ if __name__ == "__main__":
         "--gisaid-file-in", default=os.path.expanduser("~/data/gisaid/provision.json")
     )
     parser.add_argument("--columns-file-out", default="results/gisaid.columns.pkl")
-    parser.add_argument("--fasta-file-out", default="results/gisaid.subset.fasta")
+    parser.add_argument("--fasta-file-out", default="results/gisaid.subset.*.fasta")
     parser.add_argument("--stats-file-out", default="results/gisaid.stats.pkl")
     parser.add_argument("--start-date", default="2019-12-01")
     parser.add_argument("--min-nchars", default=29000, type=int)
     parser.add_argument("--max-nchars", default=31000, type=int)
-    parser.add_argument("-s", "--samples-per-lineage", default=10, type=int)
+    parser.add_argument("-s", "--samples-per-lineage", default=20, type=int)
     parser.add_argument("-l", "--log-every", default=1000, type=int)
     parser.add_argument("--truncate", default=int(1e10), type=int)
     args = parser.parse_args()

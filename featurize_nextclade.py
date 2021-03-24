@@ -1,4 +1,5 @@
 import argparse
+import glob
 import logging
 from collections import Counter, defaultdict
 
@@ -10,18 +11,19 @@ logging.basicConfig(format="%(relativeCreated) 9d %(message)s", level=logging.IN
 
 
 def main(args):
-    df = pd.read_csv(args.tsv_file_in, sep="\t")
-    logger.info(f"Extracting features from {len(df)} sequences")
     lineage_counts = Counter()
     lineage_mutation_counts = defaultdict(Counter)
-    for _, row in df.iterrows():
-        lineage = row["seqName"].strip().split()[0]
-        lineage_counts[lineage] += 1
-        counts = lineage_mutation_counts[lineage]
-        for col in ["aaSubstitutions", "aaDeletions"]:
-            ms = row[col]
-            if isinstance(ms, str):
-                counts.update(ms.split(","))
+    for filename in glob.glob(args.tsv_file_in):
+        df = pd.read_csv(filename, sep="\t")
+        logger.info(f"Extracting features from {len(df)} sequences")
+        for _, row in df.iterrows():
+            lineage = row["seqName"].strip().split()[0]
+            lineage_counts[lineage] += 1
+            counts = lineage_mutation_counts[lineage]
+            for col in ["aaSubstitutions", "aaDeletions"]:
+                ms = row[col]
+                if isinstance(ms, str):
+                    counts.update(ms.split(","))
 
     # Convert to dense features.
     lineages = sorted(lineage_counts)
@@ -47,7 +49,7 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Featurize nextclade mutations")
-    parser.add_argument("--tsv-file-in", default="results/gisaid.subset.tsv")
+    parser.add_argument("--tsv-file-in", default="results/gisaid.subset.*.tsv")
     parser.add_argument("--features-file-out", default="results/nextclade.features.pt")
     args = parser.parse_args()
     main(args)
