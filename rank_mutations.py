@@ -168,6 +168,7 @@ def fit_map(args, dataset, guide=None, without_feature=None):
         "args": args,
         "guide": guide if without_feature is None else None,
         "losses": losses,
+        "concentration": guide.median()["concentration"].item(),
     }
 
 
@@ -233,26 +234,34 @@ def rank_map(args, dataset, initial_ranks):
     map_result = fit_map(args, dataset, guide)
     log_rate_coef = map_result["guide"].median()["log_rate_coef"]
     losses = {None: map_result["losses"][-1]}
+    concentrations = {None: map_result["guide"].median()["concentration"].item()}
     del map_result
 
     # Evaluate on the most positive features.
     for i in range(-args.num_positive, 0):
-        feature = int(initial_ranks[i])
-        losses[feature] = fit_map(args, dataset, guide, feature)["losses"][-1]
+        feature = int(initial_ranks["ranks"][i])
+        fit = fit_map(args, dataset, guide, feature)
+        losses[feature] = fit["losses"][-1]
+        concentrations[feature] = fit["concentration"]
+        del fit
 
     # Evaluate on the most negative features.
     for i in range(args.num_negative):
-        feature = int(initial_ranks[i])
-        losses[feature] = fit_map(args, dataset, guide, feature)["losses"][-1]
+        feature = int(initial_ranks["ranks"][i])
+        fit = fit_map(args, dataset, guide, feature)
+        losses[feature] = fit["losses"][-1]
+        concentrations[feature] = fit["concentration"]
+        del fit
 
     # Compute log likelihood ratios.
     log_likelihood = {
-        losses[None] - score for feature, score in losses.items() if feature is not None
+        f: losses[None] - score for f, score in losses.items() if f is not None
     }
     result = {
         "args": args,
         "initial_ranks": initial_ranks,
         "losses": losses,
+        "concentrations": concentrations,
         "log_likelihood": log_likelihood,
         "log_rate_coef": log_rate_coef,
     }
@@ -264,7 +273,7 @@ def main(args):
         torch.set_default_tensor_type(torch.cuda.FloatTensor)
 
     dataset = load_data(args)
-    initial_ranks = rank_svi(args, dataset)["ranks"]
+    initial_ranks = rank_svi(args, dataset)
     rank_map(args, dataset, initial_ranks)
 
 
