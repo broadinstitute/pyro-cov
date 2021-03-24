@@ -94,7 +94,7 @@ def load_data(args):
             "mutations": mutations, "feature_group_index": feature_group_index}
 
 
-def model(weekly_strains, features, feature_group_index=None, feature_scale=10.0):
+def model(weekly_strains, features, feature_group_index=None, feature_scale=1.0):
     assert weekly_strains.shape[-1] == features.shape[0]
     if feature_group_index is not None:
         assert features.shape[-1:] == feature_group_index.shape
@@ -193,7 +193,7 @@ def main(args):
         torch.set_default_tensor_type(torch.cuda.FloatTensor)
 
     dataset = load_data(args)
-    dataset['feature_group_index'] = None
+    # dataset['feature_group_index'] = None
 
     guide = fit_map(args, dataset)['guide']
 
@@ -207,7 +207,8 @@ def main(args):
     print("sum(log_rate_coef_abs < 1.0e-3)", sum(log_rate_coef_abs < 1.0e-3).item())
     print("sum(log_rate_coef_abs < 1.0e-5)", sum(log_rate_coef_abs < 1.0e-5).item())
 
-    print("median[feature_group_scale]", median['feature_group_scale'].data.cpu().numpy())
+    if 'feature_group_scale' in median:
+        print("median[feature_group_scale]", median['feature_group_scale'].data.cpu().numpy())
 
 
 if __name__ == "__main__":
