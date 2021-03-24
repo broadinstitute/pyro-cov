@@ -11,7 +11,7 @@ import pyro
 import pyro.distributions as dist
 import torch
 from pyro.infer import SVI, Trace_ELBO
-from pyro.infer.autoguide import AutoDelta, AutoNormal, init_to_median
+from pyro.infer.autoguide import AutoDelta, init_to_median
 from pyro.optim import ClippedAdam
 
 from pyrocov import pangolin
@@ -44,6 +44,9 @@ def load_data(args):
     logger.info("Training on {} rows with columns:".format(len(columns["day"])))
     logger.info(", ".join(columns.keys()))
     aa_features = torch.load("results/nextclade.features.pt")
+
+    mutations = aa_features['mutations']
+
     logger.info("Training on {} feature matrix".format(aa_features["features"].shape))
 
     # Aggregate regions.
@@ -57,7 +60,7 @@ def load_data(args):
     quotient = {}
     for day, location, lineage in zip(columns["day"], columns["location"], lineages):
         if lineage not in lineage_id:
-            print(f"WARNING skipping unsampled lineage {lineage}")
+            # print(f"WARNING skipping unsampled lineage {lineage}")
             continue
         parts = location.split("/")
         if len(parts) < 2:
@@ -78,11 +81,24 @@ def load_data(args):
     for (t, p, s), n in sparse_data.items():
         weekly_strains[t, p, s] = n
 
-    return {"args": args, "weekly_strains": weekly_strains, "features": features}
+    feature_groups = ['E', 'S', 'M', 'N', 'ORF']
+    feature_group_index = (-torch.ones(len(mutations))).long()
+
+    for f, feature in enumerate(mutations):
+        for g, group in enumerate(feature_groups):
+            if feature.startswith(group):
+                feature_group_index[f] = g
+        assert feature_group_index[f] != -1
+
+    return {"args": args, "weekly_strains": weekly_strains, "features": features,
+            "mutations": mutations, "feature_group_index": feature_group_index}
 
 
-def model(weekly_strains, features, feature_scale=1.0):
+def model(weekly_strains, features, feature_group_index=None, feature_scale=10.0):
     assert weekly_strains.shape[-1] == features.shape[0]
+    if feature_group_index is not None:
+        assert features.shape[-1:] == feature_group_index.shape
+
     T, P, S = weekly_strains.shape
     S, F = features.shape
     time_plate = pyro.plate("time", T, dim=-2)
@@ -90,9 +106,15 @@ def model(weekly_strains, features, feature_scale=1.0):
     time = torch.arange(float(T)) * args.timestep / 365.25  # in years
     time -= time.max()
 
+    if feature_group_index is not None:
+        feature_group_scale = feature_scale * pyro.sample("feature_group_scale", dist.Dirichlet(torch.ones(5)))
+        feature_group_scale = feature_group_scale.index_select(-1, feature_group_index)
+    else:
+        feature_group_scale = feature_scale * features.new_ones(F)
+
     # Assume relative growth rate depends on mutation features but not time or place.
     log_rate_coef = pyro.sample(
-        "log_rate_coef", dist.Laplace(0, feature_scale).expand([F]).to_event(1)
+        "log_rate_coef", dist.Laplace(0, feature_group_scale).to_event(1)
     )
     log_rate = pyro.deterministic("log_rate", log_rate_coef @ features.T)
 
@@ -116,10 +138,8 @@ def model(weekly_strains, features, feature_scale=1.0):
 
 
 def init_loc_fn(site):
-    if site["name"] in ("log_rate_coef", "log_rate", "log_init", "noise", "noise_haar"):
+    if site["name"] in ("log_rate_coef", "log_rate", "log_init"):
         return torch.zeros(site["fn"].shape())
-    if site["name"].endswith("noise_scale"):
-        return torch.full(site["fn"].shape(), 3.0)
     if site["name"] == "concentration":
         return torch.full(site["fn"].shape(), 5.0)
     return init_to_median(site)
@@ -129,27 +149,30 @@ def _fit_map_filename(args, dataset, guide=None, without_feature=None):
     return f"results/rank_mutations.{guide is None}.{without_feature}.pt"
 
 
-#@cached(_fit_map_filename)
+# @cached(_fit_map_filename)
 def fit_map(args, dataset, guide=None):
-    logger.info(f"Fitting via MAP")
+    logger.info("Fitting via MAP")
     pyro.clear_param_store()
     pyro.set_rng_seed(20210319)
 
     if guide is None:
         guide = AutoDelta(model, init_loc_fn=init_loc_fn)
         # Initialize guide so we can count parameters.
-        guide(dataset["weekly_strains"], dataset["features"])
+        guide(dataset["weekly_strains"], dataset["features"], feature_group_index=dataset['feature_group_index'])
     else:
         guide = copy.deepcopy(guide)
     num_params = sum(p.numel() for p in guide.parameters())
     logger.info(f"Training guide with {num_params} parameters:")
 
-    optim = ClippedAdam({"lr": args.map_learning_rate, "betas": (0.8, 0.99)})
+    optim = ClippedAdam({"lr": args.learning_rate, "betas": (0.8, 0.99),
+                         "lrd": 0.1 ** (1 / args.num_steps)})
     svi = SVI(model, guide, optim, Trace_ELBO())
     num_obs = dataset["weekly_strains"].count_nonzero()
     losses = []
-    for step in range(args.map_num_steps):
-        loss = svi.step(dataset["weekly_strains"], dataset["features"]) / num_obs
+
+    for step in range(args.num_steps):
+        loss = svi.step(dataset["weekly_strains"], dataset["features"],
+                        feature_group_index=dataset["feature_group_index"]) / num_obs
         assert not math.isnan(loss)
         losses.append(loss)
         if step % args.log_every == 0:
@@ -170,8 +193,21 @@ def main(args):
         torch.set_default_tensor_type(torch.cuda.FloatTensor)
 
     dataset = load_data(args)
+    dataset['feature_group_index'] = None
 
-    fit_map(args, dataset)
+    guide = fit_map(args, dataset)['guide']
+
+    median = guide.median()
+    log_rate_coef = median['log_rate_coef']
+    log_rate_coef_abs = log_rate_coef.abs()
+
+    print("sum(log_rate_coef_abs > 0.1)", sum(log_rate_coef_abs > 0.1).item())
+    print("sum(log_rate_coef_abs > 0.01)", sum(log_rate_coef_abs > 0.01).item())
+    print("sum(log_rate_coef_abs < 0.1)", sum(log_rate_coef_abs < 0.1).item())
+    print("sum(log_rate_coef_abs < 1.0e-3)", sum(log_rate_coef_abs < 1.0e-3).item())
+    print("sum(log_rate_coef_abs < 1.0e-5)", sum(log_rate_coef_abs < 1.0e-5).item())
+
+    print("median[feature_group_scale]", median['feature_group_scale'].data.cpu().numpy())
 
 
 if __name__ == "__main__":
@@ -187,8 +223,8 @@ if __name__ == "__main__":
         type=int,
         help="Reasonable values might be week, fortnight, or month",
     )
-    parser.add_argument("--map-learning-rate", default=0.05, type=float)
-    parser.add_argument("--map-num-steps", default=301, type=int)
+    parser.add_argument("--learning-rate", default=0.05, type=float)
+    parser.add_argument("--num-steps", default=901, type=int)
     parser.add_argument("--cpu", dest="cuda", action="store_false")
     parser.add_argument("-f", "--force", action="store_true")
     parser.add_argument("-l", "--log-every", default=50, type=int)
