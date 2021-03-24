@@ -1,5 +1,6 @@
 import glob
 import os
+import re
 import warnings
 from collections import Counter
 
@@ -94,7 +95,7 @@ def decompress(name):
         DECOMPRESS[name] = name
         return name
     for key, value in PANGOLIN_ALIASES.items():
-        if name.startswith(key):
+        if name == key or name.startswith(key + "."):
             result = value + name[len(key) :]
             DECOMPRESS[name] = result
             return result
@@ -111,18 +112,22 @@ def compress(name):
         for key, value in PANGOLIN_ALIASES.items():
             if key == "I":
                 continue  # obsolete
-            if name.startswith(value):
+            if name == value or name.startswith(value + "."):
                 result = key + name[len(value) :]
                 COMPRESS[name] = result
                 break
+    assert re.match(r"^[A-Z]+(\.[0-9]+)*$", result), result
     return result
 
 
-def _get_parent(longname):
-    if longname == "B":
+def get_parent(name):
+    assert decompress(name) == name, "expected a decompressed name"
+    if name == "A":
+        return None
+    if name == "B":
         return "A"
-    assert "." in longname, longname
-    return longname.rsplit(".", 1)[0]
+    assert "." in name, name
+    return name.rsplit(".", 1)[0]
 
 
 def find_edges(names):
@@ -135,9 +140,9 @@ def find_edges(names):
     for x in longnames:
         if x == "A":
             continue  # A is root
-        y = _get_parent(x)
+        y = get_parent(x)
         while y not in longnames:
-            y = _get_parent(y)
+            y = get_parent(y)
         if y != x:
             edges.append((x, y) if x < y else (y, x))
     edges = [(compress(x), compress(y)) for x, y in edges]
@@ -160,7 +165,7 @@ def merge_lineages(counts, min_count):
     mapping = {}
     for child in sorted(counts, key=lambda k: (-len(k), k)):
         if counts[child] < min_count:
-            parent = _get_parent(child)
+            parent = get_parent(child)
             if parent == child:
                 continue  # at a root
             counts[parent] += counts.pop(child)
