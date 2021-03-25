@@ -7,14 +7,21 @@ import os
 import pickle
 from collections import Counter
 
+import numpy as np
+import pandas as pd
+
 import pyro
 import pyro.distributions as dist
 import torch
 from pyro.infer import SVI, Trace_ELBO
 from pyro.infer.autoguide import AutoDelta, init_to_median
 from pyro.optim import ClippedAdam
+from pyro.poutine import mask, trace, replay
 
 from pyrocov import pangolin
+
+from collections import defaultdict
+
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(format="%(relativeCreated) 9d %(message)s", level=logging.INFO)
@@ -81,10 +88,11 @@ def load_data(args):
     for (t, p, s), n in sparse_data.items():
         weekly_strains[t, p, s] = n
 
+    # 12 feature groups
     feature_groups = ['ORF7b', 'ORF7a', 'N', 'ORF8', 'ORF9b', 'ORF3a',
                       'ORF1b', 'M', 'ORF1a', 'E', 'S', 'ORF6']
 
-    if args.feature_groups:
+    if args.feature_groups:  # tag features with 0, 1, 2, ..., 11
         feature_group_index = (-torch.ones(len(mutations))).long()
 
         for f, feature in enumerate(mutations):
@@ -95,11 +103,14 @@ def load_data(args):
     else:
         feature_group_index = None
 
-    return {"args": args, "weekly_strains": weekly_strains, "features": features,
+    T, P, S = weekly_strains.shape
+
+    return {"args": args, "weekly_strains": weekly_strains, "features": features, "T": T, "P": P, "S": S,
             "mutations": mutations, "feature_group_index": feature_group_index, "feature_groups": feature_groups}
 
 
-def model(weekly_strains, features, feature_group_index=None, feature_scale=1.0):
+def model(weekly_strains, features, feature_group_index=None,
+          feature_scale=1.0, T_train=None, forecast=False):
     assert weekly_strains.shape[-1] == features.shape[0]
     if feature_group_index is not None:
         assert features.shape[-1:] == feature_group_index.shape
@@ -111,7 +122,7 @@ def model(weekly_strains, features, feature_group_index=None, feature_scale=1.0)
     time = torch.arange(float(T)) * args.timestep / 365.25  # in years
     time -= time.max()
 
-    if feature_group_index is not None:
+    if feature_group_index is not None:  # allow L1 regularization scale to depend on feature group
         feature_group_scale = feature_scale * pyro.sample("feature_group_scale", dist.Dirichlet(torch.ones(12)))
         feature_group_scale = feature_group_scale.index_select(-1, feature_group_index)
     else:
@@ -130,16 +141,27 @@ def model(weekly_strains, features, feature_group_index=None, feature_scale=1.0)
     # Finally observe overdispersed counts.
     strain_probs = (log_init + log_rate * time[:, None, None]).softmax(-1)
     concentration = pyro.sample("concentration", dist.LogNormal(2, 4))
-    with time_plate, place_plate:
-        pyro.sample(
-            "obs",
-            dist.DirichletMultinomial(
+
+    obs_dist = dist.DirichletMultinomial(
                 total_count=weekly_strains.sum(-1).max(),
                 concentration=concentration * strain_probs,
-                is_sparse=True,  # uses a faster algorithm
-            ),
-            obs=weekly_strains,
-        )
+                is_sparse=True)  # uses a faster algorithm
+
+    if T_train is not None:
+        assert isinstance(T_train, int) and T_train < T
+        time_mask = log_rate.new_ones(T)
+        time_mask[T_train:] = 0.0
+        time_mask = time_mask.bool().unsqueeze(-1)
+    else:
+        time_mask = True
+
+    # if doing 1-step-ahead forecasting mask out held-out test data
+    with time_plate, place_plate, mask(mask=time_mask):
+        pyro.sample("obs", obs_dist, obs=weekly_strains)
+
+    # compute LL for held-out test data
+    if forecast:
+        return obs_dist.log_prob(weekly_strains)[T_train:]  # T P
 
 
 def init_loc_fn(site):
@@ -155,17 +177,14 @@ def _fit_map_filename(args, dataset, guide=None, without_feature=None):
 
 
 # @cached(_fit_map_filename)
-def fit_map(args, dataset, guide=None):
+def fit_map(args, dataset, T_train=None):
     logger.info("Fitting via MAP")
     pyro.clear_param_store()
     pyro.set_rng_seed(20210319)
 
-    if guide is None:
-        guide = AutoDelta(model, init_loc_fn=init_loc_fn)
-        # Initialize guide so we can count parameters.
-        guide(dataset["weekly_strains"], dataset["features"], feature_group_index=dataset['feature_group_index'])
-    else:
-        guide = copy.deepcopy(guide)
+    guide = AutoDelta(model, init_loc_fn=init_loc_fn)
+    guide(dataset["weekly_strains"], dataset["features"], feature_group_index=dataset['feature_group_index'])
+
     num_params = sum(p.numel() for p in guide.parameters())
     logger.info(f"Training guide with {num_params} parameters:")
 
@@ -176,50 +195,85 @@ def fit_map(args, dataset, guide=None):
     losses = []
 
     for step in range(args.num_steps):
-        loss = svi.step(dataset["weekly_strains"], dataset["features"],
-                        feature_group_index=dataset["feature_group_index"]) / num_obs
+        loss = svi.step(dataset["weekly_strains"], dataset["features"], feature_scale=args.feature_scale,
+                        feature_group_index=dataset["feature_group_index"], T_train=T_train) / num_obs
         assert not math.isnan(loss)
         losses.append(loss)
         if step % args.log_every == 0:
-            median = guide.median()
-            concentration = median["concentration"].item()
+            concentration = guide.median()["concentration"].item()
             logger.info(
                 f"step {step: >4d} loss = {loss:0.6g}\tconc. = {concentration:0.3g}\t"
             )
+
+    # compute 1-step-ahead forecast LL
+    if T_train is not None:
+        guide_tr = trace(guide).get_trace(dataset["weekly_strains"], dataset["features"],
+                        feature_group_index=dataset["feature_group_index"], T_train=T_train, forecast=True)
+        model_tr = trace(replay(model, trace=guide_tr)).get_trace(dataset["weekly_strains"], dataset["features"],
+                        feature_group_index=dataset["feature_group_index"], T_train=T_train, forecast=True)
+        ll_forecast = model_tr.nodes['_RETURN']['value'].data[0]
+        ll_forecast = ll_forecast[ll_forecast.nonzero(as_tuple=False)].mean().item()
+    else:
+        ll_forecast = None
+
     return {
         "args": args,
         "guide": guide,
         "losses": losses,
+        "ll_forecast": ll_forecast,
     }
 
 
 def main(args):
+    print(args)
     if args.cuda:
         torch.set_default_tensor_type(torch.cuda.FloatTensor)
 
     dataset = load_data(args)
 
-    guide = fit_map(args, dataset)['guide']
+    if args.forecast == 0:
+        dataset['feature_group_index'] = None
+        guide = fit_map(args, dataset)['guide']
 
-    median = guide.median()
-    log_rate_coef = median['log_rate_coef']
-    log_rate_coef_abs = log_rate_coef.abs()
+        median = guide.median()
+        log_rate_coef = median['log_rate_coef']
+        log_rate_coef_abs = log_rate_coef.abs()
 
-    print("sum(log_rate_coef_abs > 0.1)", sum(log_rate_coef_abs > 0.1).item())
-    print("sum(log_rate_coef_abs > 0.01)", sum(log_rate_coef_abs > 0.01).item())
-    print("sum(log_rate_coef_abs < 0.1)", sum(log_rate_coef_abs < 0.1).item())
-    print("sum(log_rate_coef_abs < 1.0e-3)", sum(log_rate_coef_abs < 1.0e-3).item())
-    print("sum(log_rate_coef_abs < 1.0e-5)", sum(log_rate_coef_abs < 1.0e-5).item())
+        print("sum(log_rate_coef_abs > 0.1)", sum(log_rate_coef_abs > 0.1).item())
+        print("sum(log_rate_coef_abs > 0.01)", sum(log_rate_coef_abs > 0.01).item())
+        print("sum(log_rate_coef_abs < 0.1)", sum(log_rate_coef_abs < 0.1).item())
+        print("sum(log_rate_coef_abs < 1.0e-3)", sum(log_rate_coef_abs < 1.0e-3).item())
+        print("sum(log_rate_coef_abs < 1.0e-5)", sum(log_rate_coef_abs < 1.0e-5).item())
 
-    if args.feature_groups in median:
-        print("median[feature_group_scale]", median['feature_group_scale'].data.cpu().numpy())
+        counter = defaultdict(lambda: 0)
 
-    print(args)
+        for k, v in enumerate(log_rate_coef_abs.data.cpu().numpy()):
+            if v > 0.01:
+                counter[dataset['feature_groups'][dataset['feature_group_index'][k].item()]] += 1
+
+        print(counter)
+
+        if args.feature_groups:
+            print("median[feature_group_scale]", median['feature_group_scale'].data.cpu().numpy())
+
+    else:  # do rolling forecasting
+        ll_forecasts = []
+        for t in range(1, args.forecast + 1)[::-1]:
+             T_train = dataset['T'] - t
+             print('Training with T_train = {}'.format(T_train))
+             result = fit_map(args, dataset, T_train=T_train)
+             print("ll forecast: {:.4f}".format(result['ll_forecast']))
+             ll_forecasts.append(result['ll_forecast'])
+        print("MEAN FORECAST LL OVER {} TIME PERIOD WINDOW: {:.4f}  (feature_scale = {:.3f})".format(args.forecast,
+              np.mean(ll_forecasts), args.feature_scale))
+        forecast = pd.DataFrame(np.mean(ll_forecasts), columns=['LL'], index=['{}-forecast'.format(args.forecast)])
+        f = 'forecasts/forecast.f_{}.fs_{:.3f}.fg_{}.csv'.format(args.forecast, args.feature_scale, args.feature_groups)
+        forecast.to_csv(f)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Bootstrap"
+        description="1-step-ahead forecasting"
     )
     parser.add_argument(
         "--cuda", action="store_true", default=torch.cuda.is_available()
@@ -232,11 +286,13 @@ if __name__ == "__main__":
     )
     parser.add_argument("--learning-rate", default=0.05, type=float)
     parser.add_argument("--lrd", default=0.1, type=float)
-    parser.add_argument("--num-steps", default=2001, type=int)
+    parser.add_argument("--num-steps", default=4001, type=int)
+    parser.add_argument("--forecast", default=0, type=int)
+    parser.add_argument("--feature-scale", default=0.04, type=float)
     parser.add_argument("--cpu", dest="cuda", action="store_false")
     parser.add_argument("-f", "--force", action="store_true")
     parser.add_argument("--feature-groups", action="store_true")
-    parser.add_argument("-l", "--log-every", default=200, type=int)
+    parser.add_argument("-l", "--log-every", default=500, type=int)
     args = parser.parse_args()
     args.device = "cuda" if args.cuda else "cpu"
     main(args)
