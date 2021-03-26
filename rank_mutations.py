@@ -45,7 +45,7 @@ def load_data(args):
     logger.info("Training on {} rows with columns:".format(len(columns["day"])))
     logger.info(", ".join(columns.keys()))
     aa_features = torch.load("results/nextclade.features.pt")
-    logger.info("Training on {} feature matrix".format(aa_features["features"].shape))
+    logger.info("Loaded {} feature matrix".format(aa_features["features"].shape))
 
     # Aggregate regions.
     features = aa_features["features"].to(device=args.device)
@@ -58,7 +58,7 @@ def load_data(args):
     quotient = {}
     for day, location, lineage in zip(columns["day"], columns["location"], lineages):
         if lineage not in lineage_id:
-            print(f"WARNING skipping unsampled lineage {lineage}")
+            logger.warning(f"WARNING skipping unsampled lineage {lineage}")
             continue
         parts = location.split("/")
         if len(parts) < 2:
@@ -79,7 +79,30 @@ def load_data(args):
     for (t, p, s), n in sparse_data.items():
         weekly_strains[t, p, s] = n
 
-    return {"args": args, "weekly_strains": weekly_strains, "features": features}
+    # Filter regions.
+    num_times_observed = (weekly_strains > 0).max(2).values.sum(0)
+    ok_regions = (num_times_observed >= 2).nonzero(as_tuple=True)[0]
+    ok_region_set = set(ok_regions.tolist())
+    logger.info(f"Keeping {len(ok_regions)}/{weekly_strains.size(1)} regions")
+    weekly_strains = weekly_strains.index_select(1, ok_regions)
+    locations = [k for k, v in location_id.items() if v in ok_region_set]
+    location_id = dict(zip(locations, range(len(ok_regions))))
+
+    # Filter mutations.
+    mutations = aa_features["mutations"]
+    num_strains_with_mutation = (features >= 0.5).sum(0)
+    ok_mutations = (num_strains_with_mutation >= 1).nonzero(as_tuple=True)[0]
+    logger.info(f"Keeping {len(ok_mutations)}/{len(mutations)} mutations")
+    mutations = [mutations[i] for i in ok_mutations.tolist()]
+    features = features.index_select(1, ok_mutations)
+
+    return {
+        "args": args,
+        "location_id": location_id,
+        "mutations": mutations,
+        "weekly_strains": weekly_strains,
+        "features": features,
+    }
 
 
 def model(weekly_strains, features, feature_scale=1.0):
