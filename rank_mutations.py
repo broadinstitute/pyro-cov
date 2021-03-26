@@ -13,6 +13,7 @@ import torch
 from pyro import poutine
 from pyro.infer import SVI, Trace_ELBO
 from pyro.infer.autoguide import AutoDelta, AutoGuideList, AutoNormal, init_to_median
+from pyro.infer.autoguide.initialization import InitMessenger
 from pyro.optim import ClippedAdam
 
 from pyrocov import pangolin
@@ -105,7 +106,7 @@ def load_data(args):
     }
 
 
-def model(weekly_strains, features, feature_scale=1.0):
+def model(weekly_strains, features):
     assert weekly_strains.shape[-1] == features.shape[0]
     T, P, S = weekly_strains.shape
     S, F = features.shape
@@ -115,6 +116,7 @@ def model(weekly_strains, features, feature_scale=1.0):
     time -= time.max()
 
     # Assume relative growth rate depends on mutation features but not time or place.
+    feature_scale = pyro.sample("feature_scale", dist.LogNormal(0, 1))
     log_rate_coef = pyro.sample(
         "log_rate_coef", dist.Laplace(0, feature_scale).expand([F]).to_event(1)
     )
@@ -142,6 +144,8 @@ def model(weekly_strains, features, feature_scale=1.0):
 def init_loc_fn(site):
     if site["name"] in ("log_rate_coef", "log_rate", "log_init", "noise", "noise_haar"):
         return torch.zeros(site["fn"].shape())
+    if site["name"] == "feature_scale":
+        return torch.ones(site["fn"].shape())
     if site["name"].endswith("noise_scale"):
         return torch.full(site["fn"].shape(), 3.0)
     if site["name"] == "concentration":
@@ -149,12 +153,12 @@ def init_loc_fn(site):
     return init_to_median(site)
 
 
-def _fit_map_filename(args, dataset, guide=None, without_feature=None):
+def _fit_map_filename(args, dataset, cond_data, guide=None, without_feature=None):
     return f"results/rank_mutations.{guide is None}.{without_feature}.pt"
 
 
 @cached(_fit_map_filename)
-def fit_map(args, dataset, guide=None, without_feature=None):
+def fit_map(args, dataset, cond_data, guide=None, without_feature=None):
     logger.info(f"Fitting via MAP (without_feature = {without_feature})")
     pyro.clear_param_store()
     pyro.set_rng_seed(20210319)
@@ -165,8 +169,10 @@ def fit_map(args, dataset, guide=None, without_feature=None):
         dataset["features"] = dataset["features"].clone()
         dataset["features"][:, without_feature] = 0
 
+    cond_data = {k: torch.as_tensor(v) for k, v in cond_data.items()}
+    cond_model = poutine.condition(model, cond_data)
     if guide is None:
-        guide = AutoDelta(model, init_loc_fn=init_loc_fn)
+        guide = AutoDelta(cond_model, init_loc_fn=init_loc_fn)
         # Initialize guide so we can count parameters.
         guide(dataset["weekly_strains"], dataset["features"])
     else:
@@ -175,24 +181,19 @@ def fit_map(args, dataset, guide=None, without_feature=None):
     logger.info(f"Training guide with {num_params} parameters:")
 
     optim = ClippedAdam({"lr": args.map_learning_rate, "betas": (0.8, 0.99)})
-    svi = SVI(model, guide, optim, Trace_ELBO())
+    svi = SVI(cond_model, guide, optim, Trace_ELBO())
     num_obs = dataset["weekly_strains"].count_nonzero()
     losses = []
     for step in range(args.map_num_steps):
-        loss = svi.step(dataset["weekly_strains"], dataset["features"]) / num_obs
+        loss = svi.step(dataset["weekly_strains"], dataset["features"])
         assert not math.isnan(loss)
         losses.append(loss)
         if step % args.log_every == 0:
-            median = guide.median()
-            concentration = median["concentration"].item()
-            logger.info(
-                f"step {step: >4d} loss = {loss:0.6g}\tconc. = {concentration:0.3g}\t"
-            )
+            logger.info(f"step {step: >4d} loss = {loss / num_obs:0.6g}")
     return {
         "args": args,
         "guide": guide if without_feature is None else None,
         "losses": losses,
-        "concentration": guide.median()["concentration"].item(),
     }
 
 
@@ -201,7 +202,7 @@ def fit_svi(args, dataset):
     pyro.clear_param_store()
     pyro.set_rng_seed(20210319)
 
-    guide = AutoGuideList(model)
+    guide = AutoGuideList(InitMessenger(init_loc_fn)(model))
     guide.append(
         AutoDelta(
             poutine.block(model, hide=["log_rate_coef"]),
@@ -227,18 +228,17 @@ def fit_svi(args, dataset):
     losses = []
     num_obs = dataset["weekly_strains"].count_nonzero()
     for step in range(args.svi_num_steps):
-        loss = svi.step(dataset["weekly_strains"], dataset["features"]) / num_obs
+        loss = svi.step(dataset["weekly_strains"], dataset["features"])
         assert not math.isnan(loss)
         losses.append(loss)
         if step % args.log_every == 0:
             median = guide.median()
             concentration = median["concentration"].item()
-            with torch.no_grad():
-                scale = guide[-1].scales.log_rate_coef.data
+            feature_scale = median["feature_scale"].item()
             logger.info(
-                f"step {step: >4d} loss = {loss:0.6g}\t"
+                f"step {step: >4d} loss = {loss / num_obs:0.6g}\t"
                 f"conc. = {concentration:0.3g}\t"
-                f"scale in [{scale.min():0.3g}, {scale.max():0.3g}]"
+                f"feat.scale = {feature_scale:0.3g}"
             )
     return {"args": args, "guide": guide, "losses": losses}
 
@@ -249,16 +249,21 @@ def rank_svi(args, dataset):
 
     guide.to(torch.double)
     sigma_points = dist.Normal(0, 1).cdf(torch.tensor([-1.0, 1.0])).double()
-    pos = guide.quantiles(sigma_points[1].item())["log_rate_coef"].cpu()
-    neg = guide.quantiles(sigma_points[0].item())["log_rate_coef"].cpu()
+    pos = guide[1].quantiles(sigma_points[1].item())["log_rate_coef"].cpu()
+    neg = guide[1].quantiles(sigma_points[0].item())["log_rate_coef"].cpu()
     mean = (pos + neg) / 2
     std = (pos - neg) / 2
+    median = guide.median()
 
     result = {
         "args": args,
         "mean": mean,
         "std": std,
         "ranks": (mean / std).sort(0).indices,
+        "cond_data": {
+            "feature_scale": median["feature_scale"].item(),
+            "concentration": median["concentration"].item(),
+        },
     }
     return result
 
@@ -269,29 +274,27 @@ def rank_map(args, dataset, initial_ranks):
     likelihood ratios of the most siginficant features.
     """
     # Fit an initial model for warm-starting.
-    guide = fit_map(args, dataset)["guide"]
+    cond_data = initial_ranks["cond_data"]
+    guide = fit_map(args, dataset, cond_data)["guide"]
 
     # Fine tune a null hypothesis.
-    map_result = fit_map(args, dataset, guide)
+    map_result = fit_map(args, dataset, cond_data, guide)
     log_rate_coef = map_result["guide"].median()["log_rate_coef"]
     losses = {None: map_result["losses"][-1]}
-    concentrations = {None: map_result["guide"].median()["concentration"].item()}
     del map_result
 
     # Evaluate on the most positive features.
     for i in range(-args.num_positive, 0):
         feature = int(initial_ranks["ranks"][i])
-        fit = fit_map(args, dataset, guide, feature)
+        fit = fit_map(args, dataset, cond_data, guide, feature)
         losses[feature] = fit["losses"][-1]
-        concentrations[feature] = fit["concentration"]
         del fit
 
     # Evaluate on the most negative features.
     for i in range(args.num_negative):
         feature = int(initial_ranks["ranks"][i])
-        fit = fit_map(args, dataset, guide, feature)
+        fit = fit_map(args, dataset, cond_data, guide, feature)
         losses[feature] = fit["losses"][-1]
-        concentrations[feature] = fit["concentration"]
         del fit
 
     # Compute log likelihood ratios.
@@ -302,7 +305,6 @@ def rank_map(args, dataset, initial_ranks):
         "args": args,
         "initial_ranks": initial_ranks,
         "losses": losses,
-        "concentrations": concentrations,
         "log_likelihood": log_likelihood,
         "log_rate_coef": log_rate_coef,
     }
