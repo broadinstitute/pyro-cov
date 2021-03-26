@@ -230,20 +230,20 @@ def main(args):
         torch.set_default_tensor_type(torch.cuda.FloatTensor)
 
     dataset = load_data(args)
+    logger.info("Loaded dataset with (T, P, S) = ({}, {}, {})".format(dataset['T'], dataset['P'], dataset['S']))
 
     if args.forecast == 0:
-        dataset['feature_group_index'] = None
         guide = fit_map(args, dataset)['guide']
 
         median = guide.median()
         log_rate_coef = median['log_rate_coef']
         log_rate_coef_abs = log_rate_coef.abs()
 
-        print("sum(log_rate_coef_abs > 0.1)", sum(log_rate_coef_abs > 0.1).item())
-        print("sum(log_rate_coef_abs > 0.01)", sum(log_rate_coef_abs > 0.01).item())
-        print("sum(log_rate_coef_abs < 0.1)", sum(log_rate_coef_abs < 0.1).item())
-        print("sum(log_rate_coef_abs < 1.0e-3)", sum(log_rate_coef_abs < 1.0e-3).item())
-        print("sum(log_rate_coef_abs < 1.0e-5)", sum(log_rate_coef_abs < 1.0e-5).item())
+        logger.info("sum(log_rate_coef_abs > 0.1)", sum(log_rate_coef_abs > 0.1).item())
+        logger.info("sum(log_rate_coef_abs > 0.01)", sum(log_rate_coef_abs > 0.01).item())
+        logger.info("sum(log_rate_coef_abs < 0.1)", sum(log_rate_coef_abs < 0.1).item())
+        logger.info("sum(log_rate_coef_abs < 1.0e-3)", sum(log_rate_coef_abs < 1.0e-3).item())
+        logger.info("sum(log_rate_coef_abs < 1.0e-5)", sum(log_rate_coef_abs < 1.0e-5).item())
 
         counter = defaultdict(lambda: 0)
 
@@ -251,20 +251,20 @@ def main(args):
             if v > 0.01:
                 counter[dataset['feature_groups'][dataset['feature_group_index'][k].item()]] += 1
 
-        print(counter)
+        logger.info(counter)
 
         if args.feature_groups:
-            print("median[feature_group_scale]", median['feature_group_scale'].data.cpu().numpy())
+            logger.info("median[feature_group_scale]", median['feature_group_scale'].data.cpu().numpy())
 
     else:  # do rolling forecasting
         ll_forecasts = []
         for t in range(1, args.forecast + 1)[::-1]:
              T_train = dataset['T'] - t
-             print('Training with T_train = {}'.format(T_train))
+             logger.info('Training with T_train = {}'.format(T_train))
              result = fit_map(args, dataset, T_train=T_train)
-             print("ll forecast: {:.4f}".format(result['ll_forecast']))
+             logger.info("ll forecast: {:.4f}".format(result['ll_forecast']))
              ll_forecasts.append(result['ll_forecast'])
-        print("MEAN FORECAST LL OVER {} TIME PERIOD WINDOW: {:.4f}  (feature_scale = {:.3f})".format(args.forecast,
+        logger.info("MEAN FORECAST LL OVER {} TIME PERIOD WINDOW: {:.4f}  (feature_scale = {:.3f})".format(args.forecast,
               np.mean(ll_forecasts), args.feature_scale))
         forecast = pd.DataFrame(np.mean(ll_forecasts), columns=['LL'], index=['{}-forecast'.format(args.forecast)])
         f = 'forecasts/forecast.f_{}.fs_{:.3f}.fg_{}.csv'.format(args.forecast, args.feature_scale, args.feature_groups)
@@ -286,8 +286,8 @@ if __name__ == "__main__":
     )
     parser.add_argument("--learning-rate", default=0.05, type=float)
     parser.add_argument("--lrd", default=0.1, type=float)
-    parser.add_argument("--num-steps", default=4001, type=int)
-    parser.add_argument("--forecast", default=0, type=int)
+    parser.add_argument("--num-steps", default=41, type=int)
+    parser.add_argument("--forecast", default=3, type=int)
     parser.add_argument("--feature-scale", default=0.04, type=float)
     parser.add_argument("--cpu", dest="cuda", action="store_false")
     parser.add_argument("-f", "--force", action="store_true")
