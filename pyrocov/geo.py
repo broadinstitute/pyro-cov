@@ -13,7 +13,9 @@ JHU_DIRNAME = os.path.expanduser(
 
 # To update see explore-jhu-time-series.ipynb
 GISAID_TO_JHU = {
+    "a": ("us",),  # typo?
     "aruba": ("netherlands", "aruba"),
+    "belgique": ("belgium",),
     "bermuda": ("united kingdom", "bermuda"),
     "british virgin islands": ("united kingdom", "british virgin islands"),
     "bonaire": ("netherlands", "bonaire, sint eustatius and saba"),
@@ -61,6 +63,7 @@ GISAID_TO_JHU = {
     "trinidad": ("trinidad and tobago",),
     "united states": ("us",),
     "usa": ("us",),
+    "union of the comoros": ("comoros",),
     "viet nam": ("vietnam",),
 }
 

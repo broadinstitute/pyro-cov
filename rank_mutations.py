@@ -10,8 +10,9 @@ from collections import Counter
 import pyro
 import pyro.distributions as dist
 import torch
+from pyro import poutine
 from pyro.infer import SVI, Trace_ELBO
-from pyro.infer.autoguide import AutoDelta, AutoNormal, init_to_median
+from pyro.infer.autoguide import AutoDelta, AutoGuideList, AutoNormal, init_to_median
 from pyro.optim import ClippedAdam
 
 from pyrocov import pangolin
@@ -177,14 +178,27 @@ def fit_svi(args, dataset):
     pyro.clear_param_store()
     pyro.set_rng_seed(20210319)
 
-    guide = AutoNormal(model, init_loc_fn=init_loc_fn, init_scale=0.01)
+    guide = AutoGuideList(model)
+    guide.append(
+        AutoDelta(
+            poutine.block(model, hide=["log_rate_coef"]),
+            init_loc_fn=init_loc_fn,
+        )
+    )
+    guide.append(
+        AutoNormal(
+            poutine.block(model, expose=["log_rate_coef"]),
+            init_loc_fn=init_loc_fn,
+            init_scale=0.01,
+        )
+    )
     # Initialize guide so we can count parameters.
     guide(dataset["weekly_strains"], dataset["features"])
     num_params = sum(p.numel() for p in guide.parameters())
     logger.info(f"Training guide with {num_params} parameters:")
 
     optim = ClippedAdam(
-        {"lr": args.svi_learning_rate, "lrd": 0.05 ** (1 / args.svi_num_steps)}
+        {"lr": args.svi_learning_rate, "lrd": 0.1 ** (1 / args.svi_num_steps)}
     )
     svi = SVI(model, guide, optim, Trace_ELBO())
     losses = []
@@ -196,8 +210,12 @@ def fit_svi(args, dataset):
         if step % args.log_every == 0:
             median = guide.median()
             concentration = median["concentration"].item()
+            with torch.no_grad():
+                scale = guide[-1].scales.log_rate_coef.data
             logger.info(
-                f"step {step: >4d} loss = {loss:0.6g}\tconc. = {concentration:0.3g}\t"
+                f"step {step: >4d} loss = {loss:0.6g}\t"
+                f"conc. = {concentration:0.3g}\t"
+                f"scale in [{scale.min():0.3g}, {scale.max():0.3g}]"
             )
     return {"args": args, "guide": guide, "losses": losses}
 
@@ -274,7 +292,8 @@ def main(args):
 
     dataset = load_data(args)
     initial_ranks = rank_svi(args, dataset)
-    rank_map(args, dataset, initial_ranks)
+    if args.map_num_steps:
+        rank_map(args, dataset, initial_ranks)
 
 
 if __name__ == "__main__":
@@ -282,20 +301,20 @@ if __name__ == "__main__":
         description="Rank mutations via SVI and leave-feature-out MAP"
     )
     parser.add_argument(
-        "--cuda", action="store_true", default=torch.cuda.is_available()
-    )
-    parser.add_argument(
         "--timestep",
         default=14,
         type=int,
-        help="Reasonable values might be week, fortnight, or month",
+        help="Reasonable values might be week (7), fortnight (14), or month (28)",
     )
-    parser.add_argument("--svi-learning-rate", default=0.02, type=float)
+    parser.add_argument("--svi-learning-rate", default=0.05, type=float)
     parser.add_argument("--svi-num-steps", default=1001, type=int)
     parser.add_argument("--map-learning-rate", default=0.05, type=float)
     parser.add_argument("--map-num-steps", default=301, type=int)
     parser.add_argument("--num-positive", default=100, type=int)
     parser.add_argument("--num-negative", default=100, type=int)
+    parser.add_argument(
+        "--cuda", action="store_true", default=torch.cuda.is_available()
+    )
     parser.add_argument("--cpu", dest="cuda", action="store_false")
     parser.add_argument("-f", "--force", action="store_true")
     parser.add_argument("-l", "--log-every", default=50, type=int)
