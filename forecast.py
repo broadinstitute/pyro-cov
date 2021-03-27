@@ -27,23 +27,6 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(format="%(relativeCreated) 9d %(message)s", level=logging.INFO)
 
 
-def cached(filename):
-    def decorator(fn):
-        @functools.wraps(fn)
-        def cached_fn(*args, **kwargs):
-            f = filename(*args, **kwargs) if callable(filename) else filename
-            if args[0].force or not os.path.exists(f):
-                result = fn(*args, **kwargs)
-                torch.save(result, f)
-            else:
-                result = torch.load(f)
-            return result
-
-        return cached_fn
-
-    return decorator
-
-
 def load_data(args):
     logger.info("Loading data")
     with open("results/gisaid.columns.pkl", "rb") as f:
@@ -88,6 +71,23 @@ def load_data(args):
     for (t, p, s), n in sparse_data.items():
         weekly_strains[t, p, s] = n
 
+    # Filter regions.
+    num_times_observed = (weekly_strains > 0).max(2).values.sum(0)
+    ok_regions = (num_times_observed >= 2).nonzero(as_tuple=True)[0]
+    ok_region_set = set(ok_regions.tolist())
+    logger.info(f"Keeping {len(ok_regions)}/{weekly_strains.size(1)} regions")
+    weekly_strains = weekly_strains.index_select(1, ok_regions)
+    locations = [k for k, v in location_id.items() if v in ok_region_set]
+    location_id = dict(zip(locations, range(len(ok_regions))))
+
+    # Filter mutations.
+    mutations = aa_features["mutations"]
+    num_strains_with_mutation = (features >= args.mutation_cutoff).sum(0)
+    ok_mutations = (num_strains_with_mutation >= 1).nonzero(as_tuple=True)[0]
+    logger.info(f"Keeping {len(ok_mutations)}/{len(mutations)} mutations")
+    mutations = [mutations[i] for i in ok_mutations.tolist()]
+    features = features.index_select(1, ok_mutations)
+
     # 12 feature groups
     feature_groups = ['ORF7b', 'ORF7a', 'N', 'ORF8', 'ORF9b', 'ORF3a',
                       'ORF1b', 'M', 'ORF1a', 'E', 'S', 'ORF6']
@@ -123,7 +123,8 @@ def model(weekly_strains, features, feature_group_index=None,
     time -= time.max()
 
     if feature_group_index is not None:  # allow L1 regularization scale to depend on feature group
-        feature_group_scale = feature_scale * pyro.sample("feature_group_scale", dist.Dirichlet(torch.ones(12)))
+        num_groups = 12
+        feature_group_scale = num_groups * feature_scale * pyro.sample("feature_group_scale", dist.Dirichlet(torch.ones(num_groups)))
         feature_group_scale = feature_group_scale.index_select(-1, feature_group_index)
     else:
         feature_group_scale = feature_scale * features.new_ones(F)
@@ -172,11 +173,6 @@ def init_loc_fn(site):
     return init_to_median(site)
 
 
-def _fit_map_filename(args, dataset, guide=None, without_feature=None):
-    return f"results/rank_mutations.{guide is None}.{without_feature}.pt"
-
-
-# @cached(_fit_map_filename)
 def fit_map(args, dataset, T_train=None):
     logger.info("Fitting via MAP")
     pyro.clear_param_store()
@@ -245,29 +241,37 @@ def main(args):
         logger.info("sum(log_rate_coef_abs < 1.0e-3)", sum(log_rate_coef_abs < 1.0e-3).item())
         logger.info("sum(log_rate_coef_abs < 1.0e-5)", sum(log_rate_coef_abs < 1.0e-5).item())
 
-        counter = defaultdict(lambda: 0)
-
-        for k, v in enumerate(log_rate_coef_abs.data.cpu().numpy()):
-            if v > 0.01:
-                counter[dataset['feature_groups'][dataset['feature_group_index'][k].item()]] += 1
-
-        logger.info(counter)
-
         if args.feature_groups:
+            counter = defaultdict(lambda: 0)
+
+            for k, v in enumerate(log_rate_coef_abs.data.cpu().numpy()):
+                if v > 0.01:
+                    counter[dataset['feature_groups'][dataset['feature_group_index'][k].item()]] += 1
+
+            logger.info(counter)
             logger.info("median[feature_group_scale]", median['feature_group_scale'].data.cpu().numpy())
 
     else:  # do rolling forecasting
-        ll_forecasts = []
+        ll_forecasts, concentrations = [], []
+
+        # remove last time slice
+        dataset['weekly_strains'] = dataset['weekly_strains'][:-1]
+        dataset['T'] -= 1
+
         for t in range(1, args.forecast + 1)[::-1]:
              T_train = dataset['T'] - t
              logger.info('Training with T_train = {}'.format(T_train))
              result = fit_map(args, dataset, T_train=T_train)
              logger.info("ll forecast: {:.4f}".format(result['ll_forecast']))
              ll_forecasts.append(result['ll_forecast'])
+             concentrations.append(result['guide'].median()['concentration'].item())
+
         logger.info("MEAN FORECAST LL OVER {} TIME PERIOD WINDOW: {:.4f}  (feature_scale = {:.3f})".format(args.forecast,
               np.mean(ll_forecasts), args.feature_scale))
-        forecast = pd.DataFrame(np.mean(ll_forecasts), columns=['LL'], index=['{}-forecast'.format(args.forecast)])
-        f = 'forecasts/forecast.f_{}.fs_{:.3f}.fg_{}.csv'.format(args.forecast, args.feature_scale, args.feature_groups)
+        df = [[np.mean(ll_forecasts), np.mean(concentrations)]]
+        forecast = pd.DataFrame(df, columns=['LL', 'concentration'], index=['{}-forecast'.format(args.forecast)])
+        f = 'forecasts/forecast.f_{}.fs_{:.3f}.fg_{}.mc_{:.2f}.csv'
+        f = f.format(args.forecast, args.feature_scale, args.feature_groups, args.mutation_cutoff)
         forecast.to_csv(f)
 
 
@@ -286,9 +290,10 @@ if __name__ == "__main__":
     )
     parser.add_argument("--learning-rate", default=0.05, type=float)
     parser.add_argument("--lrd", default=0.1, type=float)
-    parser.add_argument("--num-steps", default=41, type=int)
-    parser.add_argument("--forecast", default=3, type=int)
+    parser.add_argument("--num-steps", default=3001, type=int)
+    parser.add_argument("--forecast", default=7, type=int)
     parser.add_argument("--feature-scale", default=0.04, type=float)
+    parser.add_argument("--mutation-cutoff", default=0.5, type=float)
     parser.add_argument("--cpu", dest="cuda", action="store_false")
     parser.add_argument("-f", "--force", action="store_true")
     parser.add_argument("--feature-groups", action="store_true")
