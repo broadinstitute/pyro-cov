@@ -43,6 +43,8 @@ class KONet(nn.Module):
         self.bn2 = nn.BatchNorm1d(num_features=hidden_dim)
         self.lin3 = nn.Linear(hidden_dim, hidden_dim)
         self.bn3 = nn.BatchNorm1d(num_features=hidden_dim)
+        #self.lin4 = nn.Linear(hidden_dim, hidden_dim)
+        #self.bn4 = nn.BatchNorm1d(num_features=hidden_dim)
         self.lin_final = nn.Linear(hidden_dim, input_dim)
 
     def forward(self, x):
@@ -51,6 +53,7 @@ class KONet(nn.Module):
         h1 = self.relu(self.bn1(self.lin1(x_epsilon)))
         h2 = self.relu(self.bn2(self.lin2(h1)))
         h3 = self.relu(self.bn3(self.lin3(h2)))
+        #h4 = self.relu(self.bn4(self.lin4(h3)))
         x_tilde = self.lin_final(h3)
         return x_tilde
 
@@ -67,7 +70,8 @@ class KONet(nn.Module):
         G_xxt = (x_ctr.unsqueeze(-2) * x_tilde_ctr.unsqueeze(-1)).mean(0)
         G_xx_sq = G_xx.pow(2.0).sum() + jit
 
-        loss1 = ((x - x_tilde).mean(0)).pow(2.0).mean()
+        loss1 = ((x - x_tilde).mean(0)).pow(2.0).mean() +\
+                ((x.sigmoid() - x_tilde.sigmoid()).mean(0)).pow(2.0).mean()
         loss2 = (G_xx - G_xtxt).pow(2.0).sum() / G_xx_sq
         loss3 = ((G_xx - G_xxt) * self.mask).pow(2.0).sum() / G_xx_sq
         loss4 = (x_norm * x_tilde_norm).mean(0).abs().mean()
@@ -75,7 +79,7 @@ class KONet(nn.Module):
         return loss1, loss2, loss3, loss4
 
 
-def logit_transform(features, epsilon=1.0e-6):
+def logit_transform(features, epsilon=1.0e-7):
     logit_features = features.clamp(min=epsilon, max=1.0 - epsilon)
     logit_features = torch.log(logit_features) - torch.log(1.0 - logit_features)
     return logit_features
@@ -86,7 +90,7 @@ def train(dataset, args):
 
     konet = KONet(input_dim=features.size(-1), hidden_dim=8 * features.size(-1), prototype=features)
     adam = torch.optim.Adam(konet.parameters(), lr=args.learning_rate)
-    sched = torch.optim.lr_scheduler.MultiStepLR(adam, milestones=[50, 200, 400, 600], gamma=0.2)
+    sched = torch.optim.lr_scheduler.MultiStepLR(adam, milestones=[200, 1000, 3000, 5000], gamma=0.2)
 
     logit_features = logit_transform(features)
     train_dataset = TensorDataset(logit_features)
@@ -112,12 +116,12 @@ def train(dataset, args):
         epoch_losses.append(np.mean(losses))
         sched.step()
 
-        if step % 5 == 0:
+        if step % 10 == 0:
             ep_loss = 0.0 if step < 20 else np.mean(epoch_losses[-20:])
             logger.info("[step %03d]  loss: %.3f   %.3f    %.3f %.3f %.3f %.3f" % (step, np.mean(losses), ep_loss, np.mean(losses1),
                                                                                    np.mean(losses2), np.mean(losses3), np.mean(losses4)))
 
-    #torch.save(konet.state_dict(), './konet.pt')
+    torch.save(konet.state_dict(), './konet.pt')
     logger.info("Saved konet state dict to konet.pt")
 
 
@@ -221,7 +225,7 @@ def fit_svi(args, dataset):
     print("num neg W", (W<0).float().sum().item())
 
     ts = torch.from_numpy(np.sort(W.abs().data.cpu().numpy())).type_as(W).unsqueeze(-1)
-    threshold = 0.01
+    threshold = 0.05
     numerator = 1.0 + (W <= -ts).float().sum(-1)
     denominator = (W >= ts).float().sum(-1)
     ratio = numerator / denominator
@@ -250,6 +254,8 @@ def test(dataset, args):
     features_tilde = konet(logit_features).sigmoid().detach()
     print("first real feature", features[0, :10])
     print("first kofeature   ", features_tilde[0, :10])
+    print("feature norm", features.mean().item(), (features>0.5).float().sum().item())
+    print("feature_til norm", features_tilde.mean().item(), (features_tilde>0.5).float().sum().item())
 
     dataset['features'] = torch.cat([features, features_tilde], dim=-1)
 
@@ -284,10 +290,10 @@ if __name__ == "__main__":
         type=int,
         help="Reasonable values might be week, fortnight, or month",
     )
-    parser.add_argument("--learning-rate", default=0.005, type=float)
-    parser.add_argument("--num-steps", default=800, type=int)
-    parser.add_argument("--batch-size", default=64, type=int)
-    parser.add_argument("--mutation-cutoff", default=0.5, type=float)
+    parser.add_argument("--learning-rate", default=0.01, type=float)
+    parser.add_argument("--num-steps", default=7000, type=int)
+    parser.add_argument("--batch-size", default=178, type=int)
+    parser.add_argument("--mutation-cutoff", default=0.95, type=float)
     parser.add_argument("--cpu", dest="cuda", action="store_false")
     parser.add_argument("--mode", type=str, choices=['train', 'test'])
     parser.add_argument("--feature-groups", action="store_true")
