@@ -190,11 +190,12 @@ def fit_map(args, dataset, cond_data, guide=None, without_feature=None):
         losses.append(loss)
         if step % args.log_every == 0:
             logger.info(f"step {step: >4d} loss = {loss / num_obs:0.6g}")
-    return {
-        "args": args,
-        "guide": guide if without_feature is None else None,
-        "losses": losses,
-    }
+
+    result = {"args": args, "mutation": None, "guide": guide, "losses": losses}
+    if without_feature is not None:
+        result["mutation"] = dataset["mutations"][without_feature]
+        result["guide"] = None
+    return result
 
 
 def fit_svi(args, dataset):
@@ -259,7 +260,7 @@ def rank_svi(args, dataset):
         "args": args,
         "mean": mean,
         "std": std,
-        "ranks": (mean / std).sort(0).indices,
+        "ranks": (mean / std).sort(0, descending=True).indices,
         "cond_data": {
             "feature_scale": median["feature_scale"].item(),
             "concentration": median["concentration"].item(),
@@ -277,22 +278,9 @@ def rank_map(args, dataset, initial_ranks):
     cond_data = initial_ranks["cond_data"]
     guide = fit_map(args, dataset, cond_data)["guide"]
 
-    # Fine tune a null hypothesis.
-    map_result = fit_map(args, dataset, cond_data, guide)
-    log_rate_coef = map_result["guide"].median()["log_rate_coef"]
-    losses = {None: map_result["losses"][-1]}
-    del map_result
-
-    # Evaluate on the most positive features.
-    for i in range(-args.num_positive, 0):
-        feature = int(initial_ranks["ranks"][i])
-        fit = fit_map(args, dataset, cond_data, guide, feature)
-        losses[feature] = fit["losses"][-1]
-        del fit
-
-    # Evaluate on the most negative features.
-    for i in range(args.num_negative):
-        feature = int(initial_ranks["ranks"][i])
+    # Evaluate on the null hypothesis + the most positive features.
+    losses = {}
+    for feature in [None] + initial_ranks["ranks"][: args.num_features].tolist():
         fit = fit_map(args, dataset, cond_data, guide, feature)
         losses[feature] = fit["losses"][-1]
         del fit
@@ -303,10 +291,10 @@ def rank_map(args, dataset, initial_ranks):
     }
     result = {
         "args": args,
+        "mutations": dataset["mutations"],
         "initial_ranks": initial_ranks,
         "losses": losses,
         "log_likelihood": log_likelihood,
-        "log_rate_coef": log_rate_coef,
     }
     torch.save(result, "results/rank_mutations.pt")
 
@@ -335,8 +323,7 @@ if __name__ == "__main__":
     parser.add_argument("--svi-num-steps", default=1001, type=int)
     parser.add_argument("--map-learning-rate", default=0.05, type=float)
     parser.add_argument("--map-num-steps", default=301, type=int)
-    parser.add_argument("--num-positive", default=100, type=int)
-    parser.add_argument("--num-negative", default=100, type=int)
+    parser.add_argument("--num-features", type=int)
     parser.add_argument(
         "--cuda", action="store_true", default=torch.cuda.is_available()
     )
