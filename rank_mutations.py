@@ -15,6 +15,7 @@ from pyro.infer import SVI, Trace_ELBO
 from pyro.infer.autoguide import AutoDelta, AutoGuideList, AutoNormal, init_to_median
 from pyro.infer.autoguide.initialization import InitMessenger
 from pyro.optim import ClippedAdam
+from pyro.poutine.util import prune_subsample_sites
 
 from pyrocov import pangolin
 
@@ -31,6 +32,7 @@ def cached(filename):
                 result = fn(*args, **kwargs)
                 torch.save(result, f)
             else:
+                logger.info(f"loading cached {filename}")
                 result = torch.load(f)
             return result
 
@@ -157,6 +159,25 @@ def _fit_map_filename(args, dataset, cond_data, guide=None, without_feature=None
     return f"results/rank_mutations.{guide is None}.{without_feature}.pt"
 
 
+@torch.no_grad()
+def eval_loss_terms(model, guide, *args):
+    guide_trace = poutine.trace(guide).get_trace(*args)
+    model_trace = poutine.trace(poutine.replay(model, guide_trace)).get_trace(*args)
+    traces = {
+        "model": prune_subsample_sites(model_trace),
+        "guide": prune_subsample_sites(guide_trace),
+    }
+    result = {}
+    for trace_name, trace in traces.items():
+        trace.compute_log_prob()
+        result[trace_name] = {
+            name: site["log_prob_sum"].item()
+            for name, site in trace.nodes.items()
+            if site["type"] == "sample"
+        }
+    return result
+
+
 @cached(_fit_map_filename)
 def fit_map(args, dataset, cond_data, guide=None, without_feature=None):
     logger.info(f"Fitting via MAP (without_feature = {without_feature})")
@@ -191,10 +212,19 @@ def fit_map(args, dataset, cond_data, guide=None, without_feature=None):
         if step % args.log_every == 0:
             logger.info(f"step {step: >4d} loss = {loss / num_obs:0.6g}")
 
-    result = {"args": args, "mutation": None, "guide": guide, "losses": losses}
-    if without_feature is not None:
+    result = {
+        "args": args,
+        "mutation": None,
+        "guide": None,
+        "losses": losses,
+        "loss_terms": eval_loss_terms(
+            model, guide, dataset["weekly_strains"], dataset["features"]
+        ),
+    }
+    if without_feature is None:
+        result["guide"] = guide
+    else:
         result["mutation"] = dataset["mutations"][without_feature]
-        result["guide"] = None
     return result
 
 
@@ -279,22 +309,17 @@ def rank_map(args, dataset, initial_ranks):
     guide = fit_map(args, dataset, cond_data)["guide"]
 
     # Evaluate on the null hypothesis + the most positive features.
-    losses = {}
+    dropouts = {}
     for feature in [None] + initial_ranks["ranks"][: args.num_features].tolist():
         fit = fit_map(args, dataset, cond_data, guide, feature)
-        losses[feature] = fit["losses"][-1]
-        del fit
+        del fit["guide"]
+        dropouts[feature] = fit
 
-    # Compute log likelihood ratios.
-    log_likelihood = {
-        f: losses[None] - score for f, score in losses.items() if f is not None
-    }
     result = {
         "args": args,
         "mutations": dataset["mutations"],
         "initial_ranks": initial_ranks,
-        "losses": losses,
-        "log_likelihood": log_likelihood,
+        "dropouts": dropouts,
     }
     torch.save(result, "results/rank_mutations.pt")
 
