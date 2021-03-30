@@ -21,6 +21,7 @@ from pyro.infer import SVI, Trace_ELBO
 from pyro.infer.autoguide import AutoDelta, AutoGuideList, AutoNormal, init_to_median
 from pyro.infer.autoguide.initialization import InitMessenger
 from pyro.optim import Adam, ClippedAdam
+import pyro.poutine as poutine
 
 from pyrocov import pangolin
 
@@ -60,9 +61,10 @@ class Decoder(nn.Module):
         self.bn1 = nn.BatchNorm1d(num_features=hidden_dim)
         self.fc2 = nn.Linear(hidden_dim, hidden_dim)
         self.bn2 = nn.BatchNorm1d(num_features=hidden_dim)
-        self.fc3 = nn.Linear(hidden_dim, input_dim)
+        self.fc3 = nn.Linear(hidden_dim, 2 * input_dim)
         self.relu = nn.ReLU()
         self.softplus = nn.Softplus()
+        self.input_dim = input_dim
 
     def forward(self, z, x, b):
         z_x_b = torch.cat([z, x * (1 - b), b], dim=-1)
@@ -75,7 +77,7 @@ class Decoder(nn.Module):
 
 
 class VAE(nn.Module):
-    def __init__(self, input_dim=None, z_dim=50, hidden_dim=400):
+    def __init__(self, input_dim=None, z_dim=128, hidden_dim=1000):
         super().__init__()
         self.encoder = Encoder(input_dim, z_dim, hidden_dim)
         self.decoder = Decoder(input_dim, z_dim, hidden_dim)
@@ -83,20 +85,25 @@ class VAE(nn.Module):
         self.input_dim = input_dim
 
     def model(self, x, b, idx):
+        assert x.shape == b.shape
         pyro.module("vae", self)
         mbs = x.size(0)
-        with pyro.plate("data", mbs):
+        with pyro.plate("data", mbs), poutine.scale(scale=1.0/self.input_dim):
             z_loc = x.new_zeros(x.shape[0], self.z_dim)
             z = pyro.sample("z", dist.Normal(z_loc, 1.0).to_event(1))
             x_loc, x_scale = self.decoder.forward(z, x, b)
-            x_loc = x_loc.index_select(-1, idx)
-            x_scale = x_scale.index_select(-1, idx)
-            x_idx = x.index_select(-1, idx)
+            x_loc = x_loc.gather(-1, idx)
+            x_scale = x_scale.gather(-1, idx)
+            x_idx = x.gather(-1, idx)
+
+            assert x_loc.shape == x_scale.shape == x_idx.shape
+            assert x_idx.dim() == 2
+
             pyro.sample("obs", dist.Normal(x_loc, x_scale).to_event(1), obs=x_idx)
 
     def guide(self, x, b, idx):
         mbs = x.size(0)
-        with pyro.plate("data", mbs):
+        with pyro.plate("data", mbs), poutine.scale(scale=1.0/self.input_dim):
             z_loc, z_scale = self.encoder.forward(x, b)
             pyro.sample("z", dist.Normal(z_loc, z_scale).to_event(1))
 
@@ -125,7 +132,7 @@ def train(dataset, args):
     svi = SVI(vae.model, vae.guide, optimizer, loss=elbo)
 
     losses = []
-    b_dim = 3
+    b_dim = 9
 
     for step in range(args.num_steps):
         epoch_losses = []
@@ -136,8 +143,14 @@ def train(dataset, args):
             unobserved_idx = torch.randperm(input_dim)[:b_dim * mbs].reshape(mbs, b_dim)
             b = torch.zeros(mbs, input_dim)
             b.scatter_(-1, unobserved_idx, torch.ones_like(b))
-            svi.step(x, b, unobserved_idx)
-            logger.info("[step %03d]")
+            loss = svi.step(x, b, unobserved_idx) * (input_dim / (mbs * b_dim))
+            epoch_losses.append(loss)
+
+        losses.append(np.mean(epoch_losses))
+
+        if step % 40 == 0:
+            smoothed_loss = np.mean(losses[-40:]) if step > 0 else 0.0
+            logger.info("[step %03d] loss: %.4f %.4f" % (step, losses[-1], smoothed_loss))
 
 
 def main(args):
@@ -165,8 +178,8 @@ if __name__ == "__main__":
         help="Reasonable values might be week, fortnight, or month",
     )
     parser.add_argument("--learning-rate", default=0.001, type=float)
-    parser.add_argument("--num-steps", default=7000, type=int)
-    parser.add_argument("--batch-size", default=178, type=int)
+    parser.add_argument("--num-steps", default=6000, type=int)
+    parser.add_argument("--batch-size", default=128, type=int)
     parser.add_argument("--mutation-cutoff", default=0.95, type=float)
     parser.add_argument("--cpu", dest="cuda", action="store_false")
     parser.add_argument("--mode", type=str, choices=['train', 'test'])
