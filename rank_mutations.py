@@ -311,9 +311,7 @@ def rank_map(args, dataset, initial_ranks):
     # Evaluate on the null hypothesis + the most positive features.
     dropouts = {}
     for feature in [None] + initial_ranks["ranks"][: args.num_features].tolist():
-        fit = fit_map(args, dataset, cond_data, guide, feature)
-        del fit["guide"]
-        dropouts[feature] = fit
+        dropouts[feature] = fit_map(args, dataset, cond_data, guide, feature)
 
     result = {
         "args": args,
