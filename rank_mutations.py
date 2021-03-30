@@ -30,9 +30,10 @@ def cached(filename):
             f = filename(*args, **kwargs) if callable(filename) else filename
             if args[0].force or not os.path.exists(f):
                 result = fn(*args, **kwargs)
+                logger.info(f"saving {f}")
                 torch.save(result, f)
             else:
-                logger.info(f"loading cached {filename}")
+                logger.info(f"loading cached {f}")
                 result = torch.load(f)
             return result
 
@@ -155,10 +156,6 @@ def init_loc_fn(site):
     return init_to_median(site)
 
 
-def _fit_map_filename(args, dataset, cond_data, guide=None, without_feature=None):
-    return f"results/rank_mutations.{guide is None}.{without_feature}.pt"
-
-
 @torch.no_grad()
 def eval_loss_terms(model, guide, *args):
     guide_trace = poutine.trace(guide).get_trace(*args)
@@ -176,6 +173,10 @@ def eval_loss_terms(model, guide, *args):
             if site["type"] == "sample"
         }
     return result
+
+
+def _fit_map_filename(args, dataset, cond_data, guide=None, without_feature=None):
+    return f"results/rank_mutations.{guide is None}.{without_feature}.pt"
 
 
 @cached(_fit_map_filename)
@@ -320,10 +321,13 @@ def rank_map(args, dataset, initial_ranks):
         "initial_ranks": initial_ranks,
         "dropouts": dropouts,
     }
+    logger.info("saving results/rank_mutations.pt")
     torch.save(result, "results/rank_mutations.pt")
 
 
 def main(args):
+    if args.double:
+        torch.set_default_dtype(torch.double)
     if args.cuda:
         torch.set_default_tensor_type(torch.cuda.FloatTensor)
 
@@ -346,8 +350,10 @@ if __name__ == "__main__":
     parser.add_argument("--svi-learning-rate", default=0.05, type=float)
     parser.add_argument("--svi-num-steps", default=1001, type=int)
     parser.add_argument("--map-learning-rate", default=0.05, type=float)
-    parser.add_argument("--map-num-steps", default=301, type=int)
+    parser.add_argument("--map-num-steps", default=501, type=int)
     parser.add_argument("--num-features", type=int)
+    parser.add_argument("--double", action="store_true", default=True)
+    parser.add_argument("--single", action="store_false", dest="double")
     parser.add_argument(
         "--cuda", action="store_true", default=torch.cuda.is_available()
     )
