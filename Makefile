@@ -2,7 +2,7 @@ data:
 	ln -sf ~/Google\ Drive\ File\ Stream/Shared\ drives/Pyro\ CoV data
 
 install: FORCE
-	pip install -e .
+	pip install -e .[test]
 
 lint: FORCE
 	flake8

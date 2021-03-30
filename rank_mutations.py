@@ -196,8 +196,10 @@ def fit_map(args, dataset, cond_data, guide=None, without_feature=None):
         guide = AutoDelta(cond_model, init_loc_fn=init_loc_fn)
         # Initialize guide so we can count parameters.
         guide(dataset["weekly_strains"], dataset["features"])
+        save_guide = guide
     else:
         guide = copy.deepcopy(guide)
+        save_guide = None
     num_params = sum(p.numel() for p in guide.parameters())
     logger.info(f"Training guide with {num_params} parameters:")
 
@@ -215,15 +217,14 @@ def fit_map(args, dataset, cond_data, guide=None, without_feature=None):
     result = {
         "args": args,
         "mutation": None,
-        "guide": None,
+        "mode": guide.median()["log_rate_coef"],
+        "guide": save_guide,
         "losses": losses,
         "loss_terms": eval_loss_terms(
             model, guide, dataset["weekly_strains"], dataset["features"]
         ),
     }
-    if without_feature is None:
-        result["guide"] = guide
-    else:
+    if without_feature is not None:
         result["mutation"] = dataset["mutations"][without_feature]
     return result
 
