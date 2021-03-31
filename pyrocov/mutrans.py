@@ -2,6 +2,7 @@ import copy
 import logging
 import math
 import pickle
+import re
 from collections import Counter
 
 import pyro
@@ -29,6 +30,10 @@ def load_data(
     location_pattern=None,
 ):
     logger.info("Loading data")
+    if isinstance(virus_name_pattern, str):
+        virus_name_pattern = re.compile(virus_name_pattern)
+    if isinstance(location_pattern, str):
+        location_pattern = re.compile(location_pattern)
     with open("results/gisaid.columns.pkl", "rb") as f:
         columns = pickle.load(f)
     logger.info("Training on {} rows with columns:".format(len(columns["day"])))
@@ -50,9 +55,9 @@ def load_data(
         if lineage not in lineage_id:
             logger.warning(f"WARNING skipping unsampled lineage {lineage}")
             continue
-        if virus_name_pattern and virus_name_pattern not in virus_name:
+        if virus_name_pattern and not virus_name_pattern.search(virus_name):
             continue
-        if location_pattern and location_pattern not in location:
+        if location_pattern and not location_pattern.search(location):
             continue
         parts = location.split("/")
         if len(parts) < 2:
@@ -72,6 +77,7 @@ def load_data(
     weekly_strains = torch.zeros(T, P, S)
     for (t, p, s), n in sparse_data.items():
         weekly_strains[t, p, s] = n
+    logger.info(f"Keeping {int(weekly_strains.sum())}/{len(lineages)} rows")
 
     # Filter regions.
     num_times_observed = (weekly_strains > 0).max(2).values.sum(0)
@@ -95,6 +101,8 @@ def load_data(
         "mutations": mutations,
         "weekly_strains": weekly_strains,
         "features": features,
+        "lineage_id": lineage_id,
+        "lineage_id_inv": lineage_id_inv,
     }
 
 
@@ -210,7 +218,7 @@ def fit_map(
 
 def fit_svi(
     dataset,
-    model,
+    model=model,
     learning_rate=0.05,
     num_steps=1001,
     log_every=50,
@@ -219,7 +227,6 @@ def fit_svi(
     logger.info("Fitting via SVI")
     pyro.clear_param_store()
     pyro.set_rng_seed(seed)
-
     guide = AutoGuideList(InitMessenger(init_loc_fn)(model))
     guide.append(
         AutoDelta(
@@ -257,6 +264,9 @@ def fit_svi(
                 f"feat.scale = {feature_scale:0.3g}"
             )
 
+    median = guide.median()
+    median["log_rate"] = median["log_rate_coef"] @ dataset["features"].T
+
     guide.to(torch.double)
     sigma_points = dist.Normal(0, 1).cdf(torch.tensor([-1.0, 1.0])).double()
     pos = guide[1].quantiles(sigma_points[1].item())["log_rate_coef"].cpu()
@@ -269,4 +279,5 @@ def fit_svi(
         "losses": losses,
         "mean": mean,
         "std": std,
+        "median": median,
     }
