@@ -45,12 +45,12 @@ class Encoder(nn.Module):
         self.softplus = nn.Softplus()
 
     def forward(self, x, b):
-        x_b = torch.cat([x * b, b], dim=-1)
+        x_b = torch.cat([x, b], dim=-1)
         h1 = self.relu(self.bn1(self.fc1(x_b)))
         h2 = self.relu(self.bn2(self.fc2(h1)))
         h3 = self.fc3(h2)
         z_loc = h3[..., :self.z_dim]
-        z_scale = self.softplus(h3[..., self.z_dim:])
+        z_scale = self.softplus(h3[..., self.z_dim:] - 2.0)
         return z_loc, z_scale
 
 
@@ -77,12 +77,15 @@ class Decoder(nn.Module):
 
 
 class VAE(nn.Module):
-    def __init__(self, input_dim=None, z_dim=128, hidden_dim=1000):
+    def __init__(self, input_dim=None, z_dim=96, hidden_dim=1600):
         super().__init__()
         self.encoder = Encoder(input_dim, z_dim, hidden_dim)
         self.decoder = Decoder(input_dim, z_dim, hidden_dim)
         self.z_dim = z_dim
         self.input_dim = input_dim
+        self.maes = []
+        self.maes2 = []
+        self.maes3= []
 
     def model(self, x, b, idx):
         assert x.shape == b.shape
@@ -99,7 +102,18 @@ class VAE(nn.Module):
             assert x_loc.shape == x_scale.shape == x_idx.shape
             assert x_idx.dim() == 2
 
-            pyro.sample("obs", dist.Normal(x_loc, x_scale).to_event(1), obs=x_idx)
+            self.maes.append( (x_idx - x_loc).abs().mean().item() )
+            xx = x_idx.sigmoid()
+            xx2 = x_loc.sigmoid()
+            self.maes2.append( (xx - xx2).abs().mean().item() )
+            big = xx > 0.5
+            if big.sum().item() > 0:
+                self.maes3.append( (xx[big] - xx2[big]).abs().mean().item() )
+
+            scale = (100.0 * x_idx).clamp(min=1.0)
+            factor = (dist.Normal(x_loc, x_scale).log_prob(x_idx) * scale).sum(-1)
+            #pyro.sample("obs", dist.Normal(x_loc, x_scale).to_event(1), obs=x_idx)
+            pyro.factor("obs", factor)
 
     def guide(self, x, b, idx):
         mbs = x.size(0)
@@ -108,8 +122,7 @@ class VAE(nn.Module):
             pyro.sample("z", dist.Normal(z_loc, z_scale).to_event(1))
 
 
-
-def logit_transform(features, epsilon=1.0e-7):
+def logit_transform(features, epsilon=1.0e-4):
     logit_features = features.clamp(min=epsilon, max=1.0 - epsilon)
     logit_features = torch.log(logit_features) - torch.log(1.0 - logit_features)
     return logit_features
@@ -132,10 +145,11 @@ def train(dataset, args):
     svi = SVI(vae.model, vae.guide, optimizer, loss=elbo)
 
     losses = []
-    b_dim = 9
 
     for step in range(args.num_steps):
         epoch_losses = []
+
+        b_dim = 2 if step < 10000 else 1
 
         for (x,) in train_loader:
             mbs = x.size(0)
@@ -150,7 +164,13 @@ def train(dataset, args):
 
         if step % 40 == 0:
             smoothed_loss = np.mean(losses[-40:]) if step > 0 else 0.0
-            logger.info("[step %03d] loss: %.4f %.4f" % (step, losses[-1], smoothed_loss))
+            mae = np.mean(vae.maes[-300:])
+            mae2 = np.mean(vae.maes2[-300:])
+            mae3 = np.mean(vae.maes3[-300:])
+            logger.info("[step %03d] loss: %.4f %.4f    mae: %.6f %.6f %.6f" % (step, losses[-1], smoothed_loss, mae, mae2, mae3))
+
+    logger.info("saved module to cond.pt")
+    torch.save(vae.state_dict(), './cond.pt')
 
 
 def main(args):
@@ -159,6 +179,7 @@ def main(args):
         torch.set_default_tensor_type(torch.cuda.FloatTensor)
 
     dataset = load_data(args)
+    dataset['features'] = dataset['features'][:, :200]
     logger.info("Loaded dataset with (T, P, S) = ({}, {}, {})".format(dataset['T'], dataset['P'], dataset['S']))
 
     train(dataset, args)
@@ -177,10 +198,10 @@ if __name__ == "__main__":
         type=int,
         help="Reasonable values might be week, fortnight, or month",
     )
-    parser.add_argument("--learning-rate", default=0.001, type=float)
-    parser.add_argument("--num-steps", default=6000, type=int)
-    parser.add_argument("--batch-size", default=128, type=int)
-    parser.add_argument("--mutation-cutoff", default=0.95, type=float)
+    parser.add_argument("--learning-rate", default=0.0001, type=float)
+    parser.add_argument("--num-steps", default=20000, type=int)
+    parser.add_argument("--batch-size", default=50, type=int)
+    parser.add_argument("--mutation-cutoff", default=0.99, type=float)
     parser.add_argument("--cpu", dest="cuda", action="store_false")
     parser.add_argument("--mode", type=str, choices=['train', 'test'])
     parser.add_argument("--feature-groups", action="store_true")
