@@ -25,7 +25,7 @@ def parse_date(string):
     return datetime.datetime.strptime(string, DATE_FORMATS[len(string)])
 
 
-FIELDS = ["accession_id", "collection_date", "location", "add_location"]
+FIELDS = ["virus_name", "accession_id", "collection_date", "location", "add_location"]
 
 
 def main(args):
