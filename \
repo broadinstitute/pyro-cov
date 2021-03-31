@@ -47,9 +47,6 @@ For the remaining mutation-transmissibility latent variable we would like to est
 While the mean field assumption leads to underdispersion on an absolute scale, it nevertheless allows us to rank the _relative statistical significance_ of different mutations.
 This relative ranking is sufficient for the purposes of this paper: to focus attention on mutations and regions of the SARS-CoV-2 genome that appear to be linked to increased transmissibility.
 
-Inverence is performed via the Pyro probabilistic programming language.
-Source code is available at [github.com/broadinstitute/pyro-cov](https://github.com/broadinstitute/pyro-cov).
-
 ## Figures
 
 [![manhattan](manhattan.png)](manhattan.pdf)
