@@ -96,7 +96,10 @@ def rank_map(args, dataset, initial_ranks):
     """
     # Fit an initial model for warm-starting.
     cond_data = initial_ranks["cond_data"]
-    guide = fit_map(args, dataset, cond_data)["guide"]
+    if args.warm_start:
+        guide = fit_map(args, dataset, cond_data)["guide"]
+    else:
+        guide = None
 
     # Evaluate on the null hypothesis + the most positive features.
     dropouts = {}
@@ -136,6 +139,7 @@ if __name__ == "__main__":
     parser.add_argument("--map-learning-rate", default=0.05, type=float)
     parser.add_argument("--map-num-steps", default=301, type=int)
     parser.add_argument("--num-features", type=int)
+    parser.add_argument("--warm-start", action="store_true")
     parser.add_argument("--double", action="store_true", default=False)
     parser.add_argument("--single", action="store_false", dest="double")
     parser.add_argument(
