@@ -50,13 +50,13 @@ This relative ranking is sufficient for the purposes of this paper: to focus att
 Inverence is performed via the Pyro probabilistic programming language.
 Source code is available at [github.com/broadinstitute/pyro-cov](https://github.com/broadinstitute/pyro-cov).
 
+## Tables
+
+1. [Top Mutations](top_mutations.md)
+2. [Top Strains](top_strains.md)
+
 ## Figures
 
 [![manhattan](manhattan.png)](manhattan.pdf)
 
 [![volcano](volcano.png)](volcano.pdf)
-
-## Tables
-
-1. [Top Mutations](top_mutations.md)
-1. [Top Strains](top_strains.md)
