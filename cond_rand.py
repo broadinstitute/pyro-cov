@@ -59,9 +59,9 @@ class Decoder(nn.Module):
         super().__init__()
         self.fc1 = nn.Linear(z_dim + 2 * input_dim, hidden_dim)
         self.bn1 = nn.BatchNorm1d(num_features=hidden_dim)
-        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
+        self.fc2 = nn.Linear(hidden_dim + input_dim, hidden_dim)
         self.bn2 = nn.BatchNorm1d(num_features=hidden_dim)
-        self.fc3 = nn.Linear(hidden_dim, 2 * input_dim)
+        self.fc3 = nn.Linear(hidden_dim + input_dim, 2 * input_dim)
         self.relu = nn.ReLU()
         self.softplus = nn.Softplus()
         self.input_dim = input_dim
@@ -69,15 +69,17 @@ class Decoder(nn.Module):
     def forward(self, z, x, b):
         z_x_b = torch.cat([z, x * (1 - b), b], dim=-1)
         h1 = self.relu(self.bn1(self.fc1(z_x_b)))
-        h2 = self.relu(self.bn2(self.fc2(h1)))
-        h3 = self.fc3(h2)
+        h1_x = torch.cat([h1, x * (1 - b)], dim=-1)
+        h2 = self.relu(self.bn2(self.fc2(h1_x)))
+        h2_x = torch.cat([h2, x * (1 - b)], dim=-1)
+        h3 = self.fc3(h2_x)
         x_loc = h3[..., :self.input_dim]
         x_scale = self.softplus(h3[..., self.input_dim:])
         return x_loc, x_scale
 
 
 class VAE(nn.Module):
-    def __init__(self, input_dim=None, z_dim=96, hidden_dim=1600):
+    def __init__(self, input_dim=None, z_dim=32, hidden_dim=400):
         super().__init__()
         self.encoder = Encoder(input_dim, z_dim, hidden_dim)
         self.decoder = Decoder(input_dim, z_dim, hidden_dim)
@@ -86,6 +88,8 @@ class VAE(nn.Module):
         self.maes = []
         self.maes2 = []
         self.maes3= []
+        self.zs = []
+        self.zs2 = []
 
     def model(self, x, b, idx):
         assert x.shape == b.shape
@@ -120,9 +124,11 @@ class VAE(nn.Module):
         with pyro.plate("data", mbs), poutine.scale(scale=1.0/self.input_dim):
             z_loc, z_scale = self.encoder.forward(x, b)
             pyro.sample("z", dist.Normal(z_loc, z_scale).to_event(1))
+            self.zs.append(z_loc.pow(2.0).mean().item())
+            self.zs2.append(z_scale.mean().item())
 
 
-def logit_transform(features, epsilon=1.0e-4):
+def logit_transform(features, epsilon=1.0e-3):
     logit_features = features.clamp(min=epsilon, max=1.0 - epsilon)
     logit_features = torch.log(logit_features) - torch.log(1.0 - logit_features)
     return logit_features
@@ -149,7 +155,7 @@ def train(dataset, args):
     for step in range(args.num_steps):
         epoch_losses = []
 
-        b_dim = 2 if step < 10000 else 1
+        b_dim = 2 if step < 39000 else 1
 
         for (x,) in train_loader:
             mbs = x.size(0)
@@ -167,10 +173,45 @@ def train(dataset, args):
             mae = np.mean(vae.maes[-300:])
             mae2 = np.mean(vae.maes2[-300:])
             mae3 = np.mean(vae.maes3[-300:])
-            logger.info("[step %03d] loss: %.4f %.4f    mae: %.6f %.6f %.6f" % (step, losses[-1], smoothed_loss, mae, mae2, mae3))
+            logger.info("[step %03d] loss: %.4f %.4f    mae: %.6f %.6f %.6f   zs: %.3f %.3f" % (step, losses[-1], smoothed_loss, mae, mae2, mae3, np.mean(vae.zs[-300:]), np.mean(vae.zs2[-300:])))
 
     logger.info("saved module to cond.pt")
     torch.save(vae.state_dict(), './cond.pt')
+
+
+def test(dataset, args):
+    features = dataset['features']
+    logit_features = logit_transform(features)
+
+    input_dim = logit_features.size(-1)
+    vae = VAE(input_dim=input_dim)
+    vae.load_state_dict(torch.load('./cond.pt'))
+    vae.eval()
+
+    #features_tilde = vae(logit_features).sigmoid().detach()
+
+    b = torch.zeros(1, input_dim)
+    b[0, 0] = 1
+    idx = torch.tensor([0]).unsqueeze(0)
+
+    for i in range(3):
+        print('\n i = ', i)
+        x = features[i].unsqueeze(0)
+
+        z_loc, z_scale = vae.encoder.forward(x, b)
+        z = dist.Normal(z_loc, z_scale).sample()
+        print("zscale", z_scale.min(), z_scale.max())
+        x_loc, x_scale = vae.decoder.forward(z, x, b)
+        print("xscale", x_scale.min(), x_scale.max())
+
+        #print('x', x)
+        print("x>0.05", (x>0.01).nonzero())
+
+        for _ in range(3):
+            x_tilde = dist.Normal(x_loc, x_scale).sample().sigmoid()
+            print("xt>0.05", (x_tilde[0]>0.01).nonzero())
+
+
 
 
 def main(args):
@@ -182,7 +223,10 @@ def main(args):
     dataset['features'] = dataset['features'][:, :200]
     logger.info("Loaded dataset with (T, P, S) = ({}, {}, {})".format(dataset['T'], dataset['P'], dataset['S']))
 
-    train(dataset, args)
+    if args.mode == 'train':
+        train(dataset, args)
+    elif args.mode == 'test':
+        test(dataset, args)
 
 
 if __name__ == "__main__":
@@ -198,12 +242,12 @@ if __name__ == "__main__":
         type=int,
         help="Reasonable values might be week, fortnight, or month",
     )
-    parser.add_argument("--learning-rate", default=0.0001, type=float)
-    parser.add_argument("--num-steps", default=20000, type=int)
-    parser.add_argument("--batch-size", default=50, type=int)
+    parser.add_argument("--learning-rate", default=0.00002, type=float)
+    parser.add_argument("--num-steps", default=5000, type=int)
+    parser.add_argument("--batch-size", default=100, type=int)
     parser.add_argument("--mutation-cutoff", default=0.99, type=float)
     parser.add_argument("--cpu", dest="cuda", action="store_false")
-    parser.add_argument("--mode", type=str, choices=['train', 'test'])
+    parser.add_argument("--mode", default='test', type=str, choices=['train', 'test'])
     parser.add_argument("--feature-groups", action="store_true")
     parser.add_argument("-l", "--log-every", default=500, type=int)
     args = parser.parse_args()
