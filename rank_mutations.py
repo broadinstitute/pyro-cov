@@ -60,9 +60,13 @@ def load_data(args):
     sparse_data = Counter()
     location_id = {}
     quotient = {}
-    for day, location, lineage in zip(columns["day"], columns["location"], lineages):
+    for virus_name, day, location, lineage in zip(
+        columns["virus_name"], columns["day"], columns["location"], lineages
+    ):
         if lineage not in lineage_id:
             logger.warning(f"WARNING skipping unsampled lineage {lineage}")
+            continue
+        if args.virus_name and args.virus_name not in virus_name:
             continue
         parts = location.split("/")
         if len(parts) < 2:
@@ -341,6 +345,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Rank mutations via SVI and leave-feature-out MAP"
     )
+    parser.add_argument("--virus-name")
     parser.add_argument(
         "--timestep",
         default=14,
@@ -352,7 +357,7 @@ if __name__ == "__main__":
     parser.add_argument("--map-learning-rate", default=0.05, type=float)
     parser.add_argument("--map-num-steps", default=501, type=int)
     parser.add_argument("--num-features", type=int)
-    parser.add_argument("--double", action="store_true", default=True)
+    parser.add_argument("--double", action="store_true", default=False)
     parser.add_argument("--single", action="store_false", dest="double")
     parser.add_argument(
         "--cuda", action="store_true", default=torch.cuda.is_available()
