@@ -32,6 +32,7 @@ GISAID_TO_JHU = {
     "england": ("united kingdom",),
     "faroe islands": ("denmark", "faroe islands"),
     "french guiana": ("france", "french guiana"),
+    "french polynesia": ("france", "french polynesia"),
     "gaborone": ("botswana",),
     "gibraltar": ("united kingdom", "gibraltar"),
     "guadeloupe": ("france", "guadeloupe"),
@@ -46,6 +47,7 @@ GISAID_TO_JHU = {
     "mayotte": ("france", "mayotte"),
     "myanmar": ("burma",),
     "netherlans": ("netherlands",),
+    "northern mariana islands": ("us", "northern mariana islands"),
     "palestine": ("israel",),  # ?
     "polynesia": ("france", "french polynesia"),
     "puerto rico": ("us", "puerto rico"),
