@@ -3,6 +3,7 @@ import functools
 import logging
 import os
 
+import pyro.distributions as dist
 import torch
 from pyro import poutine
 
@@ -31,6 +32,11 @@ def cached(filename):
     return decorator
 
 
+@cached("results/rank_mutations.data.pt")
+def load_data(args):
+    return mutrans.load_data(device=args.device)
+
+
 @cached("results/rank_mutations.rank_svi.pt")
 def rank_svi(args, dataset):
     result = mutrans.fit_svi(
@@ -44,12 +50,48 @@ def rank_svi(args, dataset):
     result["args"] = (args,)
     sigma = result["mean"] / result["std"]
     result["ranks"] = sigma.sort(0, descending=True).indices
-    median = result["guide"].median()
     result["cond_data"] = {
-        "feature_scale": median["feature_scale"].item(),
-        "concentration": median["concentration"].item(),
+        "feature_scale": result["median"]["feature_scale"].item(),
+        "concentration": result["median"]["concentration"].item(),
     }
     del result["guide"]
+    return result
+
+
+@cached("results/rank_mutations.hessian.pt")
+def compute_hessian(args, dataset, result):
+    logger.info("Computing hessian")
+
+    # I haven't been able to get trace(condition(mutrans.model)) working;
+    # instead we hand-reproduce the likelihood of mutrans.model.
+    features = dataset["features"]
+    weekly_strains = dataset["weekly_strains"]
+    log_init = result["median"]["log_init"]
+    concentration = result["median"]["concentration"]
+    log_rate_coef = result["median"]["log_rate_coef"].clone().requires_grad_()
+    T, P, S = weekly_strains.shape
+    time = torch.arange(float(T)) * mutrans.TIMESTEP / 365.25  # in years
+    time -= time.max()
+
+    def log_prob(log_rate_coef):
+        log_rate = log_rate_coef @ features.T
+        strain_probs = (log_init + log_rate * time[:, None, None]).softmax(-1)
+        d = dist.DirichletMultinomial(
+            total_count=weekly_strains.sum(-1).max(),
+            concentration=concentration * strain_probs,
+            is_sparse=True,  # uses a faster algorithm
+        )
+        return d.log_prob(weekly_strains).sum()
+
+    result["mutations"] = dataset["mutations"]
+    result["hessian"] = torch.autograd.functional.hessian(
+        log_prob,
+        log_rate_coef,
+        create_graph=True,
+        strict=True,
+    )
+    F = len(dataset["mutations"])
+    assert result["hessian"].shape == (F, F)
     return result
 
 
@@ -146,9 +188,11 @@ def main(args):
             torch.cuda.DoubleTensor if args.double else torch.cuda.FloatTensor
         )
 
-    dataset = mutrans.load_data(device=args.device)
+    dataset = load_data(args)
     initial_ranks = rank_svi(args, dataset)
-    if args.map_num_steps:
+    if args.hessian:
+        compute_hessian(args, dataset, initial_ranks)
+    if args.map_num_steps and args.num_features:
         rank_map(args, dataset, initial_ranks)
 
 
@@ -161,6 +205,7 @@ if __name__ == "__main__":
     parser.add_argument("--map-learning-rate", default=0.05, type=float)
     parser.add_argument("--map-num-steps", default=1001, type=int)
     parser.add_argument("--num-features", type=int)
+    parser.add_argument("--hessian", action="store_true")
     parser.add_argument("--warm-start", action="store_true")
     parser.add_argument("--double", action="store_true", default=True)
     parser.add_argument("--single", action="store_false", dest="double")

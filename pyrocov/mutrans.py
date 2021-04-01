@@ -42,7 +42,9 @@ def load_data(
     logger.info("Loaded {} feature matrix".format(aa_features["features"].shape))
 
     # Aggregate regions.
-    features = aa_features["features"].to(device=device)
+    features = aa_features["features"].to(
+        device=device, dtype=torch.get_default_dtype()
+    )
     lineages = list(map(pangolin.compress, columns["lineage"]))
     lineage_id_inv = list(map(pangolin.compress, aa_features["lineages"]))
     lineage_id = {k: i for i, k in enumerate(lineage_id_inv)}
@@ -218,10 +220,14 @@ def fit_map(
         if step % log_every == 0:
             logger.info(f"step {step: >4d} loss = {loss / num_obs:0.6g}")
 
+    median = guide.median()
+    median["log_rate"] = median["log_rate_coef"] @ dataset["features"].T
+
     return {
         "guide": guide,
-        "mode": guide.median()["log_rate_coef"],
         "losses": losses,
+        "median": median,
+        "mode": median["log_rate_coef"],
         "loss_terms": eval_loss_terms(
             model,
             guide,
