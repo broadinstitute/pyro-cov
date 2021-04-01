@@ -292,8 +292,8 @@ def fit_svi(
 
     guide.to(torch.double)
     sigma_points = dist.Normal(0, 1).cdf(torch.tensor([-1.0, 1.0])).double()
-    pos = guide[1].quantiles(sigma_points[1].item())["log_rate_coef"].cpu()
-    neg = guide[1].quantiles(sigma_points[0].item())["log_rate_coef"].cpu()
+    pos = guide[1].quantiles(sigma_points[1].item())["log_rate_coef"]
+    neg = guide[1].quantiles(sigma_points[0].item())["log_rate_coef"]
     mean = (pos + neg) / 2
     std = (pos - neg) / 2
 
