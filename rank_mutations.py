@@ -101,8 +101,9 @@ def compute_hessian(args, dataset, result):
     logger.info("Computing covariance")
     result["cov"] = _sym_inverse(-hessian)
     result["var"] = result["cov"].diag()
-    result["std"] = result["var"].sqrt
-    result["ranks"] = result["var"].sort(0, descending=True).indices
+    result["std"] = result["var"].sqrt()
+    sigma = result["mean"] / result["std"]
+    result["ranks"] = sigma.sort(0, descending=True).indices
     return result
 
 
@@ -114,7 +115,7 @@ def _sym_inverse(mat):
             u = torch.cholesky(eye * (10 ** exponent) + mat)
         except RuntimeError as e:  # noqa F841
             continue
-        logger.info("Added 1e{exponent} to Hessian diagonal")
+        logger.info(f"Added 1e{exponent} to Hessian diagonal")
         return torch.cholesky_inverse(u)
     raise e from None
 
