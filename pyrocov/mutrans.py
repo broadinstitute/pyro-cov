@@ -106,7 +106,7 @@ def load_data(
     }
 
 
-def model(weekly_strains, features):
+def model(weekly_strains, features, *, mask=None):
     assert weekly_strains.shape[-1] == features.shape[0]
     T, P, S = weekly_strains.shape
     S, F = features.shape
@@ -120,7 +120,9 @@ def model(weekly_strains, features):
     log_rate_coef = pyro.sample(
         "log_rate_coef", dist.Laplace(0, feature_scale).expand([F]).to_event(1)
     )
-    log_rate = pyro.deterministic("log_rate", log_rate_coef @ features.T)
+    if mask:
+        log_rate_coef = log_rate_coef.masked_fill(mask, 0)
+    log_rate = pyro.deterministic("log_rate", log_rate_coef @ features.T, event_dim=1)
 
     # Assume places differ only in their initial infection count.
     with place_plate:
@@ -141,6 +143,13 @@ def model(weekly_strains, features):
         )
 
 
+def dropout_model(weekly_strains, features):
+    S, F = features.shape
+    mask = torch.eye(F, dtype=torch.bool).reshape(F, 1, 1, F)
+    with pyro.plate("features", dim=-3):
+        model(weekly_strains, features, mask=mask)
+
+
 def init_loc_fn(site):
     if site["name"] in ("log_rate_coef", "log_rate", "log_init", "noise", "noise_haar"):
         return torch.zeros(site["fn"].shape())
@@ -154,7 +163,7 @@ def init_loc_fn(site):
 
 
 @torch.no_grad()
-def eval_loss_terms(model, guide, *args):
+def eval_loss_terms(model, guide, *args, vectorized=False):
     guide_trace = poutine.trace(guide).get_trace(*args)
     model_trace = poutine.trace(poutine.replay(model, guide_trace)).get_trace(*args)
     traces = {
@@ -165,7 +174,7 @@ def eval_loss_terms(model, guide, *args):
     for trace_name, trace in traces.items():
         trace.compute_log_prob()
         result[trace_name] = {
-            name: site["log_prob_sum"].item()
+            name: site["log_prob"] if vectorized else site["log_prob_sum"].item()
             for name, site in trace.nodes.items()
             if site["type"] == "sample"
         }
@@ -177,6 +186,7 @@ def fit_map(
     model,
     guide=None,
     *,
+    vectorized=False,
     learning_rate=0.05,
     num_steps=301,
     log_every=50,
@@ -212,7 +222,13 @@ def fit_map(
         "guide": guide,
         "mode": guide.median()["log_rate_coef"],
         "losses": losses,
-        "loss_terms": eval_loss_terms(model, guide, weekly_strains, features),
+        "loss_terms": eval_loss_terms(
+            model,
+            guide,
+            weekly_strains,
+            features,
+            vectorized=vectorized,
+        ),
     }
 
 

@@ -116,6 +116,28 @@ def rank_map(args, dataset, initial_ranks):
     torch.save(result, "results/rank_mutations.pt")
 
 
+def rank_map_parallel(args, dataset, initial_ranks):
+    # Condition model.
+    cond_data = initial_ranks["cond_data"]
+    cond_data = {k: torch.as_tensor(v) for k, v in cond_data.items()}
+    model = poutine.condition(mutrans.dropout_model, cond_data)
+
+    # Fit.
+    result = mutrans.fit_map(
+        dataset,
+        model,
+        learning_rate=args.map_learning_rate,
+        num_steps=args.map_num_steps,
+        log_every=args.log_every,
+        seed=args.seed,
+        vectorized=True,
+    )
+
+    result["args"] = args
+    result["mutations"] = dataset["mutations"]
+    return result
+
+
 def main(args):
     if args.double:
         torch.set_default_dtype(torch.double)
@@ -137,10 +159,10 @@ if __name__ == "__main__":
     parser.add_argument("--svi-learning-rate", default=0.05, type=float)
     parser.add_argument("--svi-num-steps", default=1001, type=int)
     parser.add_argument("--map-learning-rate", default=0.05, type=float)
-    parser.add_argument("--map-num-steps", default=301, type=int)
+    parser.add_argument("--map-num-steps", default=1001, type=int)
     parser.add_argument("--num-features", type=int)
     parser.add_argument("--warm-start", action="store_true")
-    parser.add_argument("--double", action="store_true", default=False)
+    parser.add_argument("--double", action="store_true", default=True)
     parser.add_argument("--single", action="store_false", dest="double")
     parser.add_argument(
         "--cuda", action="store_true", default=torch.cuda.is_available()
