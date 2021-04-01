@@ -1,6 +1,7 @@
 import argparse
 import functools
 import logging
+import math
 import os
 
 import pyro.distributions as dist
@@ -123,12 +124,13 @@ def compute_hessian(args, dataset, result):
 def _sym_inverse(mat):
     eye = torch.eye(len(mat))
     e = None
-    for exponent in range(-20, 1):
+    for exponent in [-math.inf] + list(range(-20, 1)):
+        eps = 10 ** exponent
         try:
-            u = torch.cholesky(eye * (10 ** exponent) + mat)
+            u = torch.cholesky(eye * eps + mat)
         except RuntimeError as e:  # noqa F841
             continue
-        logger.info(f"Added 1e{exponent} to Hessian diagonal")
+        logger.info(f"Added {eps:g} to Hessian diagonal")
         return torch.cholesky_inverse(u)
     raise e from None
 
