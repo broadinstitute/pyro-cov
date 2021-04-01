@@ -172,7 +172,7 @@ def full_guide(weekly_strains, features):
     )
 
     # MAP estimate log_init, but conditioned on log_rate_coef.
-    weight = pyro.param("log_init_weight", lambda: torch.zeros(P, S, F))
+    weight = pyro.param("log_init_weight", lambda: torch.zeros(S, F))
     bias = pyro.param("log_init_bias", lambda: torch.zeros(P, S))
     log_init = bias + weight @ log_rate_coef
     with pyro.plate("place", P, dim=-1):
@@ -361,8 +361,8 @@ def fit_full_svi(
         assert not math.isnan(loss)
         losses.append(loss)
         if step % log_every == 0:
-            concentration = param_store["concentration"].item()
-            feature_scale = param_store["feature_scale"].item()
+            concentration = param_store["map_concentration"].item()
+            feature_scale = param_store["map_feature_scale"].item()
             logger.info(
                 f"step {step: >4d} loss = {loss / num_obs:0.6g}\t"
                 f"conc. = {concentration:0.3g}\t"

@@ -70,6 +70,7 @@ def rank_full_svi(args, dataset):
         seed=args.seed,
     )
     result["args"] = (args,)
+    result["mean"] = result["params"]["log_rate_coef_loc"]
     scale_tril = result["params"]["log_rate_coef_scale_tril"]
     result["cov"] = scale_tril @ scale_tril.T
     result["var"] = result["cov"].diag()
