@@ -16,6 +16,7 @@ from pyro.optim import ClippedAdam
 from pyro.poutine.util import prune_subsample_sites
 
 from pyrocov import pangolin
+from pyrocov.distributions import SmoothLaplace
 
 logger = logging.getLogger(__name__)
 
@@ -120,7 +121,7 @@ def model(weekly_strains, features, *, mask=None):
     # Assume relative growth rate depends on mutation features but not time or place.
     feature_scale = pyro.sample("feature_scale", dist.LogNormal(0, 1))
     log_rate_coef = pyro.sample(
-        "log_rate_coef", dist.Laplace(0, feature_scale).expand([F]).to_event(1)
+        "log_rate_coef", SmoothLaplace(0, feature_scale).expand([F]).to_event(1)
     )
     if mask:
         log_rate_coef = log_rate_coef.masked_fill(mask, 0)
