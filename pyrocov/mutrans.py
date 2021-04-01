@@ -9,6 +9,7 @@ import pyro
 import pyro.distributions as dist
 import torch
 from pyro import poutine
+from pyro.distributions import constraints
 from pyro.infer import SVI, Trace_ELBO
 from pyro.infer.autoguide import AutoDelta, AutoGuideList, AutoNormal, init_to_median
 from pyro.infer.autoguide.initialization import InitMessenger
@@ -109,7 +110,7 @@ def load_data(
     }
 
 
-def model(weekly_strains, features, *, mask=None):
+def model(weekly_strains, features):
     assert weekly_strains.shape[-1] == features.shape[0]
     T, P, S = weekly_strains.shape
     S, F = features.shape
@@ -123,8 +124,6 @@ def model(weekly_strains, features, *, mask=None):
     log_rate_coef = pyro.sample(
         "log_rate_coef", SmoothLaplace(0, feature_scale).expand([F]).to_event(1)
     )
-    if mask:
-        log_rate_coef = log_rate_coef.masked_fill(mask, 0)
     log_rate = pyro.deterministic("log_rate", log_rate_coef @ features.T, event_dim=1)
 
     # Assume places differ only in their initial infection count.
@@ -146,11 +145,38 @@ def model(weekly_strains, features, *, mask=None):
         )
 
 
-def dropout_model(weekly_strains, features):
+def full_guide(weekly_strains, features):
+    assert weekly_strains.shape[-1] == features.shape[0]
+    T, P, S = weekly_strains.shape
     S, F = features.shape
-    mask = torch.eye(F, dtype=torch.bool).reshape(F, 1, 1, F)
-    with pyro.plate("features", dim=-3):
-        model(weekly_strains, features, mask=mask)
+
+    # Map estimate global features.
+    feature_scale = pyro.param(
+        "map_feature_scale", lambda: torch.ones(()), constraint=constraints.positive
+    )
+    pyro.sample("feature_scale", dist.Delta(feature_scale))
+    concentration = pyro.param(
+        "map_concentration", lambda: torch.ones(()), constraint=constraints.positive
+    )
+    pyro.sample("concentration", dist.Delta(concentration))
+
+    # Sample log_rate_coef from a full-rank multivariate normal distribution.
+    loc = pyro.param("log_rate_coef_loc", lambda: torch.zeros(F))
+    scale_tril = pyro.param(
+        "log_rate_coef_scale_tril",
+        lambda: torch.eye(F),
+        constraints.softplus_lower_cholesky,
+    )
+    log_rate_coef = pyro.sample(
+        "log_rate_coef", dist.MultivariateNormal(loc, scale_tril=scale_tril)
+    )
+
+    # MAP estimate log_init, but conditioned on log_rate_coef.
+    weight = pyro.param("log_init_weight", lambda: torch.zeros(P, S, F))
+    bias = pyro.param("log_init_bias", lambda: torch.zeros(P, S))
+    log_init = bias + weight @ log_rate_coef
+    with pyro.plate("place", P, dim=-1):
+        pyro.sample("log_init", dist.Delta(log_init, event_dim=1))
 
 
 def init_loc_fn(site):
@@ -239,7 +265,7 @@ def fit_map(
     }
 
 
-def fit_svi(
+def fit_mf_svi(
     dataset,
     model=model,
     learning_rate=0.05,
@@ -247,7 +273,7 @@ def fit_svi(
     log_every=50,
     seed=20210319,
 ):
-    logger.info("Fitting via SVI")
+    logger.info("Fitting mean field guide via SVI")
     pyro.clear_param_store()
     pyro.set_rng_seed(seed)
     guide = AutoGuideList(InitMessenger(init_loc_fn)(model))
@@ -303,4 +329,56 @@ def fit_svi(
         "mean": mean,
         "std": std,
         "median": median,
+    }
+
+
+def fit_full_svi(
+    dataset,
+    model=model,
+    learning_rate=0.01,
+    num_steps=3001,
+    log_every=50,
+    seed=20210319,
+):
+    logger.info("Fitting full guide via SVI")
+    pyro.set_rng_seed(seed)
+    pyro.clear_param_store()
+    param_store = pyro.get_param_store()
+    weekly_strains = dataset["weekly_strains"]
+    features = dataset["features"]
+
+    # Initialize guide so we can count parameters.
+    full_guide(weekly_strains, features)
+    num_params = sum(p.unconstrained().numel() for p in param_store.values())
+    logger.info(f"Training guide with {num_params} parameters:")
+
+    optim = ClippedAdam({"lr": learning_rate, "lrd": 0.1 ** (1 / num_steps)})
+    svi = SVI(model, full_guide, optim, Trace_ELBO())
+    losses = []
+    num_obs = dataset["weekly_strains"].count_nonzero()
+    for step in range(num_steps):
+        loss = svi.step(weekly_strains, features)
+        assert not math.isnan(loss)
+        losses.append(loss)
+        if step % log_every == 0:
+            concentration = param_store["concentration"].item()
+            feature_scale = param_store["feature_scale"].item()
+            logger.info(
+                f"step {step: >4d} loss = {loss / num_obs:0.6g}\t"
+                f"conc. = {concentration:0.3g}\t"
+                f"feat.scale = {feature_scale:0.3g}"
+            )
+
+    guide_trace = poutine.trace(full_guide).get_trace(weekly_strains, features)
+    params = {k: v.detach().clone() for k, v in param_store.items()}
+    cond_data = {
+        name: site["value"]
+        for name, site in guide_trace.nodes.items()
+        if site["type"] in ("param", "sample")
+    }
+
+    return {
+        "params": params,
+        "cond_data": cond_data,
+        "losses": losses,
     }

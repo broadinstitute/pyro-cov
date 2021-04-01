@@ -38,9 +38,9 @@ def load_data(args):
     return mutrans.load_data(device=args.device)
 
 
-@cached("results/rank_mutations.rank_svi.pt")
-def rank_svi(args, dataset):
-    result = mutrans.fit_svi(
+@cached("results/rank_mutations.rank_mf_svi.pt")
+def rank_mf_svi(args, dataset):
+    result = mutrans.fit_mf_svi(
         dataset,
         mutrans.model,
         learning_rate=args.svi_learning_rate,
@@ -56,6 +56,26 @@ def rank_svi(args, dataset):
         "concentration": result["median"]["concentration"].item(),
     }
     del result["guide"]
+    return result
+
+
+@cached("results/rank_mutations.rank_full_svi.pt")
+def rank_full_svi(args, dataset):
+    result = mutrans.fit_full_svi(
+        dataset,
+        mutrans.model,
+        learning_rate=args.svi_learning_rate,
+        num_steps=args.svi_num_steps,
+        log_every=args.log_every,
+        seed=args.seed,
+    )
+    result["args"] = (args,)
+    scale_tril = result["params"]["log_rate_coef_scale_tril"]
+    result["cov"] = scale_tril @ scale_tril.T
+    result["var"] = result["cov"].diag()
+    result["std"] = result["var"].sqrt()
+    sigma = result["mean"] / result["std"]
+    result["ranks"] = sigma.sort(0, descending=True).indices
     return result
 
 
@@ -198,28 +218,6 @@ def rank_map(args, dataset, initial_ranks):
     torch.save(result, "results/rank_mutations.pt")
 
 
-def rank_map_parallel(args, dataset, initial_ranks):
-    # Condition model.
-    cond_data = initial_ranks["cond_data"]
-    cond_data = {k: torch.as_tensor(v) for k, v in cond_data.items()}
-    model = poutine.condition(mutrans.dropout_model, cond_data)
-
-    # Fit.
-    result = mutrans.fit_map(
-        dataset,
-        model,
-        learning_rate=args.map_learning_rate,
-        num_steps=args.map_num_steps,
-        log_every=args.log_every,
-        seed=args.seed,
-        vectorized=True,
-    )
-
-    result["args"] = args
-    result["mutations"] = dataset["mutations"]
-    return result
-
-
 def main(args):
     if args.double:
         torch.set_default_dtype(torch.double)
@@ -229,7 +227,10 @@ def main(args):
         )
 
     dataset = load_data(args)
-    initial_ranks = rank_svi(args, dataset)
+    if args.full:
+        initial_ranks = rank_full_svi(args, dataset)
+    else:
+        initial_ranks = rank_mf_svi(args, dataset)
     if args.hessian:
         compute_hessian(args, dataset, initial_ranks)
     if args.map_num_steps and args.num_features:
@@ -240,6 +241,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Rank mutations via SVI and leave-feature-out MAP"
     )
+    parser.add_argument("--full", action="store_true")
     parser.add_argument("--svi-learning-rate", default=0.05, type=float)
     parser.add_argument("--svi-num-steps", default=1001, type=int)
     parser.add_argument("--map-learning-rate", default=0.05, type=float)
