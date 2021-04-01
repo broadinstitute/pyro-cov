@@ -60,7 +60,7 @@ def rank_svi(args, dataset):
 
 @cached("results/rank_mutations.hessian.pt")
 def compute_hessian(args, dataset, result):
-    logger.info("Computing hessian")
+    logger.info("Computing Hessian")
 
     # I haven't been able to get trace(condition(mutrans.model)) working;
     # instead we hand-reproduce the likelihood of mutrans.model.
@@ -83,21 +83,39 @@ def compute_hessian(args, dataset, result):
         )
         return d.log_prob(weekly_strains).sum()
 
-    result["mutations"] = dataset["mutations"]
-    result["hessian"] = hessian = torch.autograd.functional.hessian(
+    hessian = torch.autograd.functional.hessian(
         log_prob,
         log_rate_coef,
         create_graph=False,
         strict=True,
     )
-    eye = torch.eye(len(hessian))
+
+    result = {
+        "args": args,
+        "mutations": dataset["mutations"],
+        "initial_ranks": result,
+        "mean": result["mean"],
+        "hessian": hessian,
+    }
+
+    logger.info("Computing covariance")
+    result["cov"] = _sym_inverse(-hessian)
+    result["var"] = result["cov"].diag()
+    result["std"] = result["var"].sqrt
+    result["ranks"] = result["var"].sort(0, descending=True).indices
+    return result
+
+
+def _sym_inverse(mat):
+    eye = torch.eye(len(mat))
+    e = None
     for exponent in range(-20, 1):
         try:
-            u = torch.cholesky(eye * (10 ** exponent) - hessian)
-        except RuntimeError as e:
+            u = torch.cholesky(eye * (10 ** exponent) + mat)
+        except RuntimeError as e:  # noqa F841
             continue
-        result["cov"] = torch.cholesky_inverse(u)
-        return result
+        logger.info("Added 1e{exponent} to Hessian diagonal")
+        return torch.cholesky_inverse(u)
     raise e from None
 
 
