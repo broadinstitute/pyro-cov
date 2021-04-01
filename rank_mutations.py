@@ -64,8 +64,8 @@ def rank_full_svi(args, dataset):
     result = mutrans.fit_full_svi(
         dataset,
         mutrans.model,
-        learning_rate=args.svi_learning_rate,
-        num_steps=args.svi_num_steps,
+        learning_rate=args.full_learning_rate,
+        num_steps=args.full_num_steps,
         log_every=args.log_every,
         seed=args.seed,
     )
@@ -243,6 +243,8 @@ if __name__ == "__main__":
         description="Rank mutations via SVI and leave-feature-out MAP"
     )
     parser.add_argument("--full", action="store_true")
+    parser.add_argument("--full-learning-rate", default=0.01, type=float)
+    parser.add_argument("--full-num-steps", default=10001, type=int)
     parser.add_argument("--svi-learning-rate", default=0.05, type=float)
     parser.add_argument("--svi-num-steps", default=1001, type=int)
     parser.add_argument("--map-learning-rate", default=0.05, type=float)

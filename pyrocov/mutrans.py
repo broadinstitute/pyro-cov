@@ -156,17 +156,19 @@ def full_guide(weekly_strains, features):
     )
     pyro.sample("feature_scale", dist.Delta(feature_scale))
     concentration = pyro.param(
-        "map_concentration", lambda: torch.ones(()), constraint=constraints.positive
+        "map_concentration", lambda: torch.tensor(5.0), constraint=constraints.positive
     )
     pyro.sample("concentration", dist.Delta(concentration))
 
     # Sample log_rate_coef from a full-rank multivariate normal distribution.
     loc = pyro.param("log_rate_coef_loc", lambda: torch.zeros(F))
-    scale_tril = pyro.param(
-        "log_rate_coef_scale_tril",
-        lambda: torch.eye(F),
-        constraints.softplus_lower_cholesky,
+    scale = pyro.param(
+        "log_rate_coef_scale", lambda: torch.ones(F) * 0.01, constraints.positive
     )
+    scale_tril = pyro.param(
+        "log_rate_coef_scale_tril", lambda: torch.eye(F), constraints.lower_cholesky
+    )
+    scale_tril = scale[:, None] * scale_tril
     log_rate_coef = pyro.sample(
         "log_rate_coef", dist.MultivariateNormal(loc, scale_tril=scale_tril)
     )
@@ -184,8 +186,6 @@ def init_loc_fn(site):
         return torch.zeros(site["fn"].shape())
     if site["name"] == "feature_scale":
         return torch.ones(site["fn"].shape())
-    if site["name"].endswith("noise_scale"):
-        return torch.full(site["fn"].shape(), 3.0)
     if site["name"] == "concentration":
         return torch.full(site["fn"].shape(), 5.0)
     return init_to_median(site)
@@ -352,7 +352,13 @@ def fit_full_svi(
     num_params = sum(p.unconstrained().numel() for p in param_store.values())
     logger.info(f"Training guide with {num_params} parameters:")
 
-    optim = ClippedAdam({"lr": learning_rate, "lrd": 0.1 ** (1 / num_steps)})
+    def optim_config(module_name, param_name):
+        config = {"lr": learning_rate, "lrd": 0.1 ** (1 / num_steps)}
+        if param_name in ["log_init_weight", "log_rate_coef_scale_tril"]:
+            config["lr"] *= 0.1
+        return config
+
+    optim = ClippedAdam(optim_config)
     svi = SVI(model, full_guide, optim, Trace_ELBO())
     losses = []
     num_obs = dataset["weekly_strains"].count_nonzero()
