@@ -24,7 +24,7 @@ def cached(filename):
                 torch.save(result, f)
             else:
                 logger.info(f"loading cached {f}")
-                result = torch.load(f)
+                result = torch.load(f, map_location=args[0].device)
             return result
 
         return cached_fn
@@ -84,15 +84,21 @@ def compute_hessian(args, dataset, result):
         return d.log_prob(weekly_strains).sum()
 
     result["mutations"] = dataset["mutations"]
-    result["hessian"] = torch.autograd.functional.hessian(
+    result["hessian"] = hessian = torch.autograd.functional.hessian(
         log_prob,
         log_rate_coef,
         create_graph=True,
         strict=True,
     )
-    F = len(dataset["mutations"])
-    assert result["hessian"].shape == (F, F)
-    return result
+    eye = torch.eye(len(hessian))
+    for exponent in range(-20, 1):
+        try:
+            u = torch.cholesky(eye * (10 ** exponent) - hessian)
+        except RuntimeError as e:
+            continue
+        result["cov"] = torch.cholesky_inverse(u)
+        return result
+    raise e from None
 
 
 def _fit_map_filename(args, dataset, cond_data, guide=None, without_feature=None):
