@@ -87,7 +87,7 @@ def compute_hessian(args, dataset, result):
     result["hessian"] = hessian = torch.autograd.functional.hessian(
         log_prob,
         log_rate_coef,
-        create_graph=True,
+        create_graph=False,
         strict=True,
     )
     eye = torch.eye(len(hessian))
