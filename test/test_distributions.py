@@ -2,7 +2,7 @@ import pytest
 import torch
 from pyro.distributions.testing.gof import auto_goodness_of_fit
 
-from pyrocov.distributions import SmoothLaplace
+from pyrocov.distributions import SoftLaplace
 
 TEST_FAILURE_RATE = 1e-2
 
@@ -10,9 +10,9 @@ TEST_FAILURE_RATE = 1e-2
 @pytest.mark.parametrize(
     "Dist, params",
     [
-        (SmoothLaplace, {"loc": 0.0, "scale": 1.0}),
-        (SmoothLaplace, {"loc": 1.0, "scale": 1.0}),
-        (SmoothLaplace, {"loc": 0.0, "scale": 10.0}),
+        (SoftLaplace, {"loc": 0.0, "scale": 1.0}),
+        (SoftLaplace, {"loc": 1.0, "scale": 1.0}),
+        (SoftLaplace, {"loc": 0.0, "scale": 10.0}),
     ],
 )
 def test_gof(Dist, params):
