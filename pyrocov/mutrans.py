@@ -121,27 +121,22 @@ def model(weekly_strains, features):
 
     # Assume relative growth rate depends on mutation features but not time or place.
     feature_scale = pyro.sample("feature_scale", dist.LogNormal(0, 1))
-    log_rate_coef = pyro.sample(
-        "log_rate_coef", SoftLaplace(0, feature_scale).expand([F]).to_event(1)
+    rate_coef = pyro.sample(
+        "rate_coef", SoftLaplace(0, feature_scale).expand([F]).to_event(1)
     )
-    log_rate = pyro.deterministic("log_rate", log_rate_coef @ features.T, event_dim=1)
+    rate = pyro.deterministic("rate", rate_coef @ features.T, event_dim=1)
 
     # Assume places differ only in their initial infection count.
-    log_init_scale = pyro.sample("log_init_scale", dist.LogNormal(0, 1))
-    log_init_loc_scale = pyro.sample(
-        "log_init_loc_scale", dist.LogNormal(0, 1).expand([S]).to_event(1)
+    init_scale = pyro.sample("init_scale", dist.LogNormal(0, 1))
+    init_loc_scale = pyro.sample(
+        "init_loc_scale", dist.LogNormal(0, 1).expand([S]).to_event(1)
     )
-    log_init_loc = pyro.sample(
-        "log_init_loc", dist.Normal(0, log_init_loc_scale).to_event(1)
-    )
+    init_loc = pyro.sample("init_loc", dist.Normal(0, init_loc_scale).to_event(1))
     with place_plate:
-        log_init = pyro.sample(
-            "log_init",
-            dist.Normal(log_init_loc, log_init_scale).expand([S]).to_event(1),
-        )
+        init = pyro.sample("init", dist.Normal(init_loc, init_scale).to_event(1))
 
     # Finally observe overdispersed counts.
-    strain_probs = (log_init + log_rate * time[:, None, None]).softmax(-1)
+    strain_probs = (init + rate * time[:, None, None]).softmax(-1)
     concentration = pyro.sample("concentration", dist.LogNormal(2, 4))
     with time_plate, place_plate:
         pyro.sample(
@@ -168,51 +163,51 @@ def full_guide(weekly_strains, features):
     # Map estimate global parameters.
     map_estimate("feature_scale", lambda: torch.ones(()), constraints.positive)
     map_estimate("concentration", lambda: torch.tensor(5.0), constraints.positive)
-    map_estimate("log_init_scale", lambda: torch.ones(()), constraints.positive)
+    map_estimate("init_scale", lambda: torch.ones(()), constraints.positive)
     map_estimate(
-        "log_init_loc_scale",
+        "init_loc_scale",
         lambda: torch.ones(S),
         constraints.independent(constraints.positive, 1),
     )
     map_estimate(
-        "log_init_loc",
+        "init_loc",
         lambda: torch.zeros(S),
         constraints.independent(constraints.real, 1),
     )
 
-    # Sample log_rate_coef from a full-rank multivariate normal distribution.
-    loc = pyro.param("log_rate_coef_loc", lambda: torch.zeros(F))
+    # Sample rate_coef from a full-rank multivariate normal distribution.
+    loc = pyro.param("rate_coef_loc", lambda: torch.zeros(F))
     scale = pyro.param(
-        "log_rate_coef_scale", lambda: torch.ones(F) * 0.01, constraints.positive
+        "rate_coef_scale", lambda: torch.ones(F) * 0.01, constraints.positive
     )
     # TODO consider using OMTMultivariateNormal, maybe also full cov.
     scale_tril = pyro.param(
-        "log_rate_coef_scale_tril", lambda: torch.eye(F), constraints.lower_cholesky
+        "rate_coef_scale_tril", lambda: torch.eye(F), constraints.lower_cholesky
     )
     scale_tril = scale[:, None] * scale_tril
-    log_rate_coef = pyro.sample(
-        "log_rate_coef", dist.MultivariateNormal(loc, scale_tril=scale_tril)
+    rate_coef = pyro.sample(
+        "rate_coef", dist.MultivariateNormal(loc, scale_tril=scale_tril)
     )
 
-    # MAP estimate log_init, but depending on log_rate_coef.
-    weight = pyro.param("log_init_weight", lambda: torch.zeros(S, F))
-    bias = pyro.param("log_init_bias", lambda: torch.zeros(P, S))
-    log_init = bias + weight @ log_rate_coef
+    # MAP estimate init, but depending on rate_coef.
+    weight = pyro.param("init_weight", lambda: torch.zeros(S, F))
+    bias = pyro.param("init_bias", lambda: torch.zeros(P, S))
+    init = bias + weight @ rate_coef
     with pyro.plate("place", P, dim=-1):
-        pyro.sample("log_init", dist.Delta(log_init, event_dim=1))
+        pyro.sample("init", dist.Delta(init, event_dim=1))
 
 
 def init_loc_fn(site):
     if site["name"] in (
-        "log_rate_coef",
-        "log_rate",
-        "log_init",
+        "rate_coef",
+        "rate",
+        "init",
         "noise",
         "noise_haar",
-        "log_init_loc",
+        "init_loc",
     ):
         return torch.zeros(site["fn"].shape())
-    if site["name"] in ("feature_scale", "log_init_scale", "log_init_loc_scale"):
+    if site["name"] in ("feature_scale", "init_scale", "init_loc_scale"):
         return torch.ones(site["fn"].shape())
     if site["name"] == "concentration":
         return torch.full(site["fn"].shape(), 5.0)
@@ -276,13 +271,13 @@ def fit_map(
             logger.info(f"step {step: >4d} loss = {loss / num_obs:0.6g}")
 
     median = guide.median()
-    median["log_rate"] = median["log_rate_coef"] @ dataset["features"].T
+    median["rate"] = median["rate_coef"] @ dataset["features"].T
 
     return {
         "guide": guide,
         "losses": losses,
         "median": median,
-        "mode": median["log_rate_coef"],
+        "mode": median["rate_coef"],
         "loss_terms": eval_loss_terms(
             model,
             guide,
@@ -307,13 +302,13 @@ def fit_mf_svi(
     guide = AutoGuideList(InitMessenger(init_loc_fn)(model))
     guide.append(
         AutoDelta(
-            poutine.block(model, hide=["log_rate_coef"]),
+            poutine.block(model, hide=["rate_coef"]),
             init_loc_fn=init_loc_fn,
         )
     )
     guide.append(
         AutoNormal(
-            poutine.block(model, expose=["log_rate_coef"]),
+            poutine.block(model, expose=["rate_coef"]),
             init_loc_fn=init_loc_fn,
             init_scale=0.01,
         )
@@ -342,12 +337,12 @@ def fit_mf_svi(
             )
 
     median = guide.median()
-    median["log_rate"] = median["log_rate_coef"] @ dataset["features"].T
+    median["rate"] = median["rate_coef"] @ dataset["features"].T
 
     guide.to(torch.double)
     sigma_points = dist.Normal(0, 1).cdf(torch.tensor([-1.0, 1.0])).double()
-    pos = guide[1].quantiles(sigma_points[1].item())["log_rate_coef"]
-    neg = guide[1].quantiles(sigma_points[0].item())["log_rate_coef"]
+    pos = guide[1].quantiles(sigma_points[1].item())["rate_coef"]
+    neg = guide[1].quantiles(sigma_points[0].item())["rate_coef"]
     mean = (pos + neg) / 2
     std = (pos - neg) / 2
 
@@ -383,7 +378,7 @@ def fit_full_svi(
     def optim_config(module_name, param_name):
         # TODO consider using stepped scheme
         config = {"lr": learning_rate, "lrd": 0.01 ** (1 / num_steps)}
-        if param_name in ["log_init_weight", "log_rate_coef_scale_tril"]:
+        if param_name in ["init_weight", "rate_coef_scale_tril"]:
             config["lr"] *= 0.1
         return config
 

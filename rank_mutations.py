@@ -69,8 +69,8 @@ def rank_full_svi(args, dataset):
         seed=args.seed,
     )
     result["args"] = (args,)
-    result["mean"] = result["params"]["log_rate_coef_loc"]
-    scale_tril = result["params"]["log_rate_coef_scale_tril"]
+    result["mean"] = result["params"]["rate_coef_loc"]
+    scale_tril = result["params"]["rate_coef_scale_tril"]
     result["cov"] = scale_tril @ scale_tril.T
     result["var"] = result["cov"].diag()
     result["std"] = result["var"].sqrt()
@@ -84,22 +84,22 @@ def compute_hessian(args, dataset, result):
     logger.info("Computing Hessian")
     features = dataset["features"]
     weekly_strains = dataset["weekly_strains"]
-    log_rate_coef = result["median"]["log_rate_coef"].clone().requires_grad_()
+    rate_coef = result["median"]["rate_coef"].clone().requires_grad_()
 
     cond_data = result["median"].copy()
-    cond_data.pop("log_rate")
-    cond_data.pop("log_rate_coef")
+    cond_data.pop("rate")
+    cond_data.pop("rate_coef")
     model = poutine.condition(mutrans.model, cond_data)
 
-    def log_prob(log_rate_coef):
+    def log_prob(rate_coef):
         with poutine.trace() as tr:
-            with poutine.condition(data={"log_rate_coef": log_rate_coef}):
+            with poutine.condition(data={"rate_coef": rate_coef}):
                 model(weekly_strains, features)
         return tr.trace.log_prob_sum()
 
     hessian = torch.autograd.functional.hessian(
         log_prob,
-        log_rate_coef,
+        rate_coef,
         create_graph=False,
         strict=True,
     )
