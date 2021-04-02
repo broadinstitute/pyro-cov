@@ -127,8 +127,18 @@ def model(weekly_strains, features):
     log_rate = pyro.deterministic("log_rate", log_rate_coef @ features.T, event_dim=1)
 
     # Assume places differ only in their initial infection count.
+    log_init_scale = pyro.sample("log_init_scale", dist.LogNormal(0, 1))
+    log_init_loc_scale = pyro.sample(
+        "log_init_loc_scale", dist.LogNormal(0, 1).expand([S]).to_event(1)
+    )
+    log_init_loc = pyro.sample(
+        "log_init_loc", dist.Normal(0, log_init_loc_scale).to_event(1)
+    )
     with place_plate:
-        log_init = pyro.sample("log_init", dist.Normal(0, 10).expand([S]).to_event(1))
+        log_init = pyro.sample(
+            "log_init",
+            dist.Normal(log_init_loc, log_init_scale).expand([S]).to_event(1),
+        )
 
     # Finally observe overdispersed counts.
     strain_probs = (log_init + log_rate * time[:, None, None]).softmax(-1)
@@ -145,26 +155,37 @@ def model(weekly_strains, features):
         )
 
 
+def map_estimate(name, init, constraint=constraints.real):
+    value = pyro.param("map_" + name, init, constraint=constraint)
+    pyro.sample(name, dist.Delta(value, event_dim=constraint.event_dim))
+
+
 def full_guide(weekly_strains, features):
     assert weekly_strains.shape[-1] == features.shape[0]
     T, P, S = weekly_strains.shape
     S, F = features.shape
 
-    # Map estimate global features.
-    feature_scale = pyro.param(
-        "map_feature_scale", lambda: torch.ones(()), constraint=constraints.positive
+    # Map estimate global parameters.
+    map_estimate("feature_scale", lambda: torch.ones(()), constraints.positive)
+    map_estimate("concentration", lambda: torch.tensor(5.0), constraints.positive)
+    map_estimate("log_init_scale", lambda: torch.ones(()), constraints.positive)
+    map_estimate(
+        "log_init_loc_scale",
+        lambda: torch.ones(S),
+        constraints.independent(constraints.positive, 1),
     )
-    pyro.sample("feature_scale", dist.Delta(feature_scale))
-    concentration = pyro.param(
-        "map_concentration", lambda: torch.tensor(5.0), constraint=constraints.positive
+    map_estimate(
+        "log_init_loc",
+        lambda: torch.zeros(S),
+        constraints.independent(constraints.real, 1),
     )
-    pyro.sample("concentration", dist.Delta(concentration))
 
     # Sample log_rate_coef from a full-rank multivariate normal distribution.
     loc = pyro.param("log_rate_coef_loc", lambda: torch.zeros(F))
     scale = pyro.param(
         "log_rate_coef_scale", lambda: torch.ones(F) * 0.01, constraints.positive
     )
+    # TODO consider using OMTMultivariateNormal, maybe also full cov.
     scale_tril = pyro.param(
         "log_rate_coef_scale_tril", lambda: torch.eye(F), constraints.lower_cholesky
     )
@@ -173,7 +194,7 @@ def full_guide(weekly_strains, features):
         "log_rate_coef", dist.MultivariateNormal(loc, scale_tril=scale_tril)
     )
 
-    # MAP estimate log_init, but conditioned on log_rate_coef.
+    # MAP estimate log_init, but depending on log_rate_coef.
     weight = pyro.param("log_init_weight", lambda: torch.zeros(S, F))
     bias = pyro.param("log_init_bias", lambda: torch.zeros(P, S))
     log_init = bias + weight @ log_rate_coef
@@ -182,9 +203,16 @@ def full_guide(weekly_strains, features):
 
 
 def init_loc_fn(site):
-    if site["name"] in ("log_rate_coef", "log_rate", "log_init", "noise", "noise_haar"):
+    if site["name"] in (
+        "log_rate_coef",
+        "log_rate",
+        "log_init",
+        "noise",
+        "noise_haar",
+        "log_init_loc",
+    ):
         return torch.zeros(site["fn"].shape())
-    if site["name"] == "feature_scale":
+    if site["name"] in ("feature_scale", "log_init_scale", "log_init_loc_scale"):
         return torch.ones(site["fn"].shape())
     if site["name"] == "concentration":
         return torch.full(site["fn"].shape(), 5.0)
@@ -353,7 +381,8 @@ def fit_full_svi(
     logger.info(f"Training guide with {num_params} parameters:")
 
     def optim_config(module_name, param_name):
-        config = {"lr": learning_rate, "lrd": 0.1 ** (1 / num_steps)}
+        # TODO consider using stepped scheme
+        config = {"lr": learning_rate, "lrd": 0.01 ** (1 / num_steps)}
         if param_name in ["log_init_weight", "log_rate_coef_scale_tril"]:
             config["lr"] *= 0.1
         return config

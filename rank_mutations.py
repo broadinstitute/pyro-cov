@@ -4,7 +4,6 @@ import logging
 import math
 import os
 
-import pyro.distributions as dist
 import torch
 from pyro import poutine
 
@@ -87,36 +86,16 @@ def compute_hessian(args, dataset, result):
     weekly_strains = dataset["weekly_strains"]
     log_rate_coef = result["median"]["log_rate_coef"].clone().requires_grad_()
 
-    if True:
-        cond_data = result["median"].copy()
-        cond_data.pop("log_rate")
-        cond_data.pop("log_rate_coef")
-        model = poutine.condition(mutrans.model, cond_data)
+    cond_data = result["median"].copy()
+    cond_data.pop("log_rate")
+    cond_data.pop("log_rate_coef")
+    model = poutine.condition(mutrans.model, cond_data)
 
-        def log_prob(log_rate_coef):
-            with poutine.trace() as tr:
-                with poutine.condition(data={"log_rate_coef": log_rate_coef}):
-                    model(weekly_strains, features)
-            return tr.trace.log_prob_sum()
-
-    else:
-        # I haven't been able to get trace(condition(mutrans.model)) working;
-        # instead we hand-reproduce the likelihood of mutrans.model.
-        log_init = result["median"]["log_init"]
-        concentration = result["median"]["concentration"]
-        T, P, S = weekly_strains.shape
-        time = torch.arange(float(T)) * mutrans.TIMESTEP / 365.25  # in years
-        time -= time.max()
-
-        def log_prob(log_rate_coef):
-            log_rate = log_rate_coef @ features.T
-            strain_probs = (log_init + log_rate * time[:, None, None]).softmax(-1)
-            d = dist.DirichletMultinomial(
-                total_count=weekly_strains.sum(-1).max(),
-                concentration=concentration * strain_probs,
-                is_sparse=True,  # uses a faster algorithm
-            )
-            return d.log_prob(weekly_strains).sum()
+    def log_prob(log_rate_coef):
+        with poutine.trace() as tr:
+            with poutine.condition(data={"log_rate_coef": log_rate_coef}):
+                model(weekly_strains, features)
+        return tr.trace.log_prob_sum()
 
     hessian = torch.autograd.functional.hessian(
         log_prob,
