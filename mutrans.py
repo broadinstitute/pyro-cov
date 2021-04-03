@@ -59,12 +59,8 @@ def fit(
     n=1001,
     lr=0.01,
     lrd=0.1,
-    holdout=None,
+    holdout=(),
 ):
-    if holdout is not None:
-        dataset = dataset.copy()
-        raise NotImplementedError("TODO")
-
     result = mutrans.fit(
         dataset,
         guide_type=guide_type,
