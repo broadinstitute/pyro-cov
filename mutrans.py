@@ -87,7 +87,7 @@ def main(args):
             key = config + (holdout,)
             result[key] = fit(args, dataset, *key)
     logger.info("saving results/mutrans.pt")
-    torch.save("results/mutrans.pt", result)
+    torch.save(result, "results/mutrans.pt")
 
 
 if __name__ == "__main__":

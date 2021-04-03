@@ -203,7 +203,7 @@ class Guide:
             "rate_coef": pyro.param("rate_coef_loc").detach(),
         }
 
-        init_loc = (pyro.param("init_loc").detach(),)
+        init_loc = pyro.param("init_loc").detach()
         if "dependent" in self.guide_type:
             weight = pyro.param("init_weight").detach()
             result["init"] = init_loc + weight @ result["rate_coef"]
