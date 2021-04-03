@@ -256,7 +256,7 @@ def fit(
     def optim_config(module_name, param_name):
         config = {"lr": learning_rate, "lrd": learning_rate_decay ** (1 / num_steps)}
         if param_name in ["init_weight", "rate_coef_scale_tril"]:
-            config["lr"] *= 0.1
+            config["lr"] *= 0.02
         return config
 
     optim = ClippedAdam(optim_config)

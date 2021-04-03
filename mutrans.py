@@ -92,8 +92,8 @@ def main(args):
     guide_configs = [
         ("map", 1001, 0.05, 0.1),
         ("normal", 2001, 0.05, 0.1),
-        ("mvn", 5001, 0.01, 0.1),
-        ("mvn_dependent", 10001, 0.01, 0.01),
+        ("mvn", 10001, 0.01, 0.1),
+        ("mvn_dependent", 10001, 0.01, 0.1),
     ]
     best_config = (
         args.guide_type,
@@ -135,7 +135,7 @@ if __name__ == "__main__":
     parser.add_argument("-g", "--guide_type", default="mvn_dependent")
     parser.add_argument("-n", "--num-steps", default=10001, type=int)
     parser.add_argument("-lr", "--learning-rate", default=0.01, type=float)
-    parser.add_argument("-lrd", "--learning-rate-decay", default=0.01, type=float)
+    parser.add_argument("-lrd", "--learning-rate-decay", default=0.1, type=float)
 
     parser.add_argument("--double", action="store_true", default=True)
     parser.add_argument("--single", action="store_false", dest="double")
