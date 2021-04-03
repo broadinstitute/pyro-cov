@@ -1,11 +1,9 @@
 import argparse
 import functools
 import logging
-import math
 import os
 
 import torch
-from pyro import poutine
 
 from pyrocov import mutrans
 
@@ -18,7 +16,7 @@ def cached(filename):
         @functools.wraps(fn)
         def cached_fn(*args, **kwargs):
             f = filename(*args, **kwargs) if callable(filename) else filename
-            if os.path.exists(f):
+            if not os.path.exists(f):
                 result = fn(*args, **kwargs)
                 logger.info(f"saving {f}")
                 torch.save(result, f)
@@ -37,7 +35,7 @@ def load_data(args):
     return mutrans.load_data(device=args.device)
 
 
-@cached(lambda *args: "results/mutrans.{}.pt".format(".".join(map(str, args[2:]))))
+@cached(lambda *args: "results/mutrans.fit.{}.pt".format(".".join(map(str, args[2:]))))
 def fit(
     args,
     dataset,
@@ -54,7 +52,7 @@ def fit(
     result = mutrans.fit(
         dataset,
         guide_type=guide_type,
-        num_steps=num_steps,
+        num_steps=n,
         learning_rate=lr,
         learning_rate_decay=lrd,
         log_every=args.log_every,
@@ -73,12 +71,14 @@ def main(args):
             torch.cuda.DoubleTensor if args.double else torch.cuda.FloatTensor
         )
 
+    dataset = load_data(args)
+
     # guide_type, n, lr, lrd
     configs = [
-        ("delta", 301, 0.05, 0.01),
-        ("normal", 1001, 0.05, 0.01),
-        ("mvn", 10001, 0.01, 0.01),
-        ("mvn_dependent", 10001, 0.01, 0.01),
+        ("map", 1001, 0.05, 0.1),
+        ("normal", 2001, 0.05, 0.1),
+        ("mvn", 10001, 0.01, 0.1),
+        ("mvn_dependent", 10001, 0.01, 0.1),
     ]
     holdouts = [None]
     result = {}

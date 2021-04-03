@@ -1,6 +1,5 @@
 import logging
 import math
-import os
 import pickle
 import re
 from collections import Counter
@@ -8,13 +7,9 @@ from collections import Counter
 import pyro
 import pyro.distributions as dist
 import torch
-from pyro import poutine
 from pyro.distributions import constraints
 from pyro.infer import SVI, Trace_ELBO
-from pyro.infer.autoguide import AutoDelta, AutoGuideList, AutoNormal, init_to_median
-from pyro.infer.autoguide.initialization import InitMessenger
 from pyro.optim import ClippedAdam
-from pyro.poutine.util import prune_subsample_sites
 
 from pyrocov import pangolin
 from pyrocov.distributions import SoftLaplace
@@ -120,7 +115,7 @@ def model(weekly_strains, features):
     time -= time.max()
 
     # Assume relative growth rate depends on mutation features but not time or place.
-    feature_scale = pyro.sample("feature_scale", dist.LogNormal(-2, 1))
+    feature_scale = pyro.sample("feature_scale", dist.LogNormal(0, 1))
     rate_coef = pyro.sample(
         "rate_coef", SoftLaplace(0, feature_scale).expand([F]).to_event(1)
     )
@@ -148,7 +143,7 @@ def model(weekly_strains, features):
 
 
 def map_estimate(name, init, constraint=constraints.real):
-    value = pyro.param("map_" + name, init, constraint=constraint)
+    value = pyro.param(name + "_loc", init, constraint=constraint)
     pyro.sample(name, dist.Delta(value, event_dim=constraint.event_dim))
 
 
@@ -163,19 +158,22 @@ class Guide:
         S, F = features.shape
 
         # Map estimate global parameters.
-        map_estimate("feature_scale", lambda: torch.tensor(0.1), constraints.positive)
-        map_estimate("concentration", lambda: torch.tensor(5.0), constraints.positive)
+        map_estimate("feature_scale", lambda: torch.tensor(1.0), constraints.positive)
+        map_estimate("concentration", lambda: torch.tensor(10.0), constraints.positive)
 
         # Sample rate_coef from a full-rank multivariate normal distribution.
-        loc = pyro.param("rate_coef_loc", lambda: torch.zeros(F))
+        loc = pyro.param("rate_coef_loc", lambda: torch.zeros(F), event_dim=1)
         if self.guide_type == "map":
             rate_coef = pyro.sample("rate_coef", dist.Delta(loc, event_dim=1))
         elif self.guide_type == "normal":
             scale = pyro.param(
                 "rate_coef_scale", lambda: torch.ones(F) * 0.01, constraints.positive
             )
-            rate_coef = pyro.sample("rate_coef", dist.Normal(loc, scale))
+            rate_coef = pyro.sample("rate_coef", dist.Normal(loc, scale).to_event(1))
         elif "mvn" in self.guide_type:
+            scale = pyro.param(
+                "rate_coef_scale", lambda: torch.ones(F) * 0.01, constraints.positive
+            )
             scale_tril = pyro.param(
                 "rate_coef_scale_tril", lambda: torch.eye(F), constraints.lower_cholesky
             )
@@ -184,6 +182,8 @@ class Guide:
             rate_coef = pyro.sample(
                 "rate_coef", dist.MultivariateNormal(loc, scale_tril=scale_tril)
             )
+        else:
+            raise ValueError(f"Unknown guide type: {self.guide_type}")
 
         # MAP estimate init, but depending on rate_coef.
         init_loc = pyro.param("init_loc", lambda: torch.zeros(P, S))
@@ -198,11 +198,18 @@ class Guide:
     @torch.no_grad()
     def median(self, weekly_strains, features):
         result = {
-            "feature_scale": pyro.param("feature_scale").detach(),
-            "concentration": pyro.param("concentration").detach(),
+            "feature_scale": pyro.param("feature_scale_loc").detach(),
+            "concentration": pyro.param("concentration_loc").detach(),
             "rate_coef": pyro.param("rate_coef_loc").detach(),
-            "init": pyro.param("init_loc").detach(),
         }
+
+        init_loc = (pyro.param("init_loc").detach(),)
+        if "dependent" in self.guide_type:
+            weight = pyro.param("init_weight").detach()
+            result["init"] = init_loc + weight @ result["rate_coef"]
+        else:
+            result["init"] = init_loc
+
         result["rate"] = result["rate_coef"] @ features.T
         return result
 
@@ -241,6 +248,7 @@ def fit(
     features = dataset["features"]
 
     # Initialize guide so we can count parameters.
+    guide = Guide(guide_type)
     guide(weekly_strains, features)
     num_params = sum(p.unconstrained().numel() for p in param_store.values())
     logger.info(f"Training guide with {num_params} parameters:")
@@ -260,8 +268,8 @@ def fit(
         assert not math.isnan(loss)
         losses.append(loss)
         if step % log_every == 0:
-            concentration = param_store["map_concentration"].item()
-            feature_scale = param_store["map_feature_scale"].item()
+            concentration = param_store["concentration_loc"].item()
+            feature_scale = param_store["feature_scale_loc"].item()
             logger.info(
                 f"step {step: >4d} loss = {loss / num_obs:0.6g}\t"
                 f"conc. = {concentration:0.3g}\t"
