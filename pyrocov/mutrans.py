@@ -1,4 +1,3 @@
-import copy
 import logging
 import math
 import pickle
@@ -129,7 +128,7 @@ def model(weekly_strains, features):
     # Assume places differ only in their initial infection count.
     with place_plate:
         init = pyro.sample(
-            "init", dist.Normal(0, 1).expand([S]).mask(False).to_event(1)
+            "init", dist.Normal(0, 1).expand([S]).to_event(1).mask(False)
         )
 
     # Finally observe overdispersed counts.
@@ -152,7 +151,7 @@ def map_estimate(name, init, constraint=constraints.real):
     pyro.sample(name, dist.Delta(value, event_dim=constraint.event_dim))
 
 
-def full_guide(weekly_strains, features):
+def guide(weekly_strains, features):
     assert weekly_strains.shape[-1] == features.shape[0]
     T, P, S = weekly_strains.shape
     S, F = features.shape
@@ -222,7 +221,6 @@ def eval_loss_terms(model, guide, *args, vectorized=False):
 def fit_map(
     dataset,
     model=model,
-    guide=None,
     *,
     vectorized=False,
     learning_rate=0.05,
@@ -235,13 +233,9 @@ def fit_map(
     pyro.set_rng_seed(seed)
     weekly_strains = dataset["weekly_strains"]
     features = dataset["features"]
-
-    if guide is None:
-        guide = AutoDelta(model, init_loc_fn=init_loc_fn)
-        # Initialize guide so we can count parameters.
-        guide(weekly_strains, features)
-    else:
-        guide = copy.deepcopy(guide)
+    guide = AutoDelta(model, init_loc_fn=init_loc_fn)
+    # Initialize guide so we can count parameters.
+    guide(weekly_strains, features)
     num_params = sum(p.numel() for p in guide.parameters())
     logger.info(f"Training guide with {num_params} parameters:")
 
@@ -365,7 +359,7 @@ def fit_full_svi(
     features = dataset["features"]
 
     # Initialize guide so we can count parameters.
-    full_guide(weekly_strains, features)
+    guide(weekly_strains, features)
     num_params = sum(p.unconstrained().numel() for p in param_store.values())
     logger.info(f"Training guide with {num_params} parameters:")
 
@@ -376,7 +370,7 @@ def fit_full_svi(
         return config
 
     optim = ClippedAdam(optim_config)
-    svi = SVI(model, full_guide, optim, Trace_ELBO())
+    svi = SVI(model, guide, optim, Trace_ELBO())
     losses = []
     num_obs = dataset["weekly_strains"].count_nonzero()
     for step in range(num_steps):
@@ -392,16 +386,18 @@ def fit_full_svi(
                 f"f.scale = {feature_scale:0.3g}"
             )
 
-    guide_trace = poutine.trace(full_guide).get_trace(weekly_strains, features)
     params = {k: v.detach().clone() for k, v in param_store.items()}
-    cond_data = {
-        name: site["value"]
+    with torch.no_grad():
+        with poutine.condition(data={"rate_coef": params["rate_coef_loc"]}):
+            guide_trace = poutine.trace(guide).get_trace(weekly_strains, features)
+    median = {
+        name: site["value"].detach()
         for name, site in guide_trace.nodes.items()
         if site["type"] in ("param", "sample")
     }
 
     return {
         "params": params,
-        "cond_data": cond_data,
+        "median": median,
         "losses": losses,
     }

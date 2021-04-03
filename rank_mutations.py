@@ -77,6 +77,10 @@ def rank_full_svi(args, dataset):
     result["std"] = result["var"].sqrt()
     sigma = result["mean"] / result["std"]
     result["ranks"] = sigma.sort(0, descending=True).indices
+    result["cond_data"] = {
+        "feature_scale": result["median"]["feature_scale"].item(),
+        "concentration": result["median"]["concentration"].item(),
+    }
     return result
 
 
