@@ -32,7 +32,7 @@ def cached(filename):
     return decorator
 
 
-@cached("results/rank_mutations.data.pt")
+@cached("results/mutrans.data.pt")
 def load_data(args):
     return mutrans.load_data(device=args.device)
 

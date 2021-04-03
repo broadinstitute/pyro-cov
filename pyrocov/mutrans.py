@@ -1,5 +1,6 @@
 import logging
 import math
+import os
 import pickle
 import re
 from collections import Counter
@@ -119,7 +120,7 @@ def model(weekly_strains, features):
     time -= time.max()
 
     # Assume relative growth rate depends on mutation features but not time or place.
-    feature_scale = pyro.sample("feature_scale", dist.LogNormal(0, 1))
+    feature_scale = pyro.sample("feature_scale", dist.LogNormal(-2, 1))
     rate_coef = pyro.sample(
         "rate_coef", SoftLaplace(0, feature_scale).expand([F]).to_event(1)
     )
@@ -151,207 +152,88 @@ def map_estimate(name, init, constraint=constraints.real):
     pyro.sample(name, dist.Delta(value, event_dim=constraint.event_dim))
 
 
-def guide(weekly_strains, features):
-    assert weekly_strains.shape[-1] == features.shape[0]
-    T, P, S = weekly_strains.shape
-    S, F = features.shape
+class Guide:
+    def __init__(self, guide_type="mvn_dependent"):
+        super().__init__()
+        self.guide_type = guide_type
 
-    # Map estimate global parameters.
-    map_estimate("feature_scale", lambda: torch.ones(()), constraints.positive)
-    map_estimate("concentration", lambda: torch.tensor(5.0), constraints.positive)
+    def __call__(self, weekly_strains, features):
+        assert weekly_strains.shape[-1] == features.shape[0]
+        T, P, S = weekly_strains.shape
+        S, F = features.shape
 
-    # Sample rate_coef from a full-rank multivariate normal distribution.
-    loc = pyro.param("rate_coef_loc", lambda: torch.zeros(F))
-    scale = pyro.param(
-        "rate_coef_scale", lambda: torch.ones(F) * 0.01, constraints.positive
-    )
-    # TODO consider using OMTMultivariateNormal, maybe also full cov.
-    scale_tril = pyro.param(
-        "rate_coef_scale_tril", lambda: torch.eye(F), constraints.lower_cholesky
-    )
-    scale_tril = scale[:, None] * scale_tril
-    rate_coef = pyro.sample(
-        "rate_coef", dist.MultivariateNormal(loc, scale_tril=scale_tril)
-    )
+        # Map estimate global parameters.
+        map_estimate("feature_scale", lambda: torch.tensor(0.1), constraints.positive)
+        map_estimate("concentration", lambda: torch.tensor(5.0), constraints.positive)
 
-    # MAP estimate init, but depending on rate_coef.
-    weight = pyro.param("init_weight", lambda: torch.zeros(S, F))
-    bias = pyro.param("init_bias", lambda: torch.zeros(P, S))
-    init = bias + weight @ rate_coef
-    with pyro.plate("place", P, dim=-1):
-        pyro.sample("init", dist.Delta(init, event_dim=1))
+        # Sample rate_coef from a full-rank multivariate normal distribution.
+        loc = pyro.param("rate_coef_loc", lambda: torch.zeros(F))
+        if self.guide_type == "map":
+            rate_coef = pyro.sample("rate_coef", dist.Delta(loc, event_dim=1))
+        elif self.guide_type == "normal":
+            scale = pyro.param(
+                "rate_coef_scale", lambda: torch.ones(F) * 0.01, constraints.positive
+            )
+            rate_coef = pyro.sample("rate_coef", dist.Normal(loc, scale))
+        elif "mvn" in self.guide_type:
+            scale_tril = pyro.param(
+                "rate_coef_scale_tril", lambda: torch.eye(F), constraints.lower_cholesky
+            )
+            scale_tril = scale[:, None] * scale_tril
 
+            rate_coef = pyro.sample(
+                "rate_coef", dist.MultivariateNormal(loc, scale_tril=scale_tril)
+            )
 
-def init_loc_fn(site):
-    if site["name"] in (
-        "rate_coef",
-        "rate",
-        "init",
-        "noise",
-        "noise_haar",
-        "init_loc",
-    ):
-        return torch.zeros(site["fn"].shape())
-    if site["name"] == "feature_scale":
-        return torch.ones(site["fn"].shape())
-    if site["name"] == "concentration":
-        return torch.full(site["fn"].shape(), 5.0)
-    return init_to_median(site)
+        # MAP estimate init, but depending on rate_coef.
+        init_loc = pyro.param("init_loc", lambda: torch.zeros(P, S))
+        if "dependent" in self.guide_type:
+            weight = pyro.param("init_weight", lambda: torch.zeros(S, F))
+            init = init_loc + weight @ rate_coef
+        else:
+            init = init_loc
+        with pyro.plate("place", P, dim=-1):
+            pyro.sample("init", dist.Delta(init, event_dim=1))
 
-
-@torch.no_grad()
-def eval_loss_terms(model, guide, *args, vectorized=False):
-    guide_trace = poutine.trace(guide).get_trace(*args)
-    model_trace = poutine.trace(poutine.replay(model, guide_trace)).get_trace(*args)
-    traces = {
-        "model": prune_subsample_sites(model_trace),
-        "guide": prune_subsample_sites(guide_trace),
-    }
-    result = {}
-    for trace_name, trace in traces.items():
-        trace.compute_log_prob()
-        result[trace_name] = {
-            name: site["log_prob"] if vectorized else site["log_prob_sum"].item()
-            for name, site in trace.nodes.items()
-            if site["type"] == "sample"
+    @torch.no_grad()
+    def median(self, weekly_strains, features):
+        result = {
+            "feature_scale": pyro.param("feature_scale").detach(),
+            "concentration": pyro.param("concentration").detach(),
+            "rate_coef": pyro.param("rate_coef_loc").detach(),
+            "init": pyro.param("init_loc").detach(),
         }
-    return result
+        result["rate"] = result["rate_coef"] @ features.T
+        return result
+
+    @torch.no_grad()
+    def stats(self, weekly_strains, features):
+        result = {
+            "median": self.median(weekly_strains, features),
+            "mean": pyro.param("rate_coef_loc").detach(),
+        }
+        if self.guide_type == "normal":
+            result["std"] = pyro.param("rate_coef_scale").detach()
+        elif "mvn" in self.guide_type:
+            scale = pyro.param("rate_coef_scale").detach()
+            scale_tril = pyro.param("rate_coef_scale_tril").detach()
+            scale_tril = scale[:, None] * scale_tril
+            result["cov"] = scale_tril @ scale_tril.T
+            result["var"] = result["cov"].diag()
+            result["std"] = result["var"].sqrt()
+        return result
 
 
-def fit_map(
+def fit(
     dataset,
-    model=model,
-    *,
-    vectorized=False,
-    learning_rate=0.05,
-    num_steps=301,
-    log_every=50,
-    seed=20210319,
-):
-    logger.info("Fitting via MAP")
-    pyro.clear_param_store()
-    pyro.set_rng_seed(seed)
-    weekly_strains = dataset["weekly_strains"]
-    features = dataset["features"]
-    guide = AutoDelta(model, init_loc_fn=init_loc_fn)
-    # Initialize guide so we can count parameters.
-    guide(weekly_strains, features)
-    num_params = sum(p.numel() for p in guide.parameters())
-    logger.info(f"Training guide with {num_params} parameters:")
-
-    optim = ClippedAdam({"lr": learning_rate, "betas": (0.8, 0.99)})
-    svi = SVI(model, guide, optim, Trace_ELBO())
-    num_obs = weekly_strains.count_nonzero()
-    losses = []
-    for step in range(num_steps):
-        loss = svi.step(weekly_strains, features)
-        assert not math.isnan(loss)
-        losses.append(loss)
-        if step % log_every == 0:
-            median = guide.median()
-            concentration = median["concentration"].item()
-            feature_scale = median["feature_scale"].item()
-            logger.info(
-                f"step {step: >4d} loss = {loss / num_obs:0.6g}\t"
-                f"conc. = {concentration:0.3g}\t"
-                f"f.scale = {feature_scale:0.3g}"
-            )
-
-    median = guide.median()
-    median["rate"] = median["rate_coef"] @ dataset["features"].T
-
-    return {
-        "guide": guide,
-        "losses": losses,
-        "median": median,
-        "mode": median["rate_coef"],
-        "loss_terms": eval_loss_terms(
-            model,
-            guide,
-            weekly_strains,
-            features,
-            vectorized=vectorized,
-        ),
-    }
-
-
-def fit_mf_svi(
-    dataset,
-    model=model,
-    learning_rate=0.05,
-    num_steps=1001,
-    log_every=50,
-    seed=20210319,
-):
-    logger.info("Fitting mean field guide via SVI")
-    pyro.clear_param_store()
-    pyro.set_rng_seed(seed)
-    guide = AutoGuideList(InitMessenger(init_loc_fn)(model))
-    guide.append(
-        AutoDelta(
-            poutine.block(model, hide=["rate_coef"]),
-            init_loc_fn=init_loc_fn,
-        )
-    )
-    guide.append(
-        AutoNormal(
-            poutine.block(model, expose=["rate_coef"]),
-            init_loc_fn=init_loc_fn,
-            init_scale=0.01,
-        )
-    )
-    # Initialize guide so we can count parameters.
-    guide(dataset["weekly_strains"], dataset["features"])
-    num_params = sum(p.numel() for p in guide.parameters())
-    logger.info(f"Training guide with {num_params} parameters:")
-
-    optim = ClippedAdam({"lr": learning_rate, "lrd": 0.1 ** (1 / num_steps)})
-    svi = SVI(model, guide, optim, Trace_ELBO())
-    losses = []
-    num_obs = dataset["weekly_strains"].count_nonzero()
-    for step in range(num_steps):
-        loss = svi.step(dataset["weekly_strains"], dataset["features"])
-        assert not math.isnan(loss)
-        losses.append(loss)
-        if step % log_every == 0:
-            median = guide.median()
-            concentration = median["concentration"].item()
-            feature_scale = median["feature_scale"].item()
-            logger.info(
-                f"step {step: >4d} loss = {loss / num_obs:0.6g}\t"
-                f"conc. = {concentration:0.3g}\t"
-                f"feat.scale = {feature_scale:0.3g}"
-            )
-
-    median = guide.median()
-    median["rate"] = median["rate_coef"] @ dataset["features"].T
-
-    guide.to(torch.double)
-    sigma_points = dist.Normal(0, 1).cdf(torch.tensor([-1.0, 1.0])).double()
-    pos = guide[1].quantiles(sigma_points[1].item())["rate_coef"]
-    neg = guide[1].quantiles(sigma_points[0].item())["rate_coef"]
-    mean = (pos + neg) / 2
-    std = (pos - neg) / 2
-
-    return {
-        "guide": guide,
-        "losses": losses,
-        "mean": mean,
-        "std": std,
-        "median": median,
-    }
-
-
-def fit_full_svi(
-    dataset,
-    model=model,
+    guide_type,
     learning_rate=0.01,
     learning_rate_decay=0.01,
     num_steps=3001,
     log_every=50,
     seed=20210319,
 ):
-    logger.info("Fitting full guide via SVI")
+    logger.info(f"Fitting {guide_type} guide via SVI")
     pyro.set_rng_seed(seed)
     pyro.clear_param_store()
     param_store = pyro.get_param_store()
@@ -386,22 +268,7 @@ def fit_full_svi(
                 f"f.scale = {feature_scale:0.3g}"
             )
 
-    params = {k: v.detach().clone() for k, v in param_store.items()}
-    with torch.no_grad():
-        with poutine.condition(data={"rate_coef": params["rate_coef_loc"]}):
-            guide_trace = poutine.trace(guide).get_trace(weekly_strains, features)
-            model_trace = poutine.trace(poutine.replay(model, guide_trace)).get_trace(
-                weekly_strains, features
-            )
-    median = {
-        name: site["value"].detach()
-        for trace in [guide_trace, model_trace]
-        for name, site in trace.nodes.items()
-        if site["type"] in ("param", "sample")
-    }
-
-    return {
-        "params": params,
-        "median": median,
-        "losses": losses,
-    }
+    result = guide.stats(weekly_strains, features)
+    result["losses"] = losses
+    result["params"] = {k: v.detach().clone() for k, v in param_store.items()}
+    return result
