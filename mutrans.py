@@ -113,7 +113,7 @@ def main(args):
 
     configs = [c + (empty_holdout,) for c in guide_configs]
     for holdout in holdouts:
-        configs.append(best_config + holdout)
+        configs.append(best_config + (holdout,))
 
     # Sequentially fit models.
     result = {}
