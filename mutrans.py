@@ -41,11 +41,17 @@ def load_data(args, **kwargs):
     return mutrans.load_data(device=args.device, **kwargs)
 
 
+def _safe_str(v):
+    v = str(v)
+    v = re.sub("[^A-Za-x0-9\-]", "_", v)
+    return v
+
+
 def _fit_filename(*args):
     strs = []
     for arg in args[2:]:
         if isinstance(arg, tuple):
-            strs.append("-".join(f"{k}={v}" for k, v in arg))
+            strs.append("-".join(f"{k}={_safe_str(v)}" for k, v in arg))
         else:
             strs.append(str(arg))
     return "results/mutrans.fit.{}.pt".format(".".join(strs))
