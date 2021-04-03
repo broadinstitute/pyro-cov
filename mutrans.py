@@ -2,6 +2,7 @@ import argparse
 import functools
 import logging
 import os
+import re
 
 import torch
 
@@ -30,21 +31,21 @@ def cached(filename):
     return decorator
 
 
+def _safe_str(v):
+    v = str(v)
+    v = re.sub("[^A-Za-x0-9-]", "_", v)
+    return v
+
+
 def _load_data_filename(args, **kwargs):
     return "results/mutrans.{}.pt".format(
-        ".".join(["data"] + [f"{k}={v}" for k, v in sorted(kwargs.items())])
+        ".".join(["data"] + [f"{k}={_safe_str(v)}" for k, v in sorted(kwargs.items())])
     )
 
 
 @cached(_load_data_filename)
 def load_data(args, **kwargs):
     return mutrans.load_data(device=args.device, **kwargs)
-
-
-def _safe_str(v):
-    v = str(v)
-    v = re.sub("[^A-Za-x0-9\-]", "_", v)
-    return v
 
 
 def _fit_filename(*args):
