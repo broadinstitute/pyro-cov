@@ -359,6 +359,7 @@ def fit_full_svi(
     dataset,
     model=model,
     learning_rate=0.01,
+    learning_rate_decay=0.01,
     num_steps=3001,
     log_every=50,
     seed=20210319,
@@ -377,7 +378,7 @@ def fit_full_svi(
 
     def optim_config(module_name, param_name):
         # TODO consider using stepped scheme
-        config = {"lr": learning_rate, "lrd": 0.01 ** (1 / num_steps)}
+        config = {"lr": learning_rate, "lrd": learning_rate_decay ** (1 / num_steps)}
         if param_name in ["init_weight", "rate_coef_scale_tril"]:
             config["lr"] *= 0.1
         return config

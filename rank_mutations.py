@@ -64,6 +64,7 @@ def rank_full_svi(args, dataset):
         dataset,
         mutrans.model,
         learning_rate=args.full_learning_rate,
+        learning_rate_decay=args.full_learning_rate_decay,
         num_steps=args.full_num_steps,
         log_every=args.log_every,
         seed=args.seed,
@@ -185,7 +186,7 @@ def rank_map(args, dataset, initial_ranks):
 
     # Evaluate on the null hypothesis + the most positive features.
     dropouts = {}
-    for feature in [None] + initial_ranks["ranks"][: args.num_features].tolist():
+    for feature in [None] + initial_ranks["ranks"].tolist():
         dropouts[feature] = fit_map(args, dataset, cond_data, guide, feature)
 
     result = {
@@ -213,7 +214,7 @@ def main(args):
         initial_ranks = rank_mf_svi(args, dataset)
     if args.hessian:
         compute_hessian(args, dataset, initial_ranks)
-    if args.map_num_steps and args.num_features:
+    if args.dropout:
         rank_map(args, dataset, initial_ranks)
 
 
@@ -222,13 +223,14 @@ if __name__ == "__main__":
         description="Rank mutations via SVI and leave-feature-out MAP"
     )
     parser.add_argument("--full", action="store_true")
-    parser.add_argument("--full-learning-rate", default=0.01, type=float)
     parser.add_argument("--full-num-steps", default=10001, type=int)
-    parser.add_argument("--svi-learning-rate", default=0.05, type=float)
+    parser.add_argument("--full-learning-rate", default=0.01, type=float)
+    parser.add_argument("--full-learning-rate-decay", default=0.01, type=float)
     parser.add_argument("--svi-num-steps", default=1001, type=int)
-    parser.add_argument("--map-learning-rate", default=0.05, type=float)
+    parser.add_argument("--svi-learning-rate", default=0.05, type=float)
     parser.add_argument("--map-num-steps", default=1001, type=int)
-    parser.add_argument("--num-features", type=int)
+    parser.add_argument("--map-learning-rate", default=0.05, type=float)
+    parser.add_argument("--dropout", action="store_true")
     parser.add_argument("--hessian", action="store_true")
     parser.add_argument("--warm-start", action="store_true")
     parser.add_argument("--double", action="store_true", default=True)
