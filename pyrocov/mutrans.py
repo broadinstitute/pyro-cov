@@ -127,13 +127,10 @@ def model(weekly_strains, features):
     rate = pyro.deterministic("rate", rate_coef @ features.T, event_dim=1)
 
     # Assume places differ only in their initial infection count.
-    init_scale = pyro.sample("init_scale", dist.LogNormal(0, 1))
-    init_loc_scale = pyro.sample(
-        "init_loc_scale", dist.LogNormal(0, 1).expand([S]).to_event(1)
-    )
-    init_loc = pyro.sample("init_loc", dist.Normal(0, init_loc_scale).to_event(1))
     with place_plate:
-        init = pyro.sample("init", dist.Normal(init_loc, init_scale).to_event(1))
+        init = pyro.sample(
+            "init", dist.Normal(0, 1).expand([S]).mask(False).to_event(1)
+        )
 
     # Finally observe overdispersed counts.
     strain_probs = (init + rate * time[:, None, None]).softmax(-1)
@@ -163,17 +160,6 @@ def full_guide(weekly_strains, features):
     # Map estimate global parameters.
     map_estimate("feature_scale", lambda: torch.ones(()), constraints.positive)
     map_estimate("concentration", lambda: torch.tensor(5.0), constraints.positive)
-    map_estimate("init_scale", lambda: torch.ones(()), constraints.positive)
-    map_estimate(
-        "init_loc_scale",
-        lambda: torch.ones(S),
-        constraints.independent(constraints.positive, 1),
-    )
-    map_estimate(
-        "init_loc",
-        lambda: torch.zeros(S),
-        constraints.independent(constraints.real, 1),
-    )
 
     # Sample rate_coef from a full-rank multivariate normal distribution.
     loc = pyro.param("rate_coef_loc", lambda: torch.zeros(F))
@@ -207,7 +193,7 @@ def init_loc_fn(site):
         "init_loc",
     ):
         return torch.zeros(site["fn"].shape())
-    if site["name"] in ("feature_scale", "init_scale", "init_loc_scale"):
+    if site["name"] == "feature_scale":
         return torch.ones(site["fn"].shape())
     if site["name"] == "concentration":
         return torch.full(site["fn"].shape(), 5.0)
@@ -235,7 +221,7 @@ def eval_loss_terms(model, guide, *args, vectorized=False):
 
 def fit_map(
     dataset,
-    model,
+    model=model,
     guide=None,
     *,
     vectorized=False,
@@ -268,7 +254,14 @@ def fit_map(
         assert not math.isnan(loss)
         losses.append(loss)
         if step % log_every == 0:
-            logger.info(f"step {step: >4d} loss = {loss / num_obs:0.6g}")
+            median = guide.median()
+            concentration = median["concentration"].item()
+            feature_scale = median["feature_scale"].item()
+            logger.info(
+                f"step {step: >4d} loss = {loss / num_obs:0.6g}\t"
+                f"conc. = {concentration:0.3g}\t"
+                f"f.scale = {feature_scale:0.3g}"
+            )
 
     median = guide.median()
     median["rate"] = median["rate_coef"] @ dataset["features"].T
@@ -377,7 +370,6 @@ def fit_full_svi(
     logger.info(f"Training guide with {num_params} parameters:")
 
     def optim_config(module_name, param_name):
-        # TODO consider using stepped scheme
         config = {"lr": learning_rate, "lrd": learning_rate_decay ** (1 / num_steps)}
         if param_name in ["init_weight", "rate_coef_scale_tril"]:
             config["lr"] *= 0.1
@@ -397,7 +389,7 @@ def fit_full_svi(
             logger.info(
                 f"step {step: >4d} loss = {loss / num_obs:0.6g}\t"
                 f"conc. = {concentration:0.3g}\t"
-                f"feat.scale = {feature_scale:0.3g}"
+                f"f.scale = {feature_scale:0.3g}"
             )
 
     guide_trace = poutine.trace(full_guide).get_trace(weekly_strains, features)
