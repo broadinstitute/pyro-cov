@@ -390,9 +390,13 @@ def fit_full_svi(
     with torch.no_grad():
         with poutine.condition(data={"rate_coef": params["rate_coef_loc"]}):
             guide_trace = poutine.trace(guide).get_trace(weekly_strains, features)
+            model_trace = poutine.trace(poutine.replay(model, guide_trace)).get_trace(
+                weekly_strains, features
+            )
     median = {
         name: site["value"].detach()
-        for name, site in guide_trace.nodes.items()
+        for trace in [guide_trace, model_trace]
+        for name, site in trace.nodes.items()
         if site["type"] in ("param", "sample")
     }
 
