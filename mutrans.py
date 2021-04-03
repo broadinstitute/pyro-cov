@@ -30,12 +30,28 @@ def cached(filename):
     return decorator
 
 
-@cached("results/mutrans.data.pt")
-def load_data(args):
-    return mutrans.load_data(device=args.device)
+def _load_data_filename(args, **kwargs):
+    return "results/mutrans.{}.pt".format(
+        ".".join(["data"] + [f"{k}={v}" for k, v in sorted(kwargs.items())])
+    )
 
 
-@cached(lambda *args: "results/mutrans.fit.{}.pt".format(".".join(map(str, args[2:]))))
+@cached(_load_data_filename)
+def load_data(args, **kwargs):
+    return mutrans.load_data(device=args.device, **kwargs)
+
+
+def _fit_filename(*args):
+    strs = []
+    for arg in args[2:]:
+        if isinstance(arg, tuple):
+            strs.append("-".join(f"{k}={v}" for k, v in arg))
+        else:
+            strs.append(str(arg))
+    return "results/mutrans.fit.{}.pt".format(".".join(strs))
+
+
+@cached(_fit_filename)
 def fit(
     args,
     dataset,
@@ -71,27 +87,56 @@ def main(args):
             torch.cuda.DoubleTensor if args.double else torch.cuda.FloatTensor
         )
 
-    dataset = load_data(args)
-
+    # Configure guides.
     # guide_type, n, lr, lrd
-    configs = [
+    guide_configs = [
         ("map", 1001, 0.05, 0.1),
         ("normal", 2001, 0.05, 0.1),
-        ("mvn", 10001, 0.01, 0.1),
-        ("mvn_dependent", 10001, 0.01, 0.1),
+        ("mvn", 5001, 0.01, 0.1),
+        ("mvn_dependent", 10001, 0.01, 0.01),
     ]
-    holdouts = [None]
+    best_config = (
+        args.guide_type,
+        args.num_steps,
+        args.learning_rate,
+        args.learning_rate_decay,
+    )
+    if args.best:
+        dataset = load_data(args)
+        fit(args, dataset, *best_config)
+        return
+
+    # Configure data holdouts.
+    empty_holdout = ()
+    holdouts = [
+        (("virus_name_pattern", "^hCoV-19/USA/..-CDC-"),),
+        (("virus_name_pattern", "^hCoV-19/USA/..-CDC-2-"),),
+        (("location_pattern", "^North America / USA"),),
+        (("location_pattern", "^Europe / United Kingdom"),),
+    ]
+
+    configs = [c + (empty_holdout,) for c in guide_configs]
+    for holdout in holdouts:
+        configs.append(best_config + holdout)
+
+    # Sequentially fit models.
     result = {}
     for config in configs:
-        for holdout in holdouts:
-            key = config + (holdout,)
-            result[key] = fit(args, dataset, *key)
+        holdout = dict(config[-1])
+        dataset = load_data(args, **holdout)
+        result[config] = fit(args, dataset, *config)
     logger.info("saving results/mutrans.pt")
     torch.save(result, "results/mutrans.pt")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Fit mutation-transmissibility models")
+    parser.add_argument("--best", action="store_true", help="fit only one config")
+    parser.add_argument("-g", "--guide_type", default="mvn_dependent")
+    parser.add_argument("-n", "--num-steps", default=10001, type=int)
+    parser.add_argument("-lr", "--learning-rate", default=0.01, type=float)
+    parser.add_argument("-lrd", "--learning-rate-decay", default=0.01, type=float)
+
     parser.add_argument("--double", action="store_true", default=True)
     parser.add_argument("--single", action="store_false", dest="double")
     parser.add_argument(
