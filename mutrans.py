@@ -91,13 +91,6 @@ def main(args):
         )
 
     # Configure guides.
-    # guide_type, n, lr, lrd
-    guide_configs = [
-        ("map", 1001, 0.05, 0.1),
-        ("normal", 2001, 0.05, 0.1),
-        ("mvn", 10001, 0.01, 0.1),
-        ("mvn_dependent", 10001, 0.01, 0.1),
-    ]
     best_config = (
         args.guide_type,
         args.num_steps,
@@ -108,6 +101,14 @@ def main(args):
         dataset = load_data(args)
         fit(args, dataset, *best_config)
         return
+    # guide_type, n, lr, lrd
+    guide_configs = [
+        best_config,
+        ("map", 1001, 0.05, 0.1),
+        ("normal", 2001, 0.05, 0.1),
+        ("mvn", 10001, 0.01, 0.1),
+        ("mvn_dependent", 10001, 0.01, 0.1),
+    ]
 
     # Configure data holdouts.
     empty_holdout = ()
