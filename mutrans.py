@@ -48,18 +48,18 @@ def load_data(args, **kwargs):
     return mutrans.load_data(device=args.device, **kwargs)
 
 
-def _fit_filename(*args):
-    strs = []
+def _fit_filename(name, *args):
+    strs = [name]
     for arg in args[2:]:
         if isinstance(arg, tuple):
             strs.append("-".join(f"{k}={_safe_str(v)}" for k, v in arg))
         else:
             strs.append(str(arg))
-    return "results/mutrans.fit.{}.pt".format(".".join(strs))
+    return "results/mutrans.{}.pt".format(".".join(strs))
 
 
-@cached(_fit_filename)
-def fit(
+@cached(lambda *args: _fit_filename("svi", *args))
+def fit_svi(
     args,
     dataset,
     guide_type="mvn_dependent",
@@ -68,7 +68,7 @@ def fit(
     lrd=0.1,
     holdout=(),
 ):
-    result = mutrans.fit(
+    result = mutrans.fit_svi(
         dataset,
         guide_type=guide_type,
         num_steps=n,
@@ -82,13 +82,58 @@ def fit(
     return result
 
 
+@cached(lambda *args: _fit_filename("mcmc", *args))
+def fit_mcmc(
+    args,
+    dataset,
+    num_warmup=1000,
+    num_samples=1000,
+    max_tree_depth=5,
+    arrowhead_mass=False,
+):
+    init_data = fit_svi("map", 1001, 0.05, 1.0)["median"]
+
+    result = mutrans.fit_mcmc(
+        dataset,
+        init_data,
+        num_warmup=num_warmup,
+        num_samples=num_samples,
+        max_tree_depth=max_tree_depth,
+        arrowhead_mass=arrowhead_mass,
+        log_every=args.log_every,
+        seed=args.seed,
+    )
+
+    result["args"] = args
+    result["median"] = {k: v.median(0) for k, v in result["samples"].items()}
+    result["mean"] = result["samples"]["rate_coef"].mean(0)
+    result["std"] = result["samples"]["rate_coef"].std(0)
+
+    return result
+
+
 def main(args):
+    if args.mcmc:
+        args.double = True
     if args.double:
         torch.set_default_dtype(torch.double)
     if args.cuda:
         torch.set_default_tensor_type(
             torch.cuda.DoubleTensor if args.double else torch.cuda.FloatTensor
         )
+
+    # Run MCMC.
+    if args.mcmc:
+        dataset = load_data(args)
+        fit_mcmc(
+            args,
+            dataset,
+            num_warmup=args.num_warmup,
+            num_samples=args.num_samples,
+            max_tree_depth=args.max_tree_depth,
+            arrowhead_mass=args.arrowhead_mass,
+        )
+        return
 
     # Configure guides.
     best_config = (
@@ -99,12 +144,12 @@ def main(args):
     )
     if args.best:
         dataset = load_data(args)
-        fit(args, dataset, *best_config)
+        fit_svi(args, dataset, *best_config)
         return
     # guide_type, n, lr, lrd
     guide_configs = [
         best_config,
-        ("map", 1001, 0.05, 0.1),
+        ("map", 1001, 0.05, 1.0),
         ("normal", 2001, 0.05, 0.1),
         ("mvn", 10001, 0.01, 0.1),
         ("mvn_dependent", 10001, 0.01, 0.1),
@@ -128,7 +173,7 @@ def main(args):
     for config in configs:
         holdout = dict(config[-1])
         dataset = load_data(args, **holdout)
-        result[config] = fit(args, dataset, *config)
+        result[config] = fit_svi(args, dataset, *config)
     logger.info("saving results/mutrans.pt")
     torch.save(result, "results/mutrans.pt")
 
@@ -136,11 +181,15 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Fit mutation-transmissibility models")
     parser.add_argument("--best", action="store_true", help="fit only one config")
-    parser.add_argument("-g", "--guide_type", default="mvn_dependent")
+    parser.add_argument("--mcmc", action="store_true", help="run only MCMC inference")
+    parser.add_argument("-g", "--guide-type", default="mvn_dependent")
     parser.add_argument("-n", "--num-steps", default=10001, type=int)
     parser.add_argument("-lr", "--learning-rate", default=0.01, type=float)
     parser.add_argument("-lrd", "--learning-rate-decay", default=0.1, type=float)
-
+    parser.add_argument("--num-warmup", default=1000, type=int)
+    parser.add_argument("--num-samples", default=1000, type=int)
+    parser.add_argument("--max-tree-depth", default=5, type=int)
+    parser.add_argument("--arrowhead-mass", action="store_true")
     parser.add_argument("--double", action="store_true", default=True)
     parser.add_argument("--single", action="store_false", dest="double")
     parser.add_argument(

@@ -7,8 +7,11 @@ from collections import Counter
 import pyro
 import pyro.distributions as dist
 import torch
+from pyro import poutine
 from pyro.distributions import constraints
-from pyro.infer import SVI, Trace_ELBO
+from pyro.infer import MCMC, NUTS, SVI, Trace_ELBO
+from pyro.infer.autoguide import init_to_value
+from pyro.infer.mcmc import ArrowheadMassMatrix
 from pyro.optim import ClippedAdam
 
 from pyrocov import pangolin
@@ -123,9 +126,7 @@ def model(weekly_strains, features):
 
     # Assume places differ only in their initial infection count.
     with place_plate:
-        init = pyro.sample(
-            "init", dist.Normal(0, 1).expand([S]).to_event(1).mask(False)
-        )
+        init = pyro.sample("init", SoftLaplace(0, 10).expand([S]).to_event(1))
 
     # Finally observe overdispersed counts.
     strain_probs = (init + rate * time[:, None, None]).softmax(-1)
@@ -231,7 +232,7 @@ class Guide:
         return result
 
 
-def fit(
+def fit_svi(
     dataset,
     guide_type,
     learning_rate=0.01,
@@ -279,4 +280,51 @@ def fit(
     result = guide.stats(weekly_strains, features)
     result["losses"] = losses
     result["params"] = {k: v.detach().clone() for k, v in param_store.items()}
+    return result
+
+
+def fit_mcmc(
+    dataset,
+    init_data,
+    num_warmup=1000,
+    num_samples=1000,
+    max_tree_depth=5,
+    arrowhead_mass=False,
+    log_every=50,
+    seed=20210319,
+):
+    logger.info("Fitting via MCMC")
+    pyro.set_rng_seed(seed)
+
+    # Configure a kernel.
+    cond_data = {k: init_data[k] for k in ("feature_scale", "concentration")}
+    kernel = NUTS(
+        poutine.condition(model, cond_data),
+        full_mass=[("rate_coef",)],
+        init_strategy=init_to_value(init_data),
+        max_tree_depth=max_tree_depth,
+        max_plate_nesting=2,
+    )
+    if arrowhead_mass:
+        kernel.mass_matrix_adapter = ArrowheadMassMatrix()
+
+    # Run MCMC.
+    losses = []
+
+    def hook_fn(kernel, *unused):
+        loss = float(kernel._potential_energy_last)
+        if log_every and len(losses) % log_every == 0:
+            logger.info(f"loss = {loss:0.6g}")
+        losses.append(loss)
+
+    mcmc = MCMC(
+        kernel, warmup_steps=num_warmup, num_samples=num_samples, hook_fn=hook_fn
+    )
+    mcmc.run(dataset["weekly_strains"], dataset["features"])
+
+    result = {}
+    result["losses"] = losses
+    if num_samples >= 4:  # conditions to compute rhat
+        result["summary"] = mcmc.summary()
+    result["samples"] = mcmc.get_samples()
     return result
