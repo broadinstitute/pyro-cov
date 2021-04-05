@@ -288,7 +288,7 @@ def fit_mcmc(
     init_data,
     num_warmup=1000,
     num_samples=1000,
-    max_tree_depth=5,
+    max_tree_depth=6,
     arrowhead_mass=False,
     log_every=50,
     seed=20210319,
@@ -301,20 +301,23 @@ def fit_mcmc(
     kernel = NUTS(
         poutine.condition(model, cond_data),
         full_mass=[("rate_coef",)],
-        init_strategy=init_to_value(init_data),
+        init_strategy=init_to_value(values=init_data),
         max_tree_depth=max_tree_depth,
         max_plate_nesting=2,
+        jit_compile=True,
+        ignore_jit_warnings=True,
     )
     if arrowhead_mass:
         kernel.mass_matrix_adapter = ArrowheadMassMatrix()
 
     # Run MCMC.
+    num_obs = dataset["weekly_strains"].count_nonzero()
     losses = []
 
     def hook_fn(kernel, *unused):
         loss = float(kernel._potential_energy_last)
         if log_every and len(losses) % log_every == 0:
-            logger.info(f"loss = {loss:0.6g}")
+            logger.info(f"loss = {loss / num_obs:0.6g}")
         losses.append(loss)
 
     mcmc = MCMC(
