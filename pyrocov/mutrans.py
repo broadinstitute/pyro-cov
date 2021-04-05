@@ -11,7 +11,6 @@ from pyro import poutine
 from pyro.distributions import constraints
 from pyro.infer import MCMC, NUTS, SVI, Trace_ELBO
 from pyro.infer.autoguide import init_to_value
-from pyro.infer.mcmc import ArrowheadMassMatrix
 from pyro.optim import ClippedAdam
 
 from pyrocov import pangolin
@@ -289,7 +288,6 @@ def fit_mcmc(
     num_warmup=1000,
     num_samples=1000,
     max_tree_depth=6,
-    arrowhead_mass=False,
     log_every=50,
     seed=20210319,
 ):
@@ -307,8 +305,6 @@ def fit_mcmc(
         jit_compile=True,
         ignore_jit_warnings=True,
     )
-    if arrowhead_mass:
-        kernel.mass_matrix_adapter = ArrowheadMassMatrix()
 
     # Run MCMC.
     num_obs = dataset["weekly_strains"].count_nonzero()

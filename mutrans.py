@@ -89,7 +89,6 @@ def fit_mcmc(
     num_warmup=1000,
     num_samples=1000,
     max_tree_depth=6,
-    arrowhead_mass=False,
 ):
     init_data = fit_svi(args, dataset, "map", 1001, 0.05, 1.0)["median"]
 
@@ -99,7 +98,6 @@ def fit_mcmc(
         num_warmup=num_warmup,
         num_samples=num_samples,
         max_tree_depth=max_tree_depth,
-        arrowhead_mass=arrowhead_mass,
         log_every=args.log_every,
         seed=args.seed,
     )
@@ -131,7 +129,6 @@ def main(args):
             args.num_warmup,
             args.num_samples,
             args.max_tree_depth,
-            args.arrowhead_mass,
         )
         return
 
@@ -189,7 +186,6 @@ if __name__ == "__main__":
     parser.add_argument("--num-warmup", default=1000, type=int)
     parser.add_argument("--num-samples", default=1000, type=int)
     parser.add_argument("--max-tree-depth", default=6, type=int)
-    parser.add_argument("--arrowhead-mass", action="store_true")
     parser.add_argument("--double", action="store_true", default=True)
     parser.add_argument("--single", action="store_false", dest="double")
     parser.add_argument(
