@@ -103,7 +103,9 @@ def fit_mcmc(
     )
 
     result["args"] = args
-    result["median"] = {k: v.median(0).values for k, v in result["samples"].items()}
+    result["median"] = init_data.copy()
+    for k, v in result["samples"].items():
+        result["median"][k] = v.median(0).values
     result["mean"] = result["samples"]["rate_coef"].mean(0)
     result["std"] = result["samples"]["rate_coef"].std(0)
 
@@ -131,6 +133,7 @@ def main(args):
             args.max_tree_depth,
         )
         return
+    mcmc_config = ("mcmc", args.num_warmup, args.num_samples, args.max_tree_depth)
 
     # Configure guides.
     best_config = (
@@ -146,6 +149,7 @@ def main(args):
     # guide_type, n, lr, lrd
     guide_configs = [
         best_config,
+        mcmc_config,
         ("map", 1001, 0.05, 1.0),
         ("normal", 2001, 0.05, 0.1),
         ("mvn", 10001, 0.01, 0.1),
@@ -170,7 +174,10 @@ def main(args):
     for config in configs:
         holdout = dict(config[-1])
         dataset = load_data(args, **holdout)
-        result[config] = fit_svi(args, dataset, *config)
+        if config[0] == "mcmc":
+            result[config] = fit_mcmc(args, dataset, *config[1:])
+        else:
+            result[config] = fit_svi(args, dataset, *config)
     logger.info("saving results/mutrans.pt")
     torch.save(result, "results/mutrans.pt")
 

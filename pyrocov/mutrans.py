@@ -310,20 +310,23 @@ def fit_mcmc(
     num_obs = dataset["weekly_strains"].count_nonzero()
     losses = []
 
-    def hook_fn(kernel, *unused):
+    def hook_fn(kernel, params, stage, i):
         loss = float(kernel._potential_energy_last)
         if log_every and len(losses) % log_every == 0:
             logger.info(f"loss = {loss / num_obs:0.6g}")
         losses.append(loss)
 
     mcmc = MCMC(
-        kernel, warmup_steps=num_warmup, num_samples=num_samples, hook_fn=hook_fn
+        kernel,
+        warmup_steps=num_warmup,
+        num_samples=num_samples,
+        hook_fn=hook_fn,
+        save_params=["rate_coef"],
     )
     mcmc.run(dataset["weekly_strains"], dataset["features"])
 
     result = {}
     result["losses"] = losses
-    if num_samples >= 4:  # conditions to compute rhat
-        result["summary"] = mcmc.summary()
+    result["diagnostics"] = mcmc.diagnostics()
     result["samples"] = mcmc.get_samples()
     return result
