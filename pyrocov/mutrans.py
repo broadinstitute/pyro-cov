@@ -8,7 +8,7 @@ import pyro
 import pyro.distributions as dist
 import torch
 from pyro.distributions import constraints
-from pyro.infer import MCMC, NUTS, SVI, Trace_ELBO
+from pyro.infer import MCMC, NUTS, SVI, JitTrace_ELBO, Predictive
 from pyro.infer.autoguide import init_to_value
 from pyro.optim import ClippedAdam
 from pyro.poutine.messenger import Messenger
@@ -113,7 +113,7 @@ def model(weekly_strains, features):
     S, F = features.shape
     time_plate = pyro.plate("time", T, dim=-2)
     place_plate = pyro.plate("place", P, dim=-1)
-    time = torch.arange(float(T)) * TIMESTEP / 365.25  # in years
+    time = torch.arange(T, dtype=torch.double) * TIMESTEP / 365.25  # in years
     time -= time.max()
 
     # Assume relative growth rate depends on mutation features but not time or place.
@@ -188,8 +188,9 @@ class Guide:
         # MAP estimate init, but depending on rate_coef.
         init_loc = pyro.param("init_loc", lambda: torch.zeros(P, S))
         if "dependent" in self.guide_type:
-            weight = pyro.param("init_weight", lambda: torch.zeros(S, F))
-            init = init_loc + weight @ rate_coef
+            weight_s = pyro.param("init_weight_s", lambda: torch.zeros(S, F))
+            weight_p = pyro.param("init_weight_p", lambda: torch.zeros(P, 1, F))
+            init = init_loc + weight_s @ rate_coef + weight_p @ rate_coef
         else:
             init = init_loc
         with pyro.plate("place", P, dim=-1):
@@ -197,20 +198,22 @@ class Guide:
 
     @torch.no_grad()
     def median(self, weekly_strains, features):
+        rate_coef = pyro.param("rate_coef_loc").detach()
         result = {
             "feature_scale": pyro.param("feature_scale_loc").detach(),
             "concentration": pyro.param("concentration_loc").detach(),
-            "rate_coef": pyro.param("rate_coef_loc").detach(),
+            "rate_coef": rate_coef,
+            "rate": rate_coef @ features.T,
         }
 
         init_loc = pyro.param("init_loc").detach()
         if "dependent" in self.guide_type:
-            weight = pyro.param("init_weight").detach()
-            result["init"] = init_loc + weight @ result["rate_coef"]
+            weight_s = pyro.param("init_weight_s").detach()
+            weight_p = pyro.param("init_weight_p").detach()
+            result["init"] = init_loc + weight_s @ rate_coef + weight_p @ rate_coef
         else:
             result["init"] = init_loc
 
-        result["rate"] = result["rate_coef"] @ features.T
         return result
 
     @torch.no_grad()
@@ -241,7 +244,8 @@ class DeterministicMessenger(Messenger):
         self.feature_scale = params["feature_scale_loc"]
         self.concentration = params["concentration_loc"]
         self.init_loc = params["init_loc"]
-        self.init_weight = params["init_weight"]
+        self.init_weight_s = params["init_weight_s"]
+        self.init_weight_p = params["init_weight_p"]
         self.rate_coef = None
         super().__init__()
 
@@ -254,7 +258,11 @@ class DeterministicMessenger(Messenger):
     def _pyro_sample(self, msg):
         if msg["name"] == "init":
             assert self.rate_coef is not None
-            msg["value"] = self.init_loc + self.init_weight @ self.rate_coef
+            msg["value"] = (
+                self.init_loc
+                + self.init_weight_s @ self.rate_coef
+                + self.init_weight_p @ self.rate_coef
+            )
             msg["is_observed"] = True
             self.rate_coef = None
         elif msg["name"] == "feature_scale":
@@ -289,12 +297,13 @@ def fit_svi(
 
     def optim_config(module_name, param_name):
         config = {"lr": learning_rate, "lrd": learning_rate_decay ** (1 / num_steps)}
-        if param_name in ["init_weight", "rate_coef_scale_tril"]:
-            config["lr"] *= 0.02
+        if param_name in ["init_weight_s", "init_weight_p", "rate_coef_scale_tril"]:
+            config["lr"] *= 0.05
         return config
 
     optim = ClippedAdam(optim_config)
-    svi = SVI(model, guide, optim, Trace_ELBO())
+    elbo = JitTrace_ELBO(max_plate_nesting=2, ignore_jit_warnings=True)
+    svi = SVI(model, guide, optim, elbo)
     losses = []
     num_obs = dataset["weekly_strains"].count_nonzero()
     for step in range(num_steps):
@@ -329,8 +338,9 @@ def fit_mcmc(
     pyro.set_rng_seed(seed)
 
     # Configure a kernel.
+    partial_model = DeterministicMessenger(svi_params)(model)
     kernel = NUTS(
-        DeterministicMessenger(svi_params)(model),
+        partial_model,
         init_strategy=init_to_value(values=svi_params),
         max_tree_depth=max_tree_depth,
         max_plate_nesting=2,
@@ -356,9 +366,15 @@ def fit_mcmc(
         hook_fn=hook_fn,
     )
     mcmc.run(dataset["weekly_strains"], dataset["features"])
+    predict = Predictive(
+        partial_model,
+        mcmc.get_samples(),
+        return_sites=["feature_scale", "concentration", "rate_coef", "rate", "init"],
+    )
+    samples = predict(dataset["weekly_strains"], dataset["features"])
 
     result = {}
     result["losses"] = losses
     result["diagnostics"] = mcmc.diagnostics()
-    result["samples"] = mcmc.get_samples()
+    result["samples"] = samples
     return result

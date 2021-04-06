@@ -3,6 +3,7 @@ import functools
 import logging
 import os
 import re
+from timeit import default_timer
 
 import torch
 
@@ -68,6 +69,7 @@ def fit_svi(
     lrd=0.1,
     holdout=(),
 ):
+    start_time = default_timer()
     result = mutrans.fit_svi(
         dataset,
         guide_type=guide_type,
@@ -77,6 +79,7 @@ def fit_svi(
         log_every=args.log_every,
         seed=args.seed,
     )
+    result["walltime"] = default_timer() - start_time
 
     result["args"] = args
     return result
@@ -101,6 +104,7 @@ def fit_mcmc(
         holdout,
     )["params"]
 
+    start_time = default_timer()
     result = mutrans.fit_mcmc(
         dataset,
         svi_params,
@@ -110,11 +114,12 @@ def fit_mcmc(
         log_every=args.log_every,
         seed=args.seed,
     )
+    result["walltime"] = default_timer() - start_time
 
     result["args"] = args
-    result["median"] = svi_params.copy()
+    result["median"] = median = svi_params.copy()
     for k, v in result["samples"].items():
-        result["median"][k] = v.median(0).values
+        median[k] = v.median(0).values
     result["mean"] = result["samples"]["rate_coef"].mean(0)
     result["std"] = result["samples"]["rate_coef"].std(0)
 
@@ -158,12 +163,6 @@ def main(args):
     # guide_type, n, lr, lrd
     guide_configs = [
         best_config,
-        ("mcmc", 1000, 1000, 5),
-        ("mcmc", 1000, 1000, 6),
-        ("mcmc", 1000, 1000, 7),
-        ("mcmc", 1000, 1000, 8),
-        ("mcmc", 1000, 1000, 9),
-        ("mcmc", 1000, 1000, 10),
         mcmc_config,
         ("map", 1001, 0.05, 1.0),
         ("normal", 2001, 0.05, 0.1),
