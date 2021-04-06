@@ -24,7 +24,24 @@ update: FORCE
 	time nice python preprocess_gisaid.py
 	time python featurize_nextclade.py
 
-view/%.md: FORCE
-	jupyter nbconvert --to=markdown --output-dir=view $*.ipynb
+ssh:
+	gcloud compute ssh --project pyro-284215 --zone us-central1-c \
+	  pyro-cov-fritzo-vm -- -AX
+
+push:
+	gcloud compute scp --project pyro-284215 --zone us-central1-c \
+	  --recurse --compress \
+	  results/gisaid.columns.pkl  \
+	  pyro-cov-fritzo-vm:~/pyro-cov/results/
+	gcloud compute scp --project pyro-284215 --zone us-central1-c \
+	  --recurse --compress \
+	  results/nextclade.features.pt \
+	  pyro-cov-fritzo-vm:~/pyro-cov/results/
+
+pull:
+	gcloud compute scp --project pyro-284215 --zone us-central1-c \
+	  --recurse --compress \
+	  pyro-cov-fritzo-vm:~/pyro-cov/results/mutrans.pt \
+	  results/
 
 FORCE:
