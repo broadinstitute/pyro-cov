@@ -89,8 +89,17 @@ def fit_mcmc(
     num_warmup=1000,
     num_samples=1000,
     max_tree_depth=10,
+    holdout=(),
 ):
-    svi_params = fit_svi(args, dataset, "mvn_dependent", 10001, 0.01, 0.1)["params"]
+    svi_params = fit_svi(
+        args,
+        dataset,
+        "mvn_dependent",
+        10001,
+        0.01,
+        0.1,
+        holdout,
+    )["params"]
 
     result = mutrans.fit_mcmc(
         dataset,
@@ -149,6 +158,12 @@ def main(args):
     # guide_type, n, lr, lrd
     guide_configs = [
         best_config,
+        ("mcmc", 5, 1000, 1000),
+        ("mcmc", 6, 1000, 1000),
+        ("mcmc", 7, 1000, 1000),
+        ("mcmc", 8, 1000, 1000),
+        ("mcmc", 9, 1000, 1000),
+        ("mcmc", 10, 1000, 1000),
         mcmc_config,
         ("map", 1001, 0.05, 1.0),
         ("normal", 2001, 0.05, 0.1),
@@ -172,6 +187,7 @@ def main(args):
     # Sequentially fit models.
     result = {}
     for config in configs:
+        logger.info(f"Config: {config}")
         holdout = dict(config[-1])
         dataset = load_data(args, **holdout)
         if config[0] == "mcmc":

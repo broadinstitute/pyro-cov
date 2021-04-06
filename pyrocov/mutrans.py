@@ -4,17 +4,17 @@ import pickle
 import re
 from collections import Counter
 
-import torch
-from pyrocov import pangolin
-from pyrocov.distributions import SoftLaplace
-
 import pyro
 import pyro.distributions as dist
+import torch
 from pyro.distributions import constraints
 from pyro.infer import MCMC, NUTS, SVI, Trace_ELBO
 from pyro.infer.autoguide import init_to_value
 from pyro.optim import ClippedAdam
 from pyro.poutine.messenger import Messenger
+
+from pyrocov import pangolin
+from pyrocov.distributions import SoftLaplace
 
 logger = logging.getLogger(__name__)
 
@@ -236,9 +236,10 @@ class DeterministicMessenger(Messenger):
     Condition all but the "rate_coef" variable on parameters of an
     mvn_dependent guide.
     """
+
     def __init__(self, params):
-        self.feature_scale = params["feature_scale"]
-        self.concentration = params["concentration"]
+        self.feature_scale = params["feature_scale_loc"]
+        self.concentration = params["concentration_loc"]
         self.init_loc = params["init_loc"]
         self.init_weight = params["init_weight"]
         self.rate_coef = None
@@ -342,7 +343,7 @@ def fit_mcmc(
     losses = []
 
     def hook_fn(kernel, params, stage, i):
-        assert set(params).keys() == {"rate_coef"}
+        assert set(params) == {"rate_coef"}
         loss = float(kernel._potential_energy_last)
         if log_every and len(losses) % log_every == 0:
             logger.info(f"loss = {loss / num_obs:0.6g}")
