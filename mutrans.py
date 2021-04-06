@@ -127,14 +127,9 @@ def fit_mcmc(
 
 
 def main(args):
-    if args.mcmc:
-        args.double = True
-    if args.double:
-        torch.set_default_dtype(torch.double)
+    torch.set_default_dtype(torch.double)
     if args.cuda:
-        torch.set_default_tensor_type(
-            torch.cuda.DoubleTensor if args.double else torch.cuda.FloatTensor
-        )
+        torch.set_default_tensor_type(torch.cuda.DoubleTensor)
 
     # Run MCMC.
     if args.mcmc:
@@ -208,8 +203,6 @@ if __name__ == "__main__":
     parser.add_argument("--num-warmup", default=1000, type=int)
     parser.add_argument("--num-samples", default=1000, type=int)
     parser.add_argument("--max-tree-depth", default=10, type=int)
-    parser.add_argument("--double", action="store_true", default=True)
-    parser.add_argument("--single", action="store_false", dest="double")
     parser.add_argument(
         "--cuda", action="store_true", default=torch.cuda.is_available()
     )
