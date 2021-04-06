@@ -8,7 +8,7 @@ import pyro
 import pyro.distributions as dist
 import torch
 from pyro.distributions import constraints
-from pyro.infer import MCMC, NUTS, SVI, JitTrace_ELBO, Predictive
+from pyro.infer import MCMC, NUTS, SVI, Predictive, Trace_ELBO
 from pyro.infer.autoguide import init_to_value
 from pyro.optim import ClippedAdam
 from pyro.poutine.messenger import Messenger
@@ -97,6 +97,12 @@ def load_data(
     mutations = [mutations[i] for i in ok_mutations.tolist()]
     features = features.index_select(1, ok_mutations)
 
+    # Construct region-local time scales centered around observations.
+    num_obs = weekly_strains.sum(-1)
+    local_time = torch.arange(float(len(num_obs))) * TIMESTEP / 365.25  # in years
+    local_time = local_time[:, None]
+    local_time = local_time - (local_time * num_obs).sum(0) / num_obs.sum(0)
+
     return {
         "location_id": location_id,
         "mutations": mutations,
@@ -104,17 +110,20 @@ def load_data(
         "features": features,
         "lineage_id": lineage_id,
         "lineage_id_inv": lineage_id_inv,
+        "local_time": local_time,
     }
 
 
-def model(weekly_strains, features):
+def model(dataset):
+    weekly_strains = dataset["weekly_strains"]
+    features = dataset["features"]
+    local_time = dataset["local_time"]
     assert weekly_strains.shape[-1] == features.shape[0]
+    assert local_time.shape == weekly_strains.shape[:2]
     T, P, S = weekly_strains.shape
     S, F = features.shape
     time_plate = pyro.plate("time", T, dim=-2)
     place_plate = pyro.plate("place", P, dim=-1)
-    time = torch.arange(T, dtype=torch.double) * TIMESTEP / 365.25  # in years
-    time -= time.max()
 
     # Assume relative growth rate depends on mutation features but not time or place.
     feature_scale = pyro.sample("feature_scale", dist.LogNormal(0, 1))
@@ -128,7 +137,7 @@ def model(weekly_strains, features):
         init = pyro.sample("init", SoftLaplace(0, 10).expand([S]).to_event(1))
 
     # Finally observe overdispersed counts.
-    strain_probs = (init + rate * time[:, None, None]).softmax(-1)
+    strain_probs = (init + rate * local_time[:, :, None]).softmax(-1)
     concentration = pyro.sample("concentration", dist.LogNormal(2, 4))
     with time_plate, place_plate:
         pyro.sample(
@@ -152,7 +161,9 @@ class Guide:
         super().__init__()
         self.guide_type = guide_type
 
-    def __call__(self, weekly_strains, features):
+    def __call__(self, dataset):
+        weekly_strains = dataset["weekly_strains"]
+        features = dataset["features"]
         assert weekly_strains.shape[-1] == features.shape[0]
         T, P, S = weekly_strains.shape
         S, F = features.shape
@@ -197,13 +208,13 @@ class Guide:
             pyro.sample("init", dist.Delta(init, event_dim=1))
 
     @torch.no_grad()
-    def median(self, weekly_strains, features):
+    def median(self, dataset):
         rate_coef = pyro.param("rate_coef_loc").detach()
         result = {
             "feature_scale": pyro.param("feature_scale_loc").detach(),
             "concentration": pyro.param("concentration_loc").detach(),
             "rate_coef": rate_coef,
-            "rate": rate_coef @ features.T,
+            "rate": rate_coef @ dataset["features"].T,
         }
 
         init_loc = pyro.param("init_loc").detach()
@@ -217,9 +228,9 @@ class Guide:
         return result
 
     @torch.no_grad()
-    def stats(self, weekly_strains, features):
+    def stats(self, dataset):
         result = {
-            "median": self.median(weekly_strains, features),
+            "median": self.median(dataset),
             "mean": pyro.param("rate_coef_loc").detach(),
         }
         if self.guide_type == "normal":
@@ -286,12 +297,10 @@ def fit_svi(
     pyro.set_rng_seed(seed)
     pyro.clear_param_store()
     param_store = pyro.get_param_store()
-    weekly_strains = dataset["weekly_strains"]
-    features = dataset["features"]
 
     # Initialize guide so we can count parameters.
     guide = Guide(guide_type)
-    guide(weekly_strains, features)
+    guide(dataset)
     num_params = sum(p.unconstrained().numel() for p in param_store.values())
     logger.info(f"Training guide with {num_params} parameters:")
 
@@ -302,12 +311,12 @@ def fit_svi(
         return config
 
     optim = ClippedAdam(optim_config)
-    elbo = JitTrace_ELBO(max_plate_nesting=2, ignore_jit_warnings=True)
+    elbo = Trace_ELBO(max_plate_nesting=2)
     svi = SVI(model, guide, optim, elbo)
     losses = []
     num_obs = dataset["weekly_strains"].count_nonzero()
     for step in range(num_steps):
-        loss = svi.step(weekly_strains, features)
+        loss = svi.step(dataset)
         assert not math.isnan(loss)
         losses.append(loss)
         if step % log_every == 0:
@@ -319,7 +328,7 @@ def fit_svi(
                 f"f.scale = {feature_scale:0.3g}"
             )
 
-    result = guide.stats(weekly_strains, features)
+    result = guide.stats(dataset)
     result["losses"] = losses
     result["params"] = {k: v.detach().clone() for k, v in param_store.items()}
     return result
@@ -365,13 +374,13 @@ def fit_mcmc(
         num_samples=num_samples,
         hook_fn=hook_fn,
     )
-    mcmc.run(dataset["weekly_strains"], dataset["features"])
+    mcmc.run(dataset)
     predict = Predictive(
         partial_model,
         mcmc.get_samples(),
         return_sites=["feature_scale", "concentration", "rate_coef", "rate", "init"],
     )
-    samples = predict(dataset["weekly_strains"], dataset["features"])
+    samples = predict(dataset)
 
     result = {}
     result["losses"] = losses

@@ -130,6 +130,8 @@ def main(args):
     torch.set_default_dtype(torch.double)
     if args.cuda:
         torch.set_default_tensor_type(torch.cuda.DoubleTensor)
+    if args.debug:
+        torch.autograd.set_detect_anomaly(True)
 
     # Run MCMC.
     if args.mcmc:
@@ -209,6 +211,7 @@ if __name__ == "__main__":
     parser.add_argument("--cpu", dest="cuda", action="store_false")
     parser.add_argument("--seed", default=20210319, type=int)
     parser.add_argument("-l", "--log-every", default=50, type=int)
+    parser.add_argument("--debug", action="store_true")
     args = parser.parse_args()
     args.device = "cuda" if args.cuda else "cpu"
     main(args)
