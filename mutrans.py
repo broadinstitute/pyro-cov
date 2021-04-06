@@ -88,13 +88,13 @@ def fit_mcmc(
     dataset,
     num_warmup=1000,
     num_samples=1000,
-    max_tree_depth=6,
+    max_tree_depth=10,
 ):
-    init_data = fit_svi(args, dataset, "map", 1001, 0.05, 1.0)["median"]
+    svi_params = fit_svi(args, dataset, "mvn_dependent", 10001, 0.01, 0.1)["params"]
 
     result = mutrans.fit_mcmc(
         dataset,
-        init_data,
+        svi_params,
         num_warmup=num_warmup,
         num_samples=num_samples,
         max_tree_depth=max_tree_depth,
@@ -103,7 +103,7 @@ def fit_mcmc(
     )
 
     result["args"] = args
-    result["median"] = init_data.copy()
+    result["median"] = svi_params.copy()
     for k, v in result["samples"].items():
         result["median"][k] = v.median(0).values
     result["mean"] = result["samples"]["rate_coef"].mean(0)
@@ -192,7 +192,7 @@ if __name__ == "__main__":
     parser.add_argument("-lrd", "--learning-rate-decay", default=0.1, type=float)
     parser.add_argument("--num-warmup", default=1000, type=int)
     parser.add_argument("--num-samples", default=1000, type=int)
-    parser.add_argument("--max-tree-depth", default=6, type=int)
+    parser.add_argument("--max-tree-depth", default=10, type=int)
     parser.add_argument("--double", action="store_true", default=True)
     parser.add_argument("--single", action="store_false", dest="double")
     parser.add_argument(

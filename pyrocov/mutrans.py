@@ -4,17 +4,17 @@ import pickle
 import re
 from collections import Counter
 
+import torch
+from pyrocov import pangolin
+from pyrocov.distributions import SoftLaplace
+
 import pyro
 import pyro.distributions as dist
-import torch
-from pyro import poutine
 from pyro.distributions import constraints
 from pyro.infer import MCMC, NUTS, SVI, Trace_ELBO
 from pyro.infer.autoguide import init_to_value
 from pyro.optim import ClippedAdam
-
-from pyrocov import pangolin
-from pyrocov.distributions import SoftLaplace
+from pyro.poutine.messenger import Messenger
 
 logger = logging.getLogger(__name__)
 
@@ -231,6 +231,39 @@ class Guide:
         return result
 
 
+class DeterministicMessenger(Messenger):
+    """
+    Condition all but the "rate_coef" variable on parameters of an
+    mvn_dependent guide.
+    """
+    def __init__(self, params):
+        self.feature_scale = params["feature_scale"]
+        self.concentration = params["concentration"]
+        self.init_loc = params["init_loc"]
+        self.init_weight = params["init_weight"]
+        self.rate_coef = None
+        super().__init__()
+
+    def _pyro_post_sample(self, msg):
+        if msg["name"] == "rate_coef":
+            assert self.rate_coef is None
+            self.rate_coef = msg["value"]
+            assert self.rate_coef is not None
+
+    def _pyro_sample(self, msg):
+        if msg["name"] == "init":
+            assert self.rate_coef is not None
+            msg["value"] = self.init_loc + self.init_weight @ self.rate_coef
+            msg["is_observed"] = True
+            self.rate_coef = None
+        elif msg["name"] == "feature_scale":
+            msg["value"] = self.feature_scale
+            msg["is_observed"] = True
+        elif msg["name"] == "concentration":
+            msg["value"] = self.concentration
+            msg["is_observed"] = True
+
+
 def fit_svi(
     dataset,
     guide_type,
@@ -284,10 +317,10 @@ def fit_svi(
 
 def fit_mcmc(
     dataset,
-    init_data,
+    svi_params,
     num_warmup=1000,
     num_samples=1000,
-    max_tree_depth=6,
+    max_tree_depth=10,
     log_every=50,
     seed=20210319,
 ):
@@ -295,11 +328,9 @@ def fit_mcmc(
     pyro.set_rng_seed(seed)
 
     # Configure a kernel.
-    cond_data = {k: init_data[k] for k in ("feature_scale", "concentration")}
     kernel = NUTS(
-        poutine.condition(model, cond_data),
-        full_mass=[("rate_coef",)],
-        init_strategy=init_to_value(values=init_data),
+        DeterministicMessenger(svi_params)(model),
+        init_strategy=init_to_value(values=svi_params),
         max_tree_depth=max_tree_depth,
         max_plate_nesting=2,
         jit_compile=True,
@@ -311,6 +342,7 @@ def fit_mcmc(
     losses = []
 
     def hook_fn(kernel, params, stage, i):
+        assert set(params).keys() == {"rate_coef"}
         loss = float(kernel._potential_energy_last)
         if log_every and len(losses) % log_every == 0:
             logger.info(f"loss = {loss / num_obs:0.6g}")
@@ -321,7 +353,6 @@ def fit_mcmc(
         warmup_steps=num_warmup,
         num_samples=num_samples,
         hook_fn=hook_fn,
-        save_params=["rate_coef"],
     )
     mcmc.run(dataset["weekly_strains"], dataset["features"])
 
