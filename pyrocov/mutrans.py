@@ -21,6 +21,17 @@ logger = logging.getLogger(__name__)
 # Reasonable values might be week (7), fortnight (14), or month (28)
 TIMESTEP = 14
 
+# The following countries had at least one subregion with at least 5000 samples
+# as of 2021-04-05.
+FINE_COUNTRIES = {
+    "United Kingdom",
+    "Denmark",
+    "Australia",
+    "USA",
+    "Canada",
+    "Germany",
+    "Sweden",
+}
 
 def load_data(
     *,
@@ -64,8 +75,8 @@ def load_data(
         if len(parts) < 2:
             continue
         parts = [p.strip() for p in parts[:3]]
-        if parts[1] not in ("USA", "United Kingdom"):
-            parts = parts[:2]
+        if parts[1] not in FINE_COUNTRIES:
+            parts = parts[:2]  # coarsen to country level
         location = " / ".join(parts)
         p = location_id.setdefault(location, len(location_id))
         s = lineage_id[lineage]
