@@ -39,9 +39,12 @@ def _safe_str(v):
 
 
 def _load_data_filename(args, **kwargs):
-    return "results/mutrans.{}.pt".format(
-        ".".join(["data"] + [f"{k}={_safe_str(v)}" for k, v in sorted(kwargs.items())])
-    )
+    parts = ["data"]
+    for k, v in sorted(kwargs.get("include", {}).items()):
+        parts.append(f"I{k}={_safe_str(v)}")
+    for k, v in sorted(kwargs.get("exclude", {}).items()):
+        parts.append(f"E{k}={_safe_str(v)}")
+    return "results/mutrans.{}.pt".format(".".join(parts))
 
 
 @cached(_load_data_filename)
@@ -171,21 +174,26 @@ def main(args):
     # Configure data holdouts.
     empty_holdout = ()
     holdouts = [
-        (("virus_name_pattern", "^hCoV-19/USA/..-CDC-"),),
-        (("virus_name_pattern", "^hCoV-19/USA/..-CDC-2-"),),
-        (("location_pattern", "^North America / USA"),),
-        (("location_pattern", "^Europe / United Kingdom"),),
+        {"exclude": {"location": "^Europe / United Kingdom"}},
+        {"exclude": {"location": "^North America / USA"}},
+        {"include": {"location": "^Europe / United Kingdom"}},
+        {"include": {"location": "^North America / USA"}},
+        {"include": {"virus_name": "^hCoV-19/USA/..-CDC-"}},
+        {"include": {"virus_name": "^hCoV-19/USA/..-CDC-2-"}},
     ]
 
     configs = [c + (empty_holdout,) for c in guide_configs]
     for holdout in holdouts:
+        holdout = tuple(
+            (k, tuple(sorted(v.items()))) for k, v in sorted(holdout.items())
+        )
         configs.append(best_config + (holdout,))
 
     # Sequentially fit models.
     result = {}
     for config in configs:
         logger.info(f"Config: {config}")
-        holdout = dict(config[-1])
+        holdout = {k: dict(v) for k, v in config[-1]}
         dataset = load_data(args, **holdout)
         if config[0] == "mcmc":
             result[config] = fit_mcmc(args, dataset, *config[1:])

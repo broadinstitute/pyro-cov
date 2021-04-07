@@ -22,7 +22,8 @@ logger = logging.getLogger(__name__)
 TIMESTEP = 14
 
 # The following countries had at least one subregion with at least 5000 samples
-# as of 2021-04-05.
+# as of 2021-04-05, and will be finely partitioned into subregions. Remaining
+# countries will be coarsely aggregated to country level.
 FINE_COUNTRIES = {
     "United Kingdom",
     "Denmark",
@@ -33,17 +34,16 @@ FINE_COUNTRIES = {
     "Sweden",
 }
 
+
 def load_data(
     *,
     device="cpu",
-    virus_name_pattern=None,
-    location_pattern=None,
+    include={},
+    exclude={},
 ):
     logger.info("Loading data")
-    if isinstance(virus_name_pattern, str):
-        virus_name_pattern = re.compile(virus_name_pattern)
-    if isinstance(location_pattern, str):
-        location_pattern = re.compile(location_pattern)
+    include = {k: re.compile(v) for k, v in include.items()}
+    exclude = {k: re.compile(v) for k, v in exclude.items()}
     with open("results/gisaid.columns.pkl", "rb") as f:
         columns = pickle.load(f)
     logger.info("Training on {} rows with columns:".format(len(columns["day"])))
@@ -67,16 +67,16 @@ def load_data(
         if lineage not in lineage_id:
             logger.warning(f"WARNING skipping unsampled lineage {lineage}")
             continue
-        if virus_name_pattern and not virus_name_pattern.search(virus_name):
+        if not all(v.search(locals()[k]) for k, v in include.items()):
             continue
-        if location_pattern and not location_pattern.search(location):
+        if any(v.search(locals()[k]) for k, v in exclude.items()):
             continue
         parts = location.split("/")
         if len(parts) < 2:
             continue
         parts = [p.strip() for p in parts[:3]]
         if parts[1] not in FINE_COUNTRIES:
-            parts = parts[:2]  # coarsen to country level
+            parts = parts[:2]
         location = " / ".join(parts)
         p = location_id.setdefault(location, len(location_id))
         s = lineage_id[lineage]
