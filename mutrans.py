@@ -199,6 +199,7 @@ def main(args):
             result[config] = fit_mcmc(args, dataset, *config[1:])
         else:
             result[config] = fit_svi(args, dataset, *config)
+        result[config]["mutations"] = dataset["mutations"]
     logger.info("saving results/mutrans.pt")
     torch.save(result, "results/mutrans.pt")
 
