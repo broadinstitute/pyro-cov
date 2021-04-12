@@ -22,7 +22,14 @@ DATE_FORMATS = {4: "%Y", 7: "%Y-%m", 10: "%Y-%m-%d"}
 
 
 def parse_date(string):
-    return datetime.datetime.strptime(string, DATE_FORMATS[len(string)])
+    fmt = DATE_FORMATS.get(len(string))
+    if fmt is None:
+        # Attempt to fix poorly formated dates like 2020-09-1.
+        parts = string.split("-")
+        parts = parts[:1] + [f"{int(p):>02d}" for p in parts[1:]]
+        string = "-".join(parts)
+        fmt = DATE_FORMATS[len(string)]
+    return datetime.datetime.strptime(string, fmt)
 
 
 FIELDS = ["virus_name", "accession_id", "collection_date", "location", "add_location"]

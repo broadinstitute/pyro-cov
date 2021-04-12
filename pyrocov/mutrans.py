@@ -49,16 +49,15 @@ def load_data(
     logger.info("Training on {} rows with columns:".format(len(columns["day"])))
     logger.info(", ".join(columns.keys()))
     aa_features = torch.load("results/nextclade.features.pt")
-    logger.info("Loaded {} feature matrix".format(aa_features["features"].shape))
-
-    # Aggregate regions.
     features = aa_features["features"].to(
         device=device, dtype=torch.get_default_dtype()
     )
+    logger.info("Loaded {} feature matrix".format(features.shape))
+
+    # Aggregate regions.
     lineages = list(map(pangolin.compress, columns["lineage"]))
     lineage_id_inv = list(map(pangolin.compress, aa_features["lineages"]))
     lineage_id = {k: i for i, k in enumerate(lineage_id_inv)}
-
     sparse_data = Counter()
     location_id = {}
     for virus_name, day, location, lineage in zip(
@@ -100,14 +99,6 @@ def load_data(
     locations = [k for k, v in location_id.items() if v in ok_region_set]
     location_id = dict(zip(locations, range(len(ok_regions))))
 
-    # Filter mutations.
-    mutations = aa_features["mutations"]
-    num_strains_with_mutation = (features >= 0.5).sum(0)
-    ok_mutations = (num_strains_with_mutation >= 1).nonzero(as_tuple=True)[0]
-    logger.info(f"Keeping {len(ok_mutations)}/{len(mutations)} mutations")
-    mutations = [mutations[i] for i in ok_mutations.tolist()]
-    features = features.index_select(1, ok_mutations)
-
     # Construct region-local time scales centered around observations.
     num_obs = weekly_strains.sum(-1)
     local_time = torch.arange(float(len(num_obs))) * TIMESTEP / 365.25  # in years
@@ -116,7 +107,7 @@ def load_data(
 
     return {
         "location_id": location_id,
-        "mutations": mutations,
+        "mutations": aa_features["mutations"],
         "weekly_strains": weekly_strains,
         "features": features,
         "lineage_id": lineage_id,

@@ -22,12 +22,40 @@ def main(args):
             counts = lineage_mutation_counts[lineage]
             for col in ["aaSubstitutions", "aaDeletions"]:
                 ms = row[col]
-                if isinstance(ms, str):
-                    counts.update(ms.split(","))
+                if not isinstance(ms, str):
+                    continue
+                ms = ms.split(",")
+                counts.update(ms)
+                # Add within-gene pairs of mutations.
+                by_gene = defaultdict(list)
+                for m in ms:
+                    g, m = m.split(":")
+                    by_gene[g].append(m)
+                for g, ms in by_gene.items():
+                    ms.sort()
+                    for i, m1 in enumerate(ms):
+                        m1 = g + m1
+                        for m2 in ms[i + 1 :]:
+                            counts[f"{g}:{m1},{m2}"] += 1
+
+    # Filter to features that occur in the majority of at least one lineage.
+    total = len(set().union(*lineage_mutation_counts.values()))
+    mutations = set()
+    for lineage, mutation_counts in lineage_mutation_counts.items():
+        denominator = lineage_counts[lineage]
+        for m, count in mutation_counts.items():
+            if count / denominator >= args.thresh:
+                mutations.add(m)
+    by_num = Counter(m.count(",") for m in mutations)
+    logger.info(
+        "Keeping only ({} single + {} double) = {} of {} mutations".format(
+            by_num[0], by_num[1], len(mutations), total
+        )
+    )
 
     # Convert to dense features.
     lineages = sorted(lineage_counts)
-    mutations = sorted(set().union(*lineage_mutation_counts.values()))
+    mutations = sorted(mutations)
     lineage_ids = {k: i for i, k in enumerate(sorted(lineages))}
     mutation_ids = {k: i for i, k in enumerate(mutations)}
     features = torch.zeros(len(lineage_ids), len(mutation_ids))
@@ -35,8 +63,9 @@ def main(args):
         i = lineage_ids[lineage]
         denominator = lineage_counts[lineage]
         for mutation, count in counts.items():
-            j = mutation_ids[mutation]
-            features[i, j] = count / denominator
+            j = mutation_ids.get(mutation, None)
+            if j is not None:
+                features[i, j] = count / denominator
 
     result = {
         "lineages": lineages,
@@ -49,6 +78,7 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Featurize nextclade mutations")
+    parser.add_argument("--thresh", default=0.5, type=float)
     parser.add_argument("--tsv-file-in", default="results/gisaid.subset.*.tsv")
     parser.add_argument("--features-file-out", default="results/nextclade.features.pt")
     args = parser.parse_args()
