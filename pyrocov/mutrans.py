@@ -63,12 +63,13 @@ def load_data(
     for virus_name, day, location, lineage in zip(
         columns["virus_name"], columns["day"], columns["location"], lineages
     ):
+        row = {"virus_name": virus_name, "location": location}
         if lineage not in lineage_id:
             logger.warning(f"WARNING skipping unsampled lineage {lineage}")
             continue
-        if not all(v.search(locals()[k]) for k, v in include.items()):
+        if not all(v.search(row[k]) for k, v in include.items()):
             continue
-        if any(v.search(locals()[k]) for k, v in exclude.items()):
+        if any(v.search(row[k]) for k, v in exclude.items()):
             continue
         parts = location.split("/")
         if len(parts) < 2:
