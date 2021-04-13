@@ -140,7 +140,7 @@ def model(dataset):
     # Assume relative growth rate depends on mutation features but not time or place.
     feature_scale = pyro.sample(
         "feature_scale",
-        dist.LogNormal(0, 1).expand([feature_order_max + 1]).to_event(1)
+        dist.LogNormal(0, 1).expand([feature_order_max + 1]).to_event(1),
     )
     rate_coef = pyro.sample(
         "rate_coef", SoftLaplace(0, feature_scale[feature_order]).to_event(1)
@@ -342,7 +342,7 @@ def fit_svi(
         if step % log_every == 0:
             concentration = param_store["concentration_loc"].item()
             feature_scale = param_store["feature_scale_loc"].tolist()
-            feature_scale = "[{}]".format(", ".join(f"{f:0.3g}" for f in feature_scale)
+            feature_scale = "[{}]".format(", ".join(f"{f:0.3g}" for f in feature_scale))
             logger.info(
                 f"step {step: >4d} loss = {loss / num_obs:0.6g}\t"
                 f"conc. = {concentration:0.3g}\t"
