@@ -106,11 +106,17 @@ def load_data(
     local_time = local_time[:, None]
     local_time = local_time - (local_time * num_obs).sum(0) / num_obs.sum(0)
 
+    # Sort features into numbers of mutations.
+    mutations = aa_features["mutations"]
+    feature_order = torch.tensor([m.count(",") for m in mutations])
+
     return {
         "location_id": location_id,
-        "mutations": aa_features["mutations"],
+        "mutations": mutations,
         "weekly_strains": weekly_strains,
         "features": features,
+        "feature_order": feature_order,
+        "feature_order_max": feature_order.max().item(),
         "lineage_id": lineage_id,
         "lineage_id_inv": lineage_id_inv,
         "local_time": local_time,
@@ -118,20 +124,26 @@ def load_data(
 
 
 def model(dataset):
+    local_time = dataset["local_time"]
     weekly_strains = dataset["weekly_strains"]
     features = dataset["features"]
-    local_time = dataset["local_time"]
+    feature_order = dataset["feature_order"]
+    feature_order_max = dataset["feature_order_max"]
     assert weekly_strains.shape[-1] == features.shape[0]
     assert local_time.shape == weekly_strains.shape[:2]
+    assert feature_order.size(0) == features.size(-1)
     T, P, S = weekly_strains.shape
     S, F = features.shape
     time_plate = pyro.plate("time", T, dim=-2)
     place_plate = pyro.plate("place", P, dim=-1)
 
     # Assume relative growth rate depends on mutation features but not time or place.
-    feature_scale = pyro.sample("feature_scale", dist.LogNormal(0, 1))
+    feature_scale = pyro.sample(
+        "feature_scale",
+        dist.LogNormal(0, 1).expand([feature_order_max + 1]).to_event(1)
+    )
     rate_coef = pyro.sample(
-        "rate_coef", SoftLaplace(0, feature_scale).expand([F]).to_event(1)
+        "rate_coef", SoftLaplace(0, feature_scale[feature_order]).to_event(1)
     )
     rate = pyro.deterministic("rate", rate_coef @ features.T, event_dim=1)
 
@@ -167,12 +179,17 @@ class Guide:
     def __call__(self, dataset):
         weekly_strains = dataset["weekly_strains"]
         features = dataset["features"]
+        feature_order_max = dataset["feature_order_max"]
         assert weekly_strains.shape[-1] == features.shape[0]
         T, P, S = weekly_strains.shape
         S, F = features.shape
 
         # Map estimate global parameters.
-        map_estimate("feature_scale", lambda: torch.tensor(1.0), constraints.positive)
+        map_estimate(
+            "feature_scale",
+            lambda: torch.ones(feature_order_max + 1),
+            constraints.independent(constraints.positive, 1),
+        )
         map_estimate("concentration", lambda: torch.tensor(10.0), constraints.positive)
 
         # Sample rate_coef from a full-rank multivariate normal distribution.
@@ -324,11 +341,12 @@ def fit_svi(
         losses.append(loss)
         if step % log_every == 0:
             concentration = param_store["concentration_loc"].item()
-            feature_scale = param_store["feature_scale_loc"].item()
+            feature_scale = param_store["feature_scale_loc"].tolist()
+            feature_scale = "[{}]".format(", ".join(f"{f:0.3g}" for f in feature_scale)
             logger.info(
                 f"step {step: >4d} loss = {loss / num_obs:0.6g}\t"
                 f"conc. = {concentration:0.3g}\t"
-                f"f.scale = {feature_scale:0.3g}"
+                f"f.scale = {feature_scale}"
             )
 
     result = guide.stats(dataset)
@@ -346,7 +364,7 @@ def fit_mcmc(
     log_every=50,
     seed=20210319,
 ):
-    logger.info("Fitting via MCMC")
+    logger.info("Fitting via MCMC over {} parameters".format(len(dataset["mutations"])))
     pyro.set_rng_seed(seed)
 
     # Configure a kernel.

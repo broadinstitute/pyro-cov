@@ -1,6 +1,7 @@
 import argparse
 import glob
 import logging
+import re
 from collections import Counter, defaultdict
 
 import pandas as pd
@@ -32,9 +33,9 @@ def main(args):
                     g, m = m.split(":")
                     by_gene[g].append(m)
                 for g, ms in by_gene.items():
-                    ms.sort()
+                    # Sort by position, then alphabetical.
+                    ms.sort(key=lambda m: (int(re.search(r"\d+", m).group(0)), m))
                     for i, m1 in enumerate(ms):
-                        m1 = g + m1
                         for m2 in ms[i + 1 :]:
                             counts[f"{g}:{m1},{m2}"] += 1
 
@@ -55,8 +56,8 @@ def main(args):
 
     # Convert to dense features.
     lineages = sorted(lineage_counts)
-    mutations = sorted(mutations)
-    lineage_ids = {k: i for i, k in enumerate(sorted(lineages))}
+    mutations = sorted(mutations, key=lambda m: (m.count(","), m))
+    lineage_ids = {k: i for i, k in enumerate(lineages)}
     mutation_ids = {k: i for i, k in enumerate(mutations)}
     features = torch.zeros(len(lineage_ids), len(mutation_ids))
     for lineage, counts in lineage_mutation_counts.items():
