@@ -14,6 +14,7 @@ from subprocess import check_call
 from pyrocov import pangolin
 from pyrocov.fasta import ShardedFastaWriter
 from pyrocov.hashsubset import RandomSubDict
+from pyrocov.mutrans import START_DATE
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(format="%(relativeCreated) 9d %(message)s", level=logging.INFO)
@@ -125,7 +126,7 @@ if __name__ == "__main__":
     parser.add_argument("--columns-file-out", default="results/gisaid.columns.pkl")
     parser.add_argument("--fasta-file-out", default="results/gisaid.subset.*.fasta")
     parser.add_argument("--stats-file-out", default="results/gisaid.stats.pkl")
-    parser.add_argument("--start-date", default="2019-12-01")
+    parser.add_argument("--start-date", default=START_DATE)
     parser.add_argument("--min-nchars", default=29000, type=int)
     parser.add_argument("--max-nchars", default=31000, type=int)
     parser.add_argument("-s", "--samples-per-lineage", default=30, type=int)

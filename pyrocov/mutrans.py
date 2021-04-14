@@ -1,8 +1,9 @@
+import datetime
 import logging
 import math
 import pickle
 import re
-from collections import Counter
+from collections import Counter, OrderedDict
 
 import pyro
 import pyro.distributions as dist
@@ -13,6 +14,7 @@ from pyro.infer.autoguide import init_to_value
 from pyro.optim import ClippedAdam
 from pyro.poutine.messenger import Messenger
 
+import pyrocov.geo
 from pyrocov import pangolin
 from pyrocov.distributions import SoftLaplace
 
@@ -20,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 # Reasonable values might be week (7), fortnight (14), or month (28)
 TIMESTEP = 14
+START_DATE = "2019-12-01"
 
 # The following countries had at least one subregion with at least 5000 samples
 # as of 2021-04-05, and will be finely partitioned into subregions. Remaining
@@ -35,7 +38,7 @@ FINE_COUNTRIES = {
 }
 
 
-def load_data(
+def load_gisaid_data(
     *,
     device="cpu",
     include={},
@@ -59,7 +62,7 @@ def load_data(
     lineage_id_inv = list(map(pangolin.compress, aa_features["lineages"]))
     lineage_id = {k: i for i, k in enumerate(lineage_id_inv)}
     sparse_data = Counter()
-    location_id = {}
+    location_id = OrderedDict()
     for virus_name, day, location, lineage in zip(
         columns["virus_name"], columns["day"], columns["location"], lineages
     ):
@@ -98,7 +101,7 @@ def load_data(
     logger.info(f"Keeping {len(ok_regions)}/{weekly_strains.size(1)} regions")
     weekly_strains = weekly_strains.index_select(1, ok_regions)
     locations = [k for k, v in location_id.items() if v in ok_region_set]
-    location_id = dict(zip(locations, range(len(ok_regions))))
+    location_id = OrderedDict(zip(locations, range(len(locations))))
 
     # Construct region-local time scales centered around observations.
     num_obs = weekly_strains.sum(-1)
@@ -120,6 +123,51 @@ def load_data(
         "lineage_id": lineage_id,
         "lineage_id_inv": lineage_id_inv,
         "local_time": local_time,
+    }
+
+
+def load_jhu_data(gisaid_data):
+    # Load raw JHU case count data.
+    us_cases_df = pyrocov.geo.read_csv("time_series_covid19_confirmed_US.csv")
+    global_cases_df = pyrocov.geo.read_csv("time_series_covid19_confirmed_global.csv")
+    daily_cases = torch.cat(
+        [
+            pyrocov.geo.pd_to_torch(us_cases_df, columns=slice(11, None)),
+            pyrocov.geo.pd_to_torch(global_cases_df, columns=slice(4, None)),
+        ]
+    ).T
+    logger.info(
+        "Loaded {} x {} daily case data, totaling {}".format(
+            *daily_cases.shape, daily_cases.sum().item()
+        )
+    )
+
+    # Convert JHU locations to GISAID locations.
+    locations = list(gisaid_data["location_id"])
+    matrix = pyrocov.geo.gisaid_to_jhu_location(locations, us_cases_df, global_cases_df)
+    assert matrix.shape == (len(locations), daily_cases.shape[-1])
+    daily_cases = daily_cases @ matrix.T
+    daily_cases[1:] -= daily_cases[:-1].clone()  # cumulative -> density
+    daily_cases.clamp_(min=0)
+    assert daily_cases.shape[1] == len(gisaid_data["location_id"])
+
+    # Convert daily counts to TIMESTEP counts (e.g. weekly).
+    start_date = datetime.datetime.strptime(START_DATE, "%Y-%m-%d")
+    jhu_start_date = pyrocov.geo.parse_date(us_cases_df.columns[11])
+    assert start_date < jhu_start_date
+    dt = (jhu_start_date - start_date).days
+    T = len(gisaid_data["weekly_strains"])
+    weekly_cases = daily_cases.new_zeros(T, len(locations))
+    for w in range(TIMESTEP):
+        t0 = (w + dt) // TIMESTEP
+        source = daily_cases[w::TIMESTEP]
+        destin = weekly_cases[t0 : t0 + len(source)]
+        destin[:] += source[: len(destin)]
+    assert weekly_cases.sum() > 0
+
+    return {
+        "daily_cases": daily_cases.clamp(min=0),
+        "weekly_cases": weekly_cases.clamp(min=0),
     }
 
 

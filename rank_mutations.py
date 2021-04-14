@@ -34,7 +34,7 @@ def cached(filename):
 
 @cached("results/mutrans.data.pt")
 def load_data(args):
-    return mutrans.load_data(device=args.device)
+    return mutrans.load_gisaid_data(device=args.device)
 
 
 @cached("results/rank_mutations.rank_mf_svi.pt")
