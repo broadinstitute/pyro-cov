@@ -1,6 +1,8 @@
 import datetime
 import logging
 import os
+import typing
+from collections import OrderedDict, defaultdict
 
 import pandas as pd
 import torch
@@ -45,6 +47,7 @@ GISAID_TO_JHU = {
     "la reunion": ("france", "reunion"),
     "martinique": ("france", "martinique"),
     "mayotte": ("france", "mayotte"),
+    "méxico": ("mexico",),
     "myanmar": ("burma",),
     "netherlans": ("netherlands",),
     "northern mariana islands": ("us", "northern mariana islands"),
@@ -106,7 +109,7 @@ def pd_to_torch(df, *, columns):
     if isinstance(columns, slice):
         columns = df.columns[columns]
     df = df[columns]
-    return torch.from_numpy(df.to_numpy()).float()
+    return torch.from_numpy(df.to_numpy()).type_as(torch.tensor(()))
 
 
 def parse_date(string):
@@ -114,10 +117,24 @@ def parse_date(string):
     return datetime.datetime(day=day, month=month, year=2000 + year_since_2000)
 
 
-def gisaid_to_jhu_location(gisaid_columns, jhu_us_df, jhu_global_df):
+def gisaid_to_jhu_location(
+    gisaid_locations: typing.List[str],
+    jhu_us_df: pd.DataFrame,
+    jhu_global_df: pd.DataFrame,
+):
     """
     Fuzzily match GISAID locations with Johns Hopkins locations.
+
+    :param list gisaid_locations: A list of (unique) GISAID location names.
+    :param pandas.DataFrame jhu_us_df: Johns Hopkins daily cases dataframe,
+        ``time_series_covid19_confirmed_US.csv``.
+    :param pandas.DataFrame jhu_global_df: Johns Hopkins daily cases dataframe,
+        ``time_series_covid19_confirmed_global.csv``.
+    :returns: A nonnegative weight matrix of shape
+        ``(len(gisaid_locations), len(jhu_us_df) + len(jhu_global_df))``
+        assuming GISAID locations are non-overlapping.
     """
+    assert isinstance(gisaid_locations, list)
     logger.info("Joining GISAID and JHU region codes")
 
     # Extract location tuples from JHU data.
@@ -135,18 +152,23 @@ def gisaid_to_jhu_location(gisaid_columns, jhu_us_df, jhu_global_df):
         else:
             jhu_locations.append((a.lower(),))
     assert len(jhu_locations) == len(jhu_us_df) + len(jhu_global_df)
+    logger.info(
+        f"Matching {len(gisaid_locations)} GISAID regions "
+        f"to {len(jhu_locations)} JHU fuzzy regions"
+    )
+    jhu_location_ids = {k: i for i, k in enumerate(jhu_locations)}
 
     # Extract location tuples from GISAID data.
-    gisaid_to_jhu = {
-        key: tuple(p.strip() for p in key.lower().split("/")[1:])
-        for key in set(gisaid_columns["location"])
-    }
+    gisaid_to_jhu = OrderedDict(
+        (key, tuple(p.strip() for p in key.lower().split("/")[1:]))
+        for key in gisaid_locations
+    )
 
-    # Ensure each GISAID location maps to a prefix of some JHU tuple.
-    jhu_prefixes = set(jhu_locations) | {()}
+    # Ensure each GISAID location maps at least approximately to some JHU tuple.
+    jhu_prefixes = defaultdict(list)  # maps prefixes to full JHU locations
     for value in jhu_locations:
-        for i in range(1, len(value)):
-            jhu_prefixes.add(value[:i])
+        for i in range(1 + len(value)):
+            jhu_prefixes[value[:i]].append(value)
     for key, value in list(gisaid_to_jhu.items()):
         if value and value[0] in GISAID_TO_JHU:
             value = GISAID_TO_JHU[value[0]] + value[1:]
@@ -156,26 +178,14 @@ def gisaid_to_jhu_location(gisaid_columns, jhu_us_df, jhu_global_df):
                 raise ValueError(f"Failed to find GISAID loctaion '{key}' in JHU data")
         gisaid_to_jhu[key] = value
 
-    # Construct a matrix projecting GISAID locations to JHU locations.
-    gisaid_keys = {key: i for i, key in enumerate(sorted(gisaid_to_jhu))}
-    gisaid_values = {gisaid_to_jhu[key]: i for key, i in gisaid_keys.items()}
-    logger.info(
-        f"Matching {len(gisaid_keys)} GISAID regions to {len(gisaid_values)} JHU fuzzy regions"
-    )
-    sample_matrix = torch.zeros(len(gisaid_to_jhu), len(jhu_locations))
-    for j, value in enumerate(jhu_locations):
-        for length in range(1 + len(value)):
-            fuzzy_value = value[:length]
-            i = gisaid_values.get(fuzzy_value, None)
-            if i is not None:
-                sample_matrix[i, j] = 1
+    # Construct a matrix many-to-many matching GISAID locations to JHU locations.
+    matrix = torch.zeros(len(gisaid_locations), len(jhu_locations))
+    for i, (gisaid_tuple, jhu_prefix) in enumerate(gisaid_to_jhu.items()):
+        for jhu_location in jhu_prefixes[jhu_prefix]:
+            j = jhu_location_ids[jhu_location]
+            matrix[i, j] = 1
+    # Distribute JHU cases evenly among GISAID locations.
+    matrix /= matrix.sum(-1, True)
+    matrix[~(matrix > 0)] = 0  # remove NANs
 
-    # Construct a sample_region of GISAID locations.
-    sample_region = torch.empty(len(gisaid_columns["location"]), dtype=torch.long)
-    for i, key in enumerate(gisaid_columns["location"]):
-        sample_region[i] = gisaid_keys[key]
-
-    # FIXME we should use inclusion-exlcusion in case some GISAID regions are
-    # sub-regions of other GISAID regions.
-
-    return sample_region, sample_matrix, jhu_locations
+    return matrix
