@@ -122,13 +122,6 @@ def fit_mcmc(
     result["walltime"] = default_timer() - start_time
 
     result["args"] = args
-    result["median"] = median = svi_params.copy()
-    for k, v in result["samples"].items():
-        median[k] = v.median(0).values.squeeze()
-    result["samples"] = {"rate_coef": result["samples"]["rate_coef"].squeeze()}
-    result["mean"] = result["samples"]["rate_coef"].mean(0)
-    result["std"] = result["samples"]["rate_coef"].std(0)
-
     return result
 
 
