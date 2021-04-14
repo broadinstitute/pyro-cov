@@ -39,7 +39,7 @@ def _safe_str(v):
 
 
 def _load_data_filename(args, **kwargs):
-    parts = ["data"]
+    parts = ["data", str(args.max_feature_order)]
     for k, v in sorted(kwargs.get("include", {}).items()):
         parts.append(f"I{k}={_safe_str(v)}")
     for k, v in sorted(kwargs.get("exclude", {}).items()):
@@ -49,7 +49,9 @@ def _load_data_filename(args, **kwargs):
 
 @cached(_load_data_filename)
 def load_data(args, **kwargs):
-    return mutrans.load_data(device=args.device, **kwargs)
+    return mutrans.load_gisaid_data(
+        max_feature_order=args.max_feature_order, device=args.device, **kwargs
+    )
 
 
 def _fit_filename(name, *args):
@@ -206,6 +208,7 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Fit mutation-transmissibility models")
+    parser.add_argument("--max-feature-order", default=0, type=int)
     parser.add_argument("--best", action="store_true", help="fit only one config")
     parser.add_argument("--mcmc", action="store_true", help="run only MCMC inference")
     parser.add_argument("-g", "--guide-type", default="mvn_dependent")

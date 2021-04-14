@@ -40,6 +40,7 @@ FINE_COUNTRIES = {
 
 def load_gisaid_data(
     *,
+    max_feature_order=0,
     device="cpu",
     include={},
     exclude={},
@@ -51,10 +52,17 @@ def load_gisaid_data(
         columns = pickle.load(f)
     logger.info("Training on {} rows with columns:".format(len(columns["day"])))
     logger.info(", ".join(columns.keys()))
+
+    # Filter features into numbers of mutations.
     aa_features = torch.load("results/nextclade.features.pt")
+    mutations = aa_features["mutations"]
     features = aa_features["features"].to(
         device=device, dtype=torch.get_default_dtype()
     )
+    keep = [m.count(",") <= max_feature_order for m in mutations]
+    mutations = [m for k, m in zip(keep, mutations) if k]
+    features = features[:, keep]
+    feature_order = torch.tensor([m.count(",") for m in mutations])
     logger.info("Loaded {} feature matrix".format(features.shape))
 
     # Aggregate regions.
@@ -108,10 +116,6 @@ def load_gisaid_data(
     local_time = torch.arange(float(len(num_obs))) * TIMESTEP / 365.25  # in years
     local_time = local_time[:, None]
     local_time = local_time - (local_time * num_obs).sum(0) / num_obs.sum(0)
-
-    # Sort features into numbers of mutations.
-    mutations = aa_features["mutations"]
-    feature_order = torch.tensor([m.count(",") for m in mutations])
 
     return {
         "location_id": location_id,
