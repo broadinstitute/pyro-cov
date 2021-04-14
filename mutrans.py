@@ -39,7 +39,7 @@ def _safe_str(v):
 
 
 def _load_data_filename(args, **kwargs):
-    parts = ["data", int(args.max_feature_order)]
+    parts = ["data", str(args.max_feature_order)]
     for k, v in sorted(kwargs.get("include", {}).items()):
         parts.append(f"I{k}={_safe_str(v)}")
     for k, v in sorted(kwargs.get("exclude", {}).items()):
