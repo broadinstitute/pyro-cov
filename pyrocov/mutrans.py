@@ -313,7 +313,7 @@ class Guide:
             scale_tril = scale[:, None] * scale_tril
             result["cov"] = {"rate_coef": scale_tril @ scale_tril.T}
             scale_tril = dataset["features"] @ scale_tril
-            result["cov"]["rate"] = scale_tril @ scale_tril
+            result["cov"]["rate"] = scale_tril @ scale_tril.T
             result["var"] = {k: v.diag() for k, v in result["cov"].items()}
             result["std"] = {k: v.sqrt() for k, v in result["var"].items()}
         return result
@@ -461,7 +461,7 @@ def fit_mcmc(
     result["losses"] = losses
     result["diagnostics"] = mcmc.diagnostics()
     result["median"] = median = svi_params.copy()
-    for k, v in result["samples"].items():
+    for k, v in samples.items():
         median[k] = v.median(0).values.squeeze()
     result["mean"] = {k: v.mean(0).squeeze() for k, v in samples.items()}
     result["std"] = {k: v.std(0).squeeze() for k, v in samples.items()}

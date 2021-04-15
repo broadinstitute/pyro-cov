@@ -94,6 +94,7 @@ def fit_svi(
 def fit_mcmc(
     args,
     dataset,
+    num_steps=10001,
     num_warmup=1000,
     num_samples=1000,
     max_tree_depth=10,
@@ -103,7 +104,7 @@ def fit_mcmc(
         args,
         dataset,
         "mvn_dependent",
-        10001,
+        num_steps,
         0.01,
         0.1,
         holdout,
@@ -138,6 +139,7 @@ def main(args):
         fit_mcmc(
             args,
             dataset,
+            args.num_steps,
             args.num_warmup,
             args.num_samples,
             args.max_tree_depth,
