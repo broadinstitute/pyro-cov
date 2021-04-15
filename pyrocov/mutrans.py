@@ -303,17 +303,19 @@ class Guide:
     def stats(self, dataset):
         result = {
             "median": self.median(dataset),
-            "mean": pyro.param("rate_coef_loc").detach(),
+            "mean": {"rate_coef": pyro.param("rate_coef_loc").detach()},
         }
         if self.guide_type == "normal":
-            result["std"] = pyro.param("rate_coef_scale").detach()
+            result["std"] = {"rate_coef": pyro.param("rate_coef_scale").detach()}
         elif "mvn" in self.guide_type:
             scale = pyro.param("rate_coef_scale").detach()
             scale_tril = pyro.param("rate_coef_scale_tril").detach()
             scale_tril = scale[:, None] * scale_tril
-            result["cov"] = scale_tril @ scale_tril.T
-            result["var"] = result["cov"].diag()
-            result["std"] = result["var"].sqrt()
+            result["cov"] = {"rate_coef": scale_tril @ scale_tril.T}
+            scale_tril = dataset["features"] @ scale_tril
+            result["cov"]["rate"] = scale_tril @ scale_tril
+            result["var"] = {k: v.diag() for k, v in result["cov"].items()}
+            result["std"] = {k: v.sqrt() for k, v in result["var"].items()}
         return result
 
 
@@ -458,5 +460,11 @@ def fit_mcmc(
     result = {}
     result["losses"] = losses
     result["diagnostics"] = mcmc.diagnostics()
-    result["samples"] = samples
+    result["median"] = median = svi_params.copy()
+    for k, v in result["samples"].items():
+        median[k] = v.median(0).values.squeeze()
+    result["mean"] = {k: v.mean(0).squeeze() for k, v in samples.items()}
+    result["std"] = {k: v.std(0).squeeze() for k, v in samples.items()}
+    # Save only a subset of samples, since data can be large.
+    result["samples"] = {k: samples[k].squeeze() for k in ["rate_coef", "rate"]}
     return result
