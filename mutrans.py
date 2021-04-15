@@ -145,7 +145,13 @@ def main(args):
             args.max_tree_depth,
         )
         return
-    mcmc_config = ("mcmc", args.num_warmup, args.num_samples, args.max_tree_depth)
+    mcmc_config = (
+        "mcmc",
+        args.num_steps,
+        args.num_warmup,
+        args.num_samples,
+        args.max_tree_depth,
+    )
 
     # Configure guides.
     best_config = (
