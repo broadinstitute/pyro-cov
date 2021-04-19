@@ -2,18 +2,15 @@
 
 import argparse
 import datetime
-import glob
 import json
 import logging
 import os
 import pickle
 import re
 from collections import Counter, defaultdict
-from subprocess import check_call
 
 from pyrocov import pangolin
-from pyrocov.fasta import ShardedFastaWriter
-from pyrocov.hashsubset import RandomSubDict
+from pyrocov.fasta import NextcladeDB
 from pyrocov.mutrans import START_DATE
 
 logger = logging.getLogger(__name__)
@@ -33,6 +30,26 @@ def parse_date(string):
     return datetime.datetime.strptime(string, fmt)
 
 
+def count_mutations(counts, row):
+    for col in ["aaSubstitutions", "aaDeletions"]:
+        ms = row[col]
+        if not isinstance(ms, str):
+            continue
+        ms = ms.split(",")
+        counts.update(ms)
+        # Add within-gene pairs of mutations.
+        by_gene = defaultdict(list)
+        for m in ms:
+            g, m = m.split(":")
+            by_gene[g].append(m)
+        for g, ms in by_gene.items():
+            # Sort by position, then alphabetical.
+            ms.sort(key=lambda m: (int(re.search(r"\d+", m).group(0)), m))
+            for i, m1 in enumerate(ms):
+                for m2 in ms[i + 1 :]:
+                    counts[f"{g}:{m1},{m2}"] += 1
+
+
 FIELDS = ["virus_name", "accession_id", "collection_date", "location", "add_location"]
 
 
@@ -47,8 +64,9 @@ def main(args):
 
     columns = defaultdict(list)
     stats = defaultdict(Counter)
+    stats["mutations_by_lineage"] = defaultdict(Counter)
     covv_fields = ["covv_" + key for key in FIELDS]
-    subsamples = defaultdict(lambda: RandomSubDict(args.samples_per_lineage))
+    db = NextcladeDB()
 
     with open(args.gisaid_file_in) as f:
         for i, line in enumerate(f):
@@ -75,17 +93,19 @@ def main(args):
             stats["location"][datum["covv_location"]] += 1
             stats["lineage"][lineage] += 1
 
-            # Collect samples.
-            if args.fasta_file_out:
-                seq = datum["sequence"].replace("\n", "")
-                parts = re.findall("[ACGT]+", seq)
-                if args.min_nchars <= sum(map(len, parts)) <= args.max_nchars:
-                    subsamples[lineage][datum["covv_accession_id"]] = datum["sequence"]
+            # Count mutations via nextclade.
+            seq = datum["sequence"].replace("\n", "")
+            parts = re.findall("[ACGT]+", seq)
+            if args.min_nchars <= sum(map(len, parts)) <= args.max_nchars:
+                db.schedule(
+                    datum["sequence"], count_mutations, stats["mutations"][lineage]
+                )
 
             if i % args.log_every == 0:
                 print(".", end="", flush=True)
             if i >= args.truncate:
                 break
+    db.wait()
 
     num_dropped = i + 1 - len(columns["day"])
     logger.info(f"dropped {num_dropped}/{i+1} = {num_dropped/(i+1):0.2g}% rows")
@@ -98,25 +118,6 @@ def main(args):
     with open(args.stats_file_out, "wb") as f:
         pickle.dump(dict(stats), f)
 
-    num_sequences = sum(len(v) for v in subsamples.values())
-    logger.info(f"saving {num_sequences} sequences to {args.fasta_file_out}")
-    with ShardedFastaWriter(args.fasta_file_out) as f:
-        for lineage, samples in subsamples.items():
-            for accession_id, sequence in samples.items():
-                f.write(f"{lineage} {accession_id}", sequence)
-
-    for fasta_filename in glob.glob(args.fasta_file_out):
-        tsv_filename = fasta_filename.replace(".fasta", ".tsv")
-        cmd = [
-            "nextclade",
-            "--input-fasta",
-            fasta_filename,
-            "--output-tsv",
-            tsv_filename,
-        ]
-        logger.info(" ".join(cmd))
-        check_call(cmd)
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Preprocess GISAID data")
@@ -124,7 +125,6 @@ if __name__ == "__main__":
         "--gisaid-file-in", default=os.path.expanduser("~/data/gisaid/provision.json")
     )
     parser.add_argument("--columns-file-out", default="results/gisaid.columns.pkl")
-    parser.add_argument("--fasta-file-out", default="results/gisaid.subset.*.fasta")
     parser.add_argument("--stats-file-out", default="results/gisaid.stats.pkl")
     parser.add_argument("--start-date", default=START_DATE)
     parser.add_argument("--min-nchars", default=29000, type=int)
