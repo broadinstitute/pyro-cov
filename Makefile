@@ -18,7 +18,7 @@ test: lint data FORCE
 
 update: FORCE
 	python git_pull.py cov-lineages/lineages-website
-	#python git_pull.py CSSEGISandData/COVID-19
+	python git_pull.py CSSEGISandData/COVID-19
 	#python git_pull.py owid/covid-19-data
 	(cd ~/data/gisaid ; ./pull)
 	time nice python preprocess_gisaid.py
