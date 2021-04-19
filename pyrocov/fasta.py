@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 def hash_sequence(seq):
     hasher = hashlib.sha1()
-    hasher.update(seq.replace("\n", ""))
+    hasher.update(seq.replace("\n", "").encode("utf-8"))
     return hasher.hexdigest()
 
 
@@ -32,7 +32,7 @@ class NextcladeDB:
         if os.path.exists(self.rows_filename):
             with open(self.rows_filename) as f:
                 for line in f:
-                    key = line.lsplit("\t", 1)[0]
+                    key = line.split("\t", 1)[0]
                     self._already_aligned.add(key)
 
         self.max_fasta_count = max_fasta_count
@@ -101,7 +101,7 @@ class NextcladeDB:
         os.remove(self.fasta_filename)
         os.remove(self.tsv_filename)
         self._fasta_file = open(self.fasta_filename, "w")
-        self._already_aligned.update(self._pending())
+        self._already_aligned.update(self._pending)
         self._pending.clear()
 
 
