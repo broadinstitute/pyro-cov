@@ -494,10 +494,13 @@ def fit_mcmc(
                 "concentration": svi_params["concentration_loc"],
             },
         )
+        expected_params = {"rate_coef", "init"}
     elif model_type == "dependent":
         partial_model = DeterministicMessenger(svi_params)(model)
+        expected_params = {"rate_coef_centered"}
     elif model_type == "preconditioned":
         partial_model = PreconditionMessenger(svi_params)(model)
+        expected_params = {"rate_coef_centered", "init_centered"}
     else:
         raise ValueError(model_type)
     init_values = {
@@ -520,7 +523,7 @@ def fit_mcmc(
     losses = []
 
     def hook_fn(kernel, params, stage, i):
-        assert set(params) == {"rate_coef"}
+        assert set(params) == expected_params
         loss = float(kernel._potential_energy_last)
         if log_every and len(losses) % log_every == 0:
             logger.info(f"loss = {loss / num_obs:0.6g}")
