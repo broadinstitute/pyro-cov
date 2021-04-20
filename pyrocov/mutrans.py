@@ -274,7 +274,8 @@ class Guide:
         if "dependent" in self.guide_type:
             weight_s = pyro.param("init_weight_s", lambda: torch.zeros(S, F))
             weight_p = pyro.param("init_weight_p", lambda: torch.zeros(P, 1, F))
-            init = init_loc + weight_s @ rate_coef + weight_p @ rate_coef
+            delta = rate_coef - loc
+            init = init_loc + weight_s @ delta + weight_p @ delta
         else:
             init = init_loc
         with pyro.plate("place", P, dim=-1):
@@ -283,22 +284,13 @@ class Guide:
     @torch.no_grad()
     def median(self, dataset):
         rate_coef = pyro.param("rate_coef_loc").detach()
-        result = {
+        return {
             "feature_scale": pyro.param("feature_scale_loc").detach(),
             "concentration": pyro.param("concentration_loc").detach(),
             "rate_coef": rate_coef,
             "rate": rate_coef @ dataset["features"].T,
+            "init": pyro.param("init_loc").detach(),
         }
-
-        init_loc = pyro.param("init_loc").detach()
-        if "dependent" in self.guide_type:
-            weight_s = pyro.param("init_weight_s").detach()
-            weight_p = pyro.param("init_weight_p").detach()
-            result["init"] = init_loc + weight_s @ rate_coef + weight_p @ rate_coef
-        else:
-            result["init"] = init_loc
-
-        return result
 
     @torch.no_grad()
     def stats(self, dataset):
@@ -339,7 +331,7 @@ class DeterministicMessenger(Messenger):
         self.init_weight_s = params["init_weight_s"]
         self.init_weight_p = params["init_weight_p"]
 
-        self.rate_coef = None
+        self.delta = None
         super().__init__()
 
     def _pyro_sample(self, msg):
@@ -350,7 +342,7 @@ class DeterministicMessenger(Messenger):
             msg["value"] = self.concentration
             msg["is_observed"] = True
         elif msg["name"] == "rate_coef":
-            assert self.rate_coef is None
+            assert self.delta is None
             fn = msg["fn"]
             decentered_value = pyro.sample(
                 "rate_coef_centered",
@@ -360,16 +352,16 @@ class DeterministicMessenger(Messenger):
                 self.rate_coef_loc + self.rate_coef_scale_tril @ decentered_value
             )
             msg["is_observed"] = True
-            self.rate_coef = msg["value"]
+            self.delta = msg["value"] - self.rate_coef_loc
         elif msg["name"] == "init":
-            assert self.rate_coef is not None
+            assert self.delta is not None
             msg["value"] = (
                 self.init_loc
-                + self.init_weight_s @ self.rate_coef
-                + self.init_weight_p @ self.rate_coef
+                + self.init_weight_s @ self.delta
+                + self.init_weight_p @ self.delta
             )
             msg["is_observed"] = True
-            self.rate_coef = None
+            self.delta = None
 
 
 class PreconditionMessenger(Messenger):
@@ -390,7 +382,7 @@ class PreconditionMessenger(Messenger):
         self.init_weight_s = params["init_weight_s"]
         self.init_weight_p = params["init_weight_p"]
 
-        self.rate_coef = None
+        self.delta = None
         super().__init__()
 
     def _pyro_sample(self, msg):
@@ -401,7 +393,7 @@ class PreconditionMessenger(Messenger):
             msg["value"] = self.concentration
             msg["is_observed"] = True
         elif msg["name"] == "rate_coef":
-            assert self.rate_coef is None
+            assert self.delta is None
             fn = msg["fn"]
             decentered_value = pyro.sample(
                 "rate_coef_centered",
@@ -411,9 +403,9 @@ class PreconditionMessenger(Messenger):
                 self.rate_coef_loc + self.rate_coef_scale_tril @ decentered_value
             )
             msg["is_observed"] = True
-            self.rate_coef = msg["value"]
+            self.delta = msg["value"] - self.rate_coef_loc
         elif msg["name"] == "init":
-            assert self.rate_coef is not None
+            assert self.delta is not None
             fn = msg["fn"]
             decentered_value = pyro.sample(
                 "init_centered",
@@ -422,11 +414,11 @@ class PreconditionMessenger(Messenger):
             msg["value"] = (
                 decentered_value
                 + self.init_loc
-                + self.init_weight_s @ self.rate_coef
-                + self.init_weight_p @ self.rate_coef
+                + self.init_weight_s @ self.delta
+                + self.init_weight_p @ self.delta
             )
             msg["is_observed"] = True
-            self.rate_coef = None
+            self.delta = None
 
 
 def fit_svi(
@@ -509,10 +501,10 @@ def fit_mcmc(
     else:
         raise ValueError(model_type)
     init_values = {
-        "init": svi_params["median"]["init"],
-        "rate_coef": svi_params["median"]["rate_coef"],
-        "init_decentered": torch.zeros_like(svi_params["median"]["init"]),
-        "rate_coef_decentered": torch.zeros_like(svi_params["median"]["rate_coef"]),
+        "init": svi_params["init_loc"],
+        "rate_coef": svi_params["rate_coef_loc"],
+        "init_decentered": torch.zeros_like(svi_params["init_loc"]),
+        "rate_coef_decentered": torch.zeros_like(svi_params["rate_coef_loc"]),
     }
     kernel = NUTS(
         partial_model,
