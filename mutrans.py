@@ -94,6 +94,7 @@ def fit_svi(
 def fit_mcmc(
     args,
     dataset,
+    model_type="dependent",
     num_steps=10001,
     num_warmup=1000,
     num_samples=1000,
@@ -114,6 +115,7 @@ def fit_mcmc(
     result = mutrans.fit_mcmc(
         dataset,
         svi_params,
+        model_type=model_type,
         num_warmup=num_warmup,
         num_samples=num_samples,
         max_tree_depth=max_tree_depth,
@@ -139,19 +141,13 @@ def main(args):
         fit_mcmc(
             args,
             dataset,
+            args.model_type,
             args.num_steps,
             args.num_warmup,
             args.num_samples,
             args.max_tree_depth,
         )
         return
-    mcmc_config = (
-        "mcmc",
-        args.num_steps,
-        args.num_warmup,
-        args.num_samples,
-        args.max_tree_depth,
-    )
 
     # Configure guides.
     best_config = (
@@ -165,9 +161,32 @@ def main(args):
         fit_svi(args, dataset, *best_config)
         return
     # guide_type, n, lr, lrd
-    guide_configs = [
+    inference_configs = [
         best_config,
-        mcmc_config,
+        (
+            "mcmc",
+            "dependent",
+            args.num_steps,
+            args.num_warmup,
+            args.num_samples,
+            args.max_tree_depth,
+        ),
+        (
+            "mcmc",
+            "conditioned",
+            args.num_steps,
+            args.num_warmup,
+            args.num_samples,
+            args.max_tree_depth,
+        ),
+        (
+            "mcmc",
+            "preconditioned",
+            args.num_steps,
+            args.num_warmup,
+            args.num_samples,
+            args.max_tree_depth,
+        ),
         ("map", 1001, 0.05, 1.0),
         ("normal", 2001, 0.05, 0.1),
         ("mvn", 10001, 0.01, 0.1),
@@ -185,7 +204,7 @@ def main(args):
         {"include": {"virus_name": "^hCoV-19/USA/..-CDC-2-"}},
     ]
 
-    configs = [c + (empty_holdout,) for c in guide_configs]
+    configs = [c + (empty_holdout,) for c in inference_configs]
     for holdout in holdouts:
         holdout = tuple(
             (k, tuple(sorted(v.items()))) for k, v in sorted(holdout.items())
@@ -213,6 +232,7 @@ if __name__ == "__main__":
     parser.add_argument("--best", action="store_true", help="fit only one config")
     parser.add_argument("--mcmc", action="store_true", help="run only MCMC inference")
     parser.add_argument("-g", "--guide-type", default="mvn_dependent")
+    parser.add_argument("-m", "--model-type", default="dependent")
     parser.add_argument("-n", "--num-steps", default=10001, type=int)
     parser.add_argument("-lr", "--learning-rate", default=0.01, type=float)
     parser.add_argument("-lrd", "--learning-rate-decay", default=0.1, type=float)
