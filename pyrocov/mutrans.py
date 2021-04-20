@@ -482,7 +482,6 @@ def fit_mcmc(
     log_every=50,
     seed=20210319,
 ):
-    logger.info("Fitting via MCMC over {} parameters".format(len(dataset["mutations"])))
     pyro.set_rng_seed(seed)
 
     # Configure a kernel.
@@ -509,6 +508,8 @@ def fit_mcmc(
         "init_decentered": torch.zeros_like(svi_params["init_loc"]),
         "rate_coef_decentered": torch.zeros_like(svi_params["rate_coef_loc"]),
     }
+    num_params = sum(init_values[p].numel() for p in expected_params)
+    logger.info(f"Fitting via MCMC over {num_params} parameters")
     kernel = NUTS(
         partial_model,
         init_strategy=init_to_value(values=init_values),

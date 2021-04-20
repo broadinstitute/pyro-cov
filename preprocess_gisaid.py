@@ -6,7 +6,6 @@ import json
 import logging
 import os
 import pickle
-import re
 from collections import Counter, defaultdict
 
 from pyrocov import pangolin
@@ -73,9 +72,8 @@ def main(args):
             stats["lineage"][lineage] += 1
 
             # Collect samples.
-            seq = datum["sequence"].replace("\n", "")
-            parts = re.findall("[ACGT]+", seq)
-            if args.min_nchars <= sum(map(len, parts)) <= args.max_nchars:
+            nchars = sum(datum["sequence"].count(b) for b in "ACGT")
+            if args.min_nchars <= nchars <= args.max_nchars:
                 subsamples[lineage][datum["covv_accession_id"]] = datum["sequence"]
 
             if i % args.log_every == 0:
