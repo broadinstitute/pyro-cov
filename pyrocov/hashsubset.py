@@ -28,6 +28,14 @@ class RandomSubDict:
             key = self.hash_to_key.pop(h)
             self.key_to_value.pop(key)
 
+    def keys(self):
+        assert len(self.key_to_value) <= self.max_size
+        return self.key_to_value.keys()
+
+    def values(self):
+        assert len(self.key_to_value) <= self.max_size
+        return self.key_to_value.values()
+
     def items(self):
         assert len(self.key_to_value) <= self.max_size
         return self.key_to_value.items()
