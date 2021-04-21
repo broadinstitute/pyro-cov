@@ -595,7 +595,10 @@ def fit_mcmc(
     pyro.set_rng_seed(seed)
 
     # Configure a kernel.
-    if model_type == "conditioned":
+    if model_type == "naive":
+        partial_model = model
+        expected_params = {"feature_scale", "concentration", "rate_coef", "init"}
+    elif model_type == "conditioned":
         partial_model = poutine.condition(
             model,
             data={
@@ -613,6 +616,8 @@ def fit_mcmc(
     else:
         raise ValueError(model_type)
     init_values = {
+        "feature_scale": svi_params["feature_scale_loc"],
+        "concentration": svi_params["concentration_loc"],
         "init": svi_params["init_loc"],
         "rate_coef": svi_params["rate_coef_loc"],
         "init_decentered": torch.zeros_like(svi_params["init_loc"]),

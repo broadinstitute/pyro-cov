@@ -167,6 +167,14 @@ def main(args):
         svi_config,
         (
             "mcmc",
+            "naive",
+            args.num_steps,
+            args.num_warmup,
+            args.num_samples,
+            args.max_tree_depth,
+        ),
+        (
+            "mcmc",
             "dependent",
             args.num_steps,
             args.num_warmup,
