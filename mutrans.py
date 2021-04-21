@@ -152,19 +152,19 @@ def main(args):
         return
 
     # Configure guides.
-    best_config = (
+    svi_config = (
         args.guide_type,
         args.num_steps,
         args.learning_rate,
         args.learning_rate_decay,
     )
-    if args.best:
+    if args.svi:
         dataset = load_data(args)
-        fit_svi(args, dataset, *best_config)
+        fit_svi(args, dataset, *svi_config)
         return
     # guide_type, n, lr, lrd
     inference_configs = [
-        best_config,
+        svi_config,
         (
             "mcmc",
             "dependent",
@@ -190,9 +190,12 @@ def main(args):
             args.max_tree_depth,
         ),
         ("map", 1001, 0.05, 1.0),
+        ("normal_delta", 2001, 0.05, 0.1),
         ("normal", 2001, 0.05, 0.1),
-        ("mvn", 10001, 0.01, 0.1),
-        ("mvn_dependent", 10001, 0.01, 0.1),
+        ("mvn_delta", 10001, 0.01, 0.1),
+        ("mvn_normal", 10001, 0.01, 0.1),
+        ("mvn_delta_dependent", 10001, 0.01, 0.1),
+        ("mvn_normal_dependent", 10001, 0.01, 0.1),
     ]
 
     # Configure data holdouts.
@@ -211,7 +214,7 @@ def main(args):
         holdout = tuple(
             (k, tuple(sorted(v.items()))) for k, v in sorted(holdout.items())
         )
-        configs.append(best_config + (holdout,))
+        configs.append(svi_config + (holdout,))
 
     # Sequentially fit models.
     result = {}
@@ -231,7 +234,7 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Fit mutation-transmissibility models")
     parser.add_argument("--max-feature-order", default=0, type=int)
-    parser.add_argument("--best", action="store_true", help="fit only one config")
+    parser.add_argument("--svi", action="store_true", help="run only SVI inference")
     parser.add_argument("--mcmc", action="store_true", help="run only MCMC inference")
     parser.add_argument("-g", "--guide-type", default="mvn_dependent")
     parser.add_argument("-m", "--model-type", default="dependent")

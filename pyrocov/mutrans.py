@@ -3,7 +3,7 @@ import logging
 import math
 import pickle
 import re
-from collections import Counter, OrderedDict
+from collections import Counter, OrderedDict, defaultdict
 
 import pyro
 import pyro.distributions as dist
@@ -11,7 +11,7 @@ import torch
 from pyro import poutine
 from pyro.distributions import constraints
 from pyro.infer import MCMC, NUTS, SVI, Predictive, Trace_ELBO
-from pyro.infer.autoguide import init_to_value
+from pyro.infer.autoguide import AutoStructured, init_to_value
 from pyro.optim import ClippedAdam
 from pyro.poutine.messenger import Messenger
 
@@ -221,11 +221,11 @@ def model(dataset):
 
 def map_estimate(name, init, constraint=constraints.real):
     value = pyro.param(name + "_loc", init, constraint=constraint)
-    pyro.sample(name, dist.Delta(value, event_dim=constraint.event_dim))
+    return pyro.sample(name, dist.Delta(value, event_dim=constraint.event_dim))
 
 
-class Guide:
-    def __init__(self, guide_type="mvn_dependent"):
+class Guide_old:
+    def __init__(self, dataset, guide_type="mvn_dependent"):
         super().__init__()
         self.guide_type = guide_type
 
@@ -238,12 +238,14 @@ class Guide:
         S, F = features.shape
 
         # Map estimate global parameters.
-        map_estimate(
+        feature_scale = map_estimate(
             "feature_scale",
             lambda: torch.ones(feature_order_max + 1),
             constraints.independent(constraints.positive, 1),
         )
-        map_estimate("concentration", lambda: torch.tensor(10.0), constraints.positive)
+        concentration = map_estimate(
+            "concentration", lambda: torch.tensor(10.0), constraints.positive
+        )
 
         # Sample rate_coef from a full-rank multivariate normal distribution.
         loc = pyro.param("rate_coef_loc", lambda: torch.zeros(F), event_dim=1)
@@ -281,6 +283,13 @@ class Guide:
         with pyro.plate("place", P, dim=-1):
             pyro.sample("init", dist.Delta(init, event_dim=1))
 
+        return {
+            "feature_scale": feature_scale,
+            "concentration": concentration,
+            "rate_coef": rate_coef,
+            "init": init,
+        }
+
     @torch.no_grad()
     def median(self, dataset):
         rate_coef = pyro.param("rate_coef_loc").detach()
@@ -303,6 +312,104 @@ class Guide:
         elif "mvn" in self.guide_type:
             scale = pyro.param("rate_coef_scale").detach()
             scale_tril = pyro.param("rate_coef_scale_tril").detach()
+            scale_tril = scale[:, None] * scale_tril
+            result["cov"] = {"rate_coef": scale_tril @ scale_tril.T}
+            scale_tril = dataset["features"] @ scale_tril
+            result["cov"]["rate"] = scale_tril @ scale_tril.T
+            result["var"] = {k: v.diag() for k, v in result["cov"].items()}
+            result["std"] = {k: v.sqrt() for k, v in result["var"].items()}
+        return result
+
+
+def init_loc_fn(site):
+    name = site["name"]
+    shape = site["fn"].shape()
+    if name == "feature_scale":
+        return torch.ones(shape)
+    if name == "concentration":
+        return torch.full(shape, 10.0)
+    if name in ("rate_coef", "init"):
+        return torch.zeros(shape)
+    raise ValueError(site["name"])
+
+
+class SparseLinear(torch.nn.Module):
+    """
+    Factorized linear funcction representing dependency of init on rate_coef.
+    """
+
+    def __init__(self, P, S, F):
+        super().__init__()
+        self.weight_s = torch.nn.Parameter(torch.zeros(S, F))
+        self.weight_p = torch.nn.Parameter(torch.zeros(P, 1, F))
+        assert self.weight_p.requires_grad
+
+    def forward(self, delta):
+        return (self.weight_s @ delta + self.weight_p @ delta).reshape(-1)
+
+
+class Guide(AutoStructured):
+    def __init__(self, dataset, guide_type="mvn_dependent"):
+        self.guide_type = guide_type
+        conditionals = {}
+        dependencies = defaultdict(dict)
+        if guide_type == "map":
+            conditionals["feature_scale"] = "delta"
+            conditionals["concentration"] = "delta"
+            conditionals["rate_coef"] = "delta"
+            conditionals["init"] = "delta"
+        elif guide_type.startswith("normal_delta"):
+            conditionals["feature_scale"] = "normal"
+            conditionals["concentration"] = "normal"
+            conditionals["rate_coef"] = "normal"
+            conditionals["init"] = "delta"
+        elif guide_type.startswith("normal"):
+            conditionals["feature_scale"] = "normal"
+            conditionals["concentration"] = "normal"
+            conditionals["rate_coef"] = "normal"
+            conditionals["init"] = "normal"
+        elif guide_type.startswith("mvn_delta"):
+            conditionals["feature_scale"] = "normal"
+            conditionals["concentration"] = "normal"
+            conditionals["rate_coef"] = "mvn"
+            conditionals["init"] = "delta"
+        elif guide_type.startswith("mvn_normal"):
+            conditionals["feature_scale"] = "normal"
+            conditionals["concentration"] = "normal"
+            conditionals["rate_coef"] = "mvn"
+            conditionals["init"] = "normal"
+        else:
+            raise ValueError(f"Unsupported guide type: {guide_type}")
+
+        if guide_type.endswith("_dependent"):
+            T, P, S = dataset["weekly_strains"].shape
+            S, F = dataset["features"].shape
+            sparse_linear = SparseLinear(P, S, F)
+            dependencies["feature_scale"]["concentration"] = "linear"
+            dependencies["rate_coef"]["concentration"] = "linear"
+            dependencies["rate_coef"]["feature_scale"] = "linear"
+            dependencies["init"]["concentration"] = "linear"
+            dependencies["init"]["feature_scale"] = "linear"
+            dependencies["init"]["rate_coef"] = sparse_linear
+
+        super().__init__(
+            model,
+            conditionals=conditionals,
+            dependencies=dependencies,
+            init_loc_fn=init_loc_fn,
+        )
+
+    @torch.no_grad()
+    def stats(self, dataset):
+        result = {
+            "median": self.median(dataset),
+            "mean": {"rate_coef": self.locs.rate_coef.detach()},
+        }
+        if self.guide_type == "normal":
+            result["std"] = {"rate_coef": self.scales.rate_coef.detach()}
+        elif "mvn" in self.guide_type:
+            scale = self.scales.rate_coef.detach()
+            scale_tril = self.scale_trils.rate_coef.detach()
             scale_tril = scale[:, None] * scale_tril
             result["cov"] = {"rate_coef": scale_tril @ scale_tril.T}
             scale_tril = dataset["features"] @ scale_tril
@@ -436,8 +543,10 @@ def fit_svi(
     param_store = pyro.get_param_store()
 
     # Initialize guide so we can count parameters.
-    guide = Guide(guide_type)
-    guide(dataset)
+    guide = Guide(dataset, guide_type)
+    sites = guide(dataset)
+    assert sites
+    del sites
     num_params = sum(p.unconstrained().numel() for p in param_store.values())
     logger.info(f"Training guide with {num_params} parameters:")
 
@@ -457,8 +566,9 @@ def fit_svi(
         assert not math.isnan(loss)
         losses.append(loss)
         if step % log_every == 0:
-            concentration = param_store["concentration_loc"].item()
-            feature_scale = param_store["feature_scale_loc"].tolist()
+            median = guide.median(dataset)
+            concentration = median["concentration"].item()
+            feature_scale = median["feature_scale"].tolist()
             feature_scale = "[{}]".format(", ".join(f"{f:0.3g}" for f in feature_scale))
             logger.info(
                 f"step {step: >4d} loss = {loss / num_obs:0.6g}\t"
