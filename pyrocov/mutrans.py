@@ -1,4 +1,5 @@
 import datetime
+import functools
 import logging
 import math
 import pickle
@@ -373,6 +374,13 @@ def fit_svi(
     return result
 
 
+def hook_fn(log_every, losses, num_obs, kernel, params, stage, i):
+    loss = float(kernel._potential_energy_last)
+    if log_every and len(losses) % log_every == 0:
+        logger.info(f"loss = {loss / num_obs:0.6g}")
+    losses.append(loss)
+
+
 def fit_mcmc(
     dataset,
     guide=None,
@@ -405,22 +413,16 @@ def fit_mcmc(
     )
 
     # Run MCMC.
-    num_obs = dataset["weekly_strains"].count_nonzero()
     losses = []
-
-    def hook_fn(kernel, params, stage, i):
-        loss = float(kernel._potential_energy_last)
-        if log_every and len(losses) % log_every == 0:
-            logger.info(f"loss = {loss / num_obs:0.6g}")
-        losses.append(loss)
-
+    num_obs = dataset["weekly_strains"].count_nonzero()
+    hook_fn_ = functools.partial(hook_fn, log_every, losses, num_obs)
     mcmc = MCMC(
         kernel,
         warmup_steps=num_warmup,
         num_samples=num_samples,
         num_chains=num_chains,
         mp_context=(None if torch.zeros(()).device.type == "cpu" else "spawn"),
-        hook_fn=hook_fn,
+        hook_fn=hook_fn_,
     )
     mcmc.run(dataset)
     predict = Predictive(
