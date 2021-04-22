@@ -378,6 +378,7 @@ def fit_mcmc(
     guide=None,
     num_warmup=1000,
     num_samples=1000,
+    num_chains=1,
     max_tree_depth=10,
     log_every=50,
     seed=20210319,
@@ -417,6 +418,8 @@ def fit_mcmc(
         kernel,
         warmup_steps=num_warmup,
         num_samples=num_samples,
+        num_chains=num_chains,
+        mp_context=(None if torch.zeros(()).device.type == "cpu" else "spawn"),
         hook_fn=hook_fn,
     )
     mcmc.run(dataset)

@@ -100,6 +100,7 @@ def fit_mcmc(
     num_steps=10001,
     num_warmup=1000,
     num_samples=1000,
+    num_chains=1,
     max_tree_depth=10,
     holdout=(),
 ):
@@ -122,6 +123,7 @@ def fit_mcmc(
         guide,
         num_warmup=num_warmup,
         num_samples=num_samples,
+        num_chains=num_chains,
         max_tree_depth=max_tree_depth,
         log_every=args.log_every,
         seed=args.seed,
@@ -146,6 +148,7 @@ def main(args):
         args.num_steps,
         args.num_warmup,
         args.num_samples,
+        args.num_chains,
         args.max_tree_depth,
     )
     if args.mcmc:
@@ -197,6 +200,7 @@ def main(args):
             args.num_steps,
             args.num_warmup,
             args.num_samples,
+            args.num_chains,
             args.max_tree_depth,
         )
     )
@@ -208,6 +212,7 @@ def main(args):
                 args.num_steps,
                 args.num_warmup,
                 args.num_samples,
+                args.num_chains,
                 args.max_tree_depth,
             )
         )
@@ -255,8 +260,9 @@ if __name__ == "__main__":
     parser.add_argument("-n", "--num-steps", default=10001, type=int)
     parser.add_argument("-lr", "--learning-rate", default=0.01, type=float)
     parser.add_argument("-lrd", "--learning-rate-decay", default=0.1, type=float)
-    parser.add_argument("-w", "--num-warmup", default=1000, type=int)
-    parser.add_argument("-s", "--num-samples", default=1000, type=int)
+    parser.add_argument("-w", "--num-warmup", default=500, type=int)
+    parser.add_argument("-s", "--num-samples", default=500, type=int)
+    parser.add_argument("-c", "--num-chains", default=2, type=int)
     parser.add_argument("-t", "--max-tree-depth", default=10, type=int)
     parser.add_argument(
         "--cuda", action="store_true", default=torch.cuda.is_available()
