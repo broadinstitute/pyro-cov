@@ -9,15 +9,13 @@ import pyro
 import pyro.distributions as dist
 import torch
 from pyro import poutine
-from pyro.distributions import constraints
 from pyro.infer import MCMC, NUTS, SVI, Predictive, Trace_ELBO
-from pyro.infer.autoguide import AutoStructured, init_to_value
+from pyro.infer.autoguide import AutoStructured, init_to_feasible
+from pyro.infer.reparam import StructuredReparam
 from pyro.optim import ClippedAdam
-from pyro.poutine.messenger import Messenger
 
 import pyrocov.geo
 from pyrocov import pangolin
-from pyrocov.distributions import SoftLaplace
 
 logger = logging.getLogger(__name__)
 
@@ -196,13 +194,13 @@ def model(dataset):
         dist.LogNormal(0, 1).expand([feature_order_max + 1]).to_event(1),
     )
     rate_coef = pyro.sample(
-        "rate_coef", SoftLaplace(0, feature_scale[feature_order]).to_event(1)
+        "rate_coef", dist.SoftLaplace(0, feature_scale[feature_order]).to_event(1)
     )
     rate = pyro.deterministic("rate", rate_coef @ features.T, event_dim=1)
 
     # Assume places differ only in their initial infection count.
     with place_plate:
-        init = pyro.sample("init", SoftLaplace(0, 10).expand([S]).to_event(1))
+        init = pyro.sample("init", dist.SoftLaplace(0, 10).expand([S]).to_event(1))
 
     # Finally observe overdispersed counts.
     strain_probs = (init + rate * local_time[:, :, None]).softmax(-1)
@@ -217,108 +215,6 @@ def model(dataset):
             ),
             obs=weekly_strains,
         )
-
-
-def map_estimate(name, init, constraint=constraints.real):
-    value = pyro.param(name + "_loc", init, constraint=constraint)
-    return pyro.sample(name, dist.Delta(value, event_dim=constraint.event_dim))
-
-
-class Guide_old:
-    def __init__(self, dataset, guide_type="mvn_dependent"):
-        super().__init__()
-        self.guide_type = guide_type
-
-    def __call__(self, dataset):
-        weekly_strains = dataset["weekly_strains"]
-        features = dataset["features"]
-        feature_order_max = dataset["feature_order_max"]
-        assert weekly_strains.shape[-1] == features.shape[0]
-        T, P, S = weekly_strains.shape
-        S, F = features.shape
-
-        # Map estimate global parameters.
-        feature_scale = map_estimate(
-            "feature_scale",
-            lambda: torch.ones(feature_order_max + 1),
-            constraints.independent(constraints.positive, 1),
-        )
-        concentration = map_estimate(
-            "concentration", lambda: torch.tensor(10.0), constraints.positive
-        )
-
-        # Sample rate_coef from a full-rank multivariate normal distribution.
-        loc = pyro.param("rate_coef_loc", lambda: torch.zeros(F), event_dim=1)
-        if self.guide_type == "map":
-            rate_coef = pyro.sample("rate_coef", dist.Delta(loc, event_dim=1))
-        elif self.guide_type == "normal":
-            scale = pyro.param(
-                "rate_coef_scale", lambda: torch.ones(F) * 0.01, constraints.positive
-            )
-            rate_coef = pyro.sample("rate_coef", dist.Normal(loc, scale).to_event(1))
-        elif "mvn" in self.guide_type:
-            scale = pyro.param(
-                "rate_coef_scale", lambda: torch.ones(F) * 0.01, constraints.positive
-            )
-            scale_tril = pyro.param(
-                "rate_coef_scale_tril", lambda: torch.eye(F), constraints.lower_cholesky
-            )
-            scale_tril = scale[:, None] * scale_tril
-
-            rate_coef = pyro.sample(
-                "rate_coef", dist.MultivariateNormal(loc, scale_tril=scale_tril)
-            )
-        else:
-            raise ValueError(f"Unknown guide type: {self.guide_type}")
-
-        # MAP estimate init, but depending on rate_coef.
-        init_loc = pyro.param("init_loc", lambda: torch.zeros(P, S))
-        if "dependent" in self.guide_type:
-            weight_s = pyro.param("init_weight_s", lambda: torch.zeros(S, F))
-            weight_p = pyro.param("init_weight_p", lambda: torch.zeros(P, 1, F))
-            delta = rate_coef - loc
-            init = init_loc + weight_s @ delta + weight_p @ delta
-        else:
-            init = init_loc
-        with pyro.plate("place", P, dim=-1):
-            pyro.sample("init", dist.Delta(init, event_dim=1))
-
-        return {
-            "feature_scale": feature_scale,
-            "concentration": concentration,
-            "rate_coef": rate_coef,
-            "init": init,
-        }
-
-    @torch.no_grad()
-    def median(self, dataset):
-        rate_coef = pyro.param("rate_coef_loc").detach()
-        return {
-            "feature_scale": pyro.param("feature_scale_loc").detach(),
-            "concentration": pyro.param("concentration_loc").detach(),
-            "rate_coef": rate_coef,
-            "rate": rate_coef @ dataset["features"].T,
-            "init": pyro.param("init_loc").detach(),
-        }
-
-    @torch.no_grad()
-    def stats(self, dataset):
-        result = {
-            "median": self.median(dataset),
-            "mean": {"rate_coef": pyro.param("rate_coef_loc").detach()},
-        }
-        if self.guide_type == "normal":
-            result["std"] = {"rate_coef": pyro.param("rate_coef_scale").detach()}
-        elif "mvn" in self.guide_type:
-            scale = pyro.param("rate_coef_scale").detach()
-            scale_tril = pyro.param("rate_coef_scale_tril").detach()
-            scale_tril = scale[:, None] * scale_tril
-            result["cov"] = {"rate_coef": scale_tril @ scale_tril.T}
-            scale_tril = dataset["features"] @ scale_tril
-            result["cov"]["rate"] = scale_tril @ scale_tril.T
-            result["var"] = {k: v.diag() for k, v in result["cov"].items()}
-            result["std"] = {k: v.sqrt() for k, v in result["var"].items()}
-        return result
 
 
 def init_loc_fn(site):
@@ -348,6 +244,7 @@ class SparseLinear(torch.nn.Module):
         return (self.weight_s @ delta + self.weight_p @ delta).reshape(-1)
 
 
+# This requires https://github.com/pyro-ppl/pyro/pull/2812
 class Guide(AutoStructured):
     def __init__(self, dataset, guide_type="mvn_dependent"):
         self.guide_type = guide_type
@@ -419,115 +316,6 @@ class Guide(AutoStructured):
         return result
 
 
-class DeterministicMessenger(Messenger):
-    """
-    Condition all but the "rate_coef" variable on parameters of an
-    mvn_dependent guide.
-    """
-
-    def __init__(self, params):
-        self.feature_scale = params["feature_scale_loc"]
-        self.concentration = params["concentration_loc"]
-
-        self.rate_coef_loc = params["rate_coef_loc"]
-        scale = params["rate_coef_scale"]
-        scale_tril = params["rate_coef_scale_tril"]
-        self.rate_coef_scale_tril = scale[:, None] * scale_tril
-
-        self.init_loc = params["init_loc"]
-        self.init_weight_s = params["init_weight_s"]
-        self.init_weight_p = params["init_weight_p"]
-
-        self.delta = None
-        super().__init__()
-
-    def _pyro_sample(self, msg):
-        if msg["name"] == "feature_scale":
-            msg["value"] = self.feature_scale
-            msg["is_observed"] = True
-        elif msg["name"] == "concentration":
-            msg["value"] = self.concentration
-            msg["is_observed"] = True
-        elif msg["name"] == "rate_coef":
-            assert self.delta is None
-            fn = msg["fn"]
-            decentered_value = pyro.sample(
-                "rate_coef_centered",
-                dist.Normal(0, 1).expand(fn.shape()).to_event(fn.event_dim).mask(False),
-            )
-            msg["value"] = (
-                self.rate_coef_loc + self.rate_coef_scale_tril @ decentered_value
-            )
-            msg["is_observed"] = True
-            self.delta = msg["value"] - self.rate_coef_loc
-        elif msg["name"] == "init":
-            assert self.delta is not None
-            msg["value"] = (
-                self.init_loc
-                + self.init_weight_s @ self.delta
-                + self.init_weight_p @ self.delta
-            )
-            msg["is_observed"] = True
-            self.delta = None
-
-
-class PreconditionMessenger(Messenger):
-    """
-    Condition on fixed globals,
-    """
-
-    def __init__(self, params):
-        self.feature_scale = params["feature_scale_loc"]
-        self.concentration = params["concentration_loc"]
-
-        self.rate_coef_loc = params["rate_coef_loc"]
-        scale = params["rate_coef_scale"]
-        scale_tril = params["rate_coef_scale_tril"]
-        self.rate_coef_scale_tril = scale[:, None] * scale_tril
-
-        self.init_loc = params["init_loc"]
-        self.init_weight_s = params["init_weight_s"]
-        self.init_weight_p = params["init_weight_p"]
-
-        self.delta = None
-        super().__init__()
-
-    def _pyro_sample(self, msg):
-        if msg["name"] == "feature_scale":
-            msg["value"] = self.feature_scale
-            msg["is_observed"] = True
-        elif msg["name"] == "concentration":
-            msg["value"] = self.concentration
-            msg["is_observed"] = True
-        elif msg["name"] == "rate_coef":
-            assert self.delta is None
-            fn = msg["fn"]
-            decentered_value = pyro.sample(
-                "rate_coef_centered",
-                dist.Normal(0, 1).expand(fn.shape()).to_event(fn.event_dim).mask(False),
-            )
-            msg["value"] = (
-                self.rate_coef_loc + self.rate_coef_scale_tril @ decentered_value
-            )
-            msg["is_observed"] = True
-            self.delta = msg["value"] - self.rate_coef_loc
-        elif msg["name"] == "init":
-            assert self.delta is not None
-            fn = msg["fn"]
-            decentered_value = pyro.sample(
-                "init_centered",
-                dist.Normal(0, 1).expand(fn.shape()).to_event(fn.event_dim).mask(False),
-            )
-            msg["value"] = (
-                decentered_value
-                + self.init_loc
-                + self.init_weight_s @ self.delta
-                + self.init_weight_p @ self.delta
-            )
-            msg["is_observed"] = True
-            self.delta = None
-
-
 def fit_svi(
     dataset,
     guide_type,
@@ -544,16 +332,15 @@ def fit_svi(
 
     # Initialize guide so we can count parameters.
     guide = Guide(dataset, guide_type)
-    sites = guide(dataset)
-    assert sites
-    del sites
+    guide(dataset)
     num_params = sum(p.unconstrained().numel() for p in param_store.values())
     logger.info(f"Training guide with {num_params} parameters:")
 
     def optim_config(module_name, param_name):
         config = {"lr": learning_rate, "lrd": learning_rate_decay ** (1 / num_steps)}
-        if param_name in ["init_weight_s", "init_weight_p", "rate_coef_scale_tril"]:
-            config["lr"] *= 0.05
+        for suffix in ["weight_s", "weight_p", "scale_tril"]:
+            if param_name.endswith(suffix):
+                config["lr"] *= 0.05
         return config
 
     optim = ClippedAdam(optim_config)
@@ -566,7 +353,7 @@ def fit_svi(
         assert not math.isnan(loss)
         losses.append(loss)
         if step % log_every == 0:
-            median = guide.median(dataset)
+            median = guide.median()
             concentration = median["concentration"].item()
             feature_scale = median["feature_scale"].tolist()
             feature_scale = "[{}]".format(", ".join(f"{f:0.3g}" for f in feature_scale))
@@ -579,51 +366,31 @@ def fit_svi(
     result = guide.stats(dataset)
     result["losses"] = losses
     result["params"] = {k: v.detach().clone() for k, v in param_store.items()}
+    result["guide"] = guide.float()
     return result
 
 
 def fit_mcmc(
     dataset,
-    svi_params,
-    model_type="dependent",
+    guide=None,
     num_warmup=1000,
     num_samples=1000,
-    max_tree_depth=10,
     log_every=50,
     seed=20210319,
 ):
     pyro.set_rng_seed(seed)
 
     # Configure a kernel.
-    if model_type == "conditioned":
-        partial_model = poutine.condition(
-            model,
-            data={
-                "feature_scale": svi_params["feature_scale_loc"],
-                "concentration": svi_params["concentration_loc"],
-            },
+    model_ = model if guide is None else StructuredReparam(guide).reparam(model)
+    with torch.no_grad(), pyro.validation_enabled(False):
+        num_params = sum(
+            site["value"].numel()
+            for site in poutine.trace(model_).get_trace(dataset).iter_stochastic_nodes()
         )
-        expected_params = {"rate_coef", "init"}
-    elif model_type == "dependent":
-        partial_model = DeterministicMessenger(svi_params)(model)
-        expected_params = {"rate_coef_centered"}
-    elif model_type == "preconditioned":
-        partial_model = PreconditionMessenger(svi_params)(model)
-        expected_params = {"rate_coef_centered", "init_centered"}
-    else:
-        raise ValueError(model_type)
-    init_values = {
-        "init": svi_params["init_loc"],
-        "rate_coef": svi_params["rate_coef_loc"],
-        "init_decentered": torch.zeros_like(svi_params["init_loc"]),
-        "rate_coef_decentered": torch.zeros_like(svi_params["rate_coef_loc"]),
-    }
-    num_params = sum(init_values[p].numel() for p in expected_params)
     logger.info(f"Fitting via MCMC over {num_params} parameters")
     kernel = NUTS(
-        partial_model,
-        init_strategy=init_to_value(values=init_values),
-        max_tree_depth=max_tree_depth,
+        model_,
+        init_strategy=init_to_feasible,
         max_plate_nesting=2,
         jit_compile=True,
         ignore_jit_warnings=True,
@@ -634,7 +401,6 @@ def fit_mcmc(
     losses = []
 
     def hook_fn(kernel, params, stage, i):
-        assert set(params) == expected_params
         loss = float(kernel._potential_energy_last)
         if log_every and len(losses) % log_every == 0:
             logger.info(f"loss = {loss / num_obs:0.6g}")
@@ -648,7 +414,7 @@ def fit_mcmc(
     )
     mcmc.run(dataset)
     predict = Predictive(
-        partial_model,
+        model_,
         mcmc.get_samples(),
         return_sites=["feature_scale", "concentration", "rate_coef", "rate", "init"],
     )
@@ -657,7 +423,7 @@ def fit_mcmc(
     result = {}
     result["losses"] = losses
     result["diagnostics"] = mcmc.diagnostics()
-    result["median"] = median = svi_params.copy()
+    result["median"] = median = guide.median()
     for k, v in samples.items():
         median[k] = v.median(0).values.squeeze()
     result["mean"] = {k: v.mean(0).squeeze() for k, v in samples.items()}

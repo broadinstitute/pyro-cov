@@ -96,31 +96,31 @@ def fit_svi(
 def fit_mcmc(
     args,
     dataset,
-    model_type="dependent",
+    guide_type="naive",
     num_steps=10001,
     num_warmup=1000,
     num_samples=1000,
-    max_tree_depth=10,
     holdout=(),
 ):
-    svi_params = fit_svi(
-        args,
-        dataset,
-        "mvn_dependent",
-        num_steps,
-        0.01,
-        0.1,
-        holdout,
-    )["params"]
+    if guide_type == "naive":
+        guide = None
+    else:
+        guide = fit_svi(
+            args,
+            dataset,
+            guide_type,
+            num_steps,
+            0.01,
+            0.1,
+            holdout,
+        )["guide"].double()
 
     start_time = default_timer()
     result = mutrans.fit_mcmc(
         dataset,
-        svi_params,
-        model_type=model_type,
+        guide,
         num_warmup=num_warmup,
         num_samples=num_samples,
-        max_tree_depth=max_tree_depth,
         log_every=args.log_every,
         seed=args.seed,
     )
@@ -138,17 +138,15 @@ def main(args):
         torch.autograd.set_detect_anomaly(True)
 
     # Run MCMC.
+    mcmc_config = (
+        args.guide_type,
+        args.num_steps,
+        args.num_warmup,
+        args.num_samples,
+    )
     if args.mcmc:
         dataset = load_data(args)
-        fit_mcmc(
-            args,
-            dataset,
-            args.model_type,
-            args.num_steps,
-            args.num_warmup,
-            args.num_samples,
-            args.max_tree_depth,
-        )
+        fit_mcmc(args, dataset, *mcmc_config)
         return
 
     # Configure guides.
@@ -162,41 +160,51 @@ def main(args):
         dataset = load_data(args)
         fit_svi(args, dataset, *svi_config)
         return
-    # guide_type, n, lr, lrd
+    guide_types = [
+        "normal_delta",
+        "normal",
+        "mvn_delta",
+        "mvn_normal",
+        "mvn_delta_dependent",
+        "mvn_normal_dependent",
+    ]
+
+    # Add SVI configs.
     inference_configs = [
         svi_config,
-        (
-            "mcmc",
-            "dependent",
-            args.num_steps,
-            args.num_warmup,
-            args.num_samples,
-            args.max_tree_depth,
-        ),
-        (
-            "mcmc",
-            "conditioned",
-            args.num_steps,
-            args.num_warmup,
-            args.num_samples,
-            args.max_tree_depth,
-        ),
-        (
-            "mcmc",
-            "preconditioned",
-            args.num_steps,
-            args.num_warmup,
-            args.num_samples,
-            args.max_tree_depth,
-        ),
         ("map", 1001, 0.05, 1.0),
-        ("normal_delta", 2001, 0.05, 0.1),
-        ("normal", 2001, 0.05, 0.1),
-        ("mvn_delta", 10001, 0.01, 0.1),
-        ("mvn_normal", 10001, 0.01, 0.1),
-        ("mvn_delta_dependent", 10001, 0.01, 0.1),
-        ("mvn_normal_dependent", 10001, 0.01, 0.1),
     ]
+    for guide_type in guide_types:
+        inference_configs.append(
+            (
+                guide_type,
+                args.num_steps,
+                args.learning_rate,
+                args.learning_rate_decay,
+            )
+        )
+
+    # Add mcmc configs.
+    inference_configs.append(mcmc_config)
+    inference_configs.append(
+        (
+            "mcmc",
+            "naive",
+            args.num_steps,
+            args.num_warmup,
+            args.num_samples,
+        )
+    )
+    for guide_type in guide_types:
+        inference_configs.append(
+            (
+                "mcmc",
+                guide_type,
+                args.num_steps,
+                args.num_warmup,
+                args.num_samples,
+            )
+        )
 
     # Configure data holdouts.
     empty_holdout = ()
@@ -208,13 +216,13 @@ def main(args):
         {"include": {"virus_name": "^hCoV-19/USA/..-CDC-"}},
         {"include": {"virus_name": "^hCoV-19/USA/..-CDC-2-"}},
     ]
-
     configs = [c + (empty_holdout,) for c in inference_configs]
     for holdout in holdouts:
         holdout = tuple(
             (k, tuple(sorted(v.items()))) for k, v in sorted(holdout.items())
         )
         configs.append(svi_config + (holdout,))
+        # configs.append(mcmc_config + (holdout,))  # TODO
 
     # Sequentially fit models.
     result = {}
@@ -226,6 +234,7 @@ def main(args):
             result[config] = fit_mcmc(args, dataset, *config[1:])
         else:
             result[config] = fit_svi(args, dataset, *config)
+            result[config].pop("guide", None)  # to save space
         result[config]["mutations"] = dataset["mutations"]
     logger.info("saving results/mutrans.pt")
     torch.save(result, "results/mutrans.pt")
@@ -236,14 +245,12 @@ if __name__ == "__main__":
     parser.add_argument("--max-feature-order", default=0, type=int)
     parser.add_argument("--svi", action="store_true", help="run only SVI inference")
     parser.add_argument("--mcmc", action="store_true", help="run only MCMC inference")
-    parser.add_argument("-g", "--guide-type", default="mvn_dependent")
-    parser.add_argument("-m", "--model-type", default="dependent")
+    parser.add_argument("-g", "--guide-type", default="mvn_normal_dependent")
     parser.add_argument("-n", "--num-steps", default=10001, type=int)
     parser.add_argument("-lr", "--learning-rate", default=0.01, type=float)
     parser.add_argument("-lrd", "--learning-rate-decay", default=0.1, type=float)
     parser.add_argument("--num-warmup", default=1000, type=int)
     parser.add_argument("--num-samples", default=1000, type=int)
-    parser.add_argument("--max-tree-depth", default=10, type=int)
     parser.add_argument(
         "--cuda", action="store_true", default=torch.cuda.is_available()
     )
