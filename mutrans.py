@@ -100,6 +100,7 @@ def fit_mcmc(
     num_steps=10001,
     num_warmup=1000,
     num_samples=1000,
+    max_tree_depth=10,
     holdout=(),
 ):
     if guide_type == "naive":
@@ -121,6 +122,7 @@ def fit_mcmc(
         guide,
         num_warmup=num_warmup,
         num_samples=num_samples,
+        max_tree_depth=max_tree_depth,
         log_every=args.log_every,
         seed=args.seed,
     )
@@ -139,14 +141,16 @@ def main(args):
 
     # Run MCMC.
     mcmc_config = (
+        "mcmc",
         args.guide_type,
         args.num_steps,
         args.num_warmup,
         args.num_samples,
+        args.max_tree_depth,
     )
     if args.mcmc:
         dataset = load_data(args)
-        fit_mcmc(args, dataset, *mcmc_config)
+        fit_mcmc(args, dataset, *mcmc_config[1:])
         return
 
     # Configure guides.
@@ -193,6 +197,7 @@ def main(args):
             args.num_steps,
             args.num_warmup,
             args.num_samples,
+            args.max_tree_depth,
         )
     )
     for guide_type in guide_types:
@@ -203,6 +208,7 @@ def main(args):
                 args.num_steps,
                 args.num_warmup,
                 args.num_samples,
+                args.max_tree_depth,
             )
         )
 
@@ -249,8 +255,9 @@ if __name__ == "__main__":
     parser.add_argument("-n", "--num-steps", default=10001, type=int)
     parser.add_argument("-lr", "--learning-rate", default=0.01, type=float)
     parser.add_argument("-lrd", "--learning-rate-decay", default=0.1, type=float)
-    parser.add_argument("--num-warmup", default=1000, type=int)
-    parser.add_argument("--num-samples", default=1000, type=int)
+    parser.add_argument("-w", "--num-warmup", default=1000, type=int)
+    parser.add_argument("-s", "--num-samples", default=1000, type=int)
+    parser.add_argument("-t", "--max-tree-depth", default=10, type=int)
     parser.add_argument(
         "--cuda", action="store_true", default=torch.cuda.is_available()
     )

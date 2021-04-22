@@ -333,14 +333,18 @@ def fit_svi(
     # Initialize guide so we can count parameters.
     guide = Guide(dataset, guide_type)
     guide(dataset)
-    num_params = sum(p.unconstrained().numel() for p in param_store.values())
+    num_params = sum(p.numel() for p in guide.parameters())
     logger.info(f"Training guide with {num_params} parameters:")
 
     def optim_config(module_name, param_name):
+        # work around before https://github.com/pyro-ppl/pyro/pull/2814
+        if module_name != param_name:
+            param_name = module_name + "." + param_name
+        name = param_name
+        print(f"DEBUG {name}")
         config = {"lr": learning_rate, "lrd": learning_rate_decay ** (1 / num_steps)}
-        for suffix in ["weight_s", "weight_p", "scale_tril"]:
-            if param_name.endswith(suffix):
-                config["lr"] *= 0.05
+        if "scale_tril" in name or "weight" in name:
+            config["lr"] *= 0.05
         return config
 
     optim = ClippedAdam(optim_config)
@@ -356,6 +360,7 @@ def fit_svi(
             median = guide.median()
             concentration = median["concentration"].item()
             feature_scale = median["feature_scale"].tolist()
+            assert median["feature_scale"].ge(0.02).all(), "implausible"
             feature_scale = "[{}]".format(", ".join(f"{f:0.3g}" for f in feature_scale))
             logger.info(
                 f"step {step: >4d} loss = {loss / num_obs:0.6g}\t"
@@ -375,6 +380,7 @@ def fit_mcmc(
     guide=None,
     num_warmup=1000,
     num_samples=1000,
+    max_tree_depth=10,
     log_every=50,
     seed=20210319,
 ):
@@ -385,12 +391,15 @@ def fit_mcmc(
     with torch.no_grad(), pyro.validation_enabled(False):
         num_params = sum(
             site["value"].numel()
-            for site in poutine.trace(model_).get_trace(dataset).iter_stochastic_nodes()
+            for name, site in poutine.trace(model_)
+            .get_trace(dataset)
+            .iter_stochastic_nodes()
         )
     logger.info(f"Fitting via MCMC over {num_params} parameters")
     kernel = NUTS(
         model_,
         init_strategy=init_to_feasible,
+        max_tree_depth=max_tree_depth,
         max_plate_nesting=2,
         jit_compile=True,
         ignore_jit_warnings=True,
@@ -423,7 +432,7 @@ def fit_mcmc(
     result = {}
     result["losses"] = losses
     result["diagnostics"] = mcmc.diagnostics()
-    result["median"] = median = guide.median()
+    result["median"] = median = {} if guide is None else guide.median()
     for k, v in samples.items():
         median[k] = v.median(0).values.squeeze()
     result["mean"] = {k: v.mean(0).squeeze() for k, v in samples.items()}
