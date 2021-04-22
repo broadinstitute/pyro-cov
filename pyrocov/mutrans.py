@@ -340,10 +340,8 @@ def fit_svi(
         # work around before https://github.com/pyro-ppl/pyro/pull/2814
         if module_name != param_name:
             param_name = module_name + "." + param_name
-        name = param_name
-        print(f"DEBUG {name}")
         config = {"lr": learning_rate, "lrd": learning_rate_decay ** (1 / num_steps)}
-        if "scale_tril" in name or "weight" in name:
+        if "scale_tril" in param_name or "weight" in param_name:
             config["lr"] *= 0.05
         return config
 
