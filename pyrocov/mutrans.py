@@ -396,12 +396,15 @@ def fit_mcmc(
     # Configure a kernel.
     model_ = model if guide is None else StructuredReparam(guide).reparam(model)
     with torch.no_grad(), pyro.validation_enabled(False):
-        num_params = sum(
-            site["value"].numel()
+        numel = {
+            name: site["value"].numel()
             for name, site in poutine.trace(model_)
             .get_trace(dataset)
             .iter_stochastic_nodes()
-        )
+            if "Subsample" not in type(site["fn"]).__name__
+        }
+    num_params = sum(numel.values())
+    save_params = [name for name, n in numel.items() if n <= 10000]
     logger.info(f"Fitting via MCMC over {num_params} parameters")
     kernel = NUTS(
         model_,
@@ -423,6 +426,7 @@ def fit_mcmc(
         num_chains=num_chains,
         mp_context=(None if torch.zeros(()).device.type == "cpu" else "spawn"),
         hook_fn=hook_fn_,
+        save_params=save_params,
     )
     mcmc.run(dataset)
     predict = Predictive(
