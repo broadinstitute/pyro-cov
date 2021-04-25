@@ -337,10 +337,7 @@ def fit_svi(
     num_params = sum(p.numel() for p in guide.parameters())
     logger.info(f"Training guide with {num_params} parameters:")
 
-    def optim_config(module_name, param_name):
-        # work around before https://github.com/pyro-ppl/pyro/pull/2814
-        if module_name != param_name:
-            param_name = module_name + "." + param_name
+    def optim_config(param_name):
         config = {"lr": learning_rate, "lrd": learning_rate_decay ** (1 / num_steps)}
         if "scale_tril" in param_name or "weight" in param_name:
             config["lr"] *= 0.05
