@@ -295,6 +295,7 @@ class Guide(AutoStructured):
             conditionals=conditionals,
             dependencies=dependencies,
             init_loc_fn=init_loc_fn,
+            init_scale=0.01,
         )
 
     @torch.no_grad()

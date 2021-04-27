@@ -1,5 +1,9 @@
 build/
 nextclade/
+/data
+/results
+/results.*
+.*.swp
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -130,8 +134,3 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
-
-# Project-specific
-/data
-/results
-.*.swp

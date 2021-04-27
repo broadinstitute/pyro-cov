@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import pickle
+import warnings
 from collections import Counter, defaultdict
 
 from pyrocov import pangolin
@@ -58,7 +59,13 @@ def main(args):
             lineage = datum["covv_lineage"]
             if lineage in (None, "None"):
                 continue  # Drop rows with unknown lineage.
-            lineage = pangolin.decompress(lineage)
+            try:
+                lineage = pangolin.decompress(lineage)
+            except ValueError as e:
+                # work around
+                # https://github.com/cov-lineages/lineages-website/issues/11
+                warnings.warn(str(e))
+                continue
 
             # Collate.
             columns["lineage"].append(lineage)
@@ -93,9 +100,21 @@ def main(args):
         pickle.dump(dict(stats), f)
 
     num_sequences = sum(len(v) for v in subsamples.values())
-    logger.info(f"Saving {num_sequences} sequences")
-    with open(args.subset_file_out, "wb") as f:
-        pickle.dump(dict(subsamples), f)
+    logger.info(f"saving {num_sequences} sequences to {args.subset_file_out}")
+    # This file is too large for pickle, so we save as tsv.
+    # See https://stackoverflow.com/questions/42653386
+    with open(args.subset_file_out, "wt") as f:
+        for lineage, samples in subsamples.items():
+            assert "\t" not in lineage
+            for accession_id, seq in samples.items():
+                assert "\t" not in accession_id
+                assert "\t" not in seq
+                f.write(lineage)
+                f.write("\t")
+                f.write(accession_id)
+                f.write("\t")
+                f.write(seq.replace("\n", "_"))
+                f.write("\n")
 
 
 if __name__ == "__main__":
@@ -105,11 +124,11 @@ if __name__ == "__main__":
     )
     parser.add_argument("--columns-file-out", default="results/gisaid.columns.pkl")
     parser.add_argument("--stats-file-out", default="results/gisaid.stats.pkl")
-    parser.add_argument("--subset-file-out", default="results/gisaid.subset.pkl")
+    parser.add_argument("--subset-file-out", default="results/gisaid.subset.tsv")
     parser.add_argument("--start-date", default=START_DATE)
     parser.add_argument("--min-nchars", default=29000, type=int)
     parser.add_argument("--max-nchars", default=31000, type=int)
-    parser.add_argument("-s", "--samples-per-lineage", default=30, type=int)
+    parser.add_argument("-s", "--samples-per-lineage", default=100, type=int)
     parser.add_argument("-l", "--log-every", default=1000, type=int)
     parser.add_argument("--truncate", default=int(1e10), type=int)
     args = parser.parse_args()

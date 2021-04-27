@@ -2,7 +2,6 @@
 
 import argparse
 import logging
-import pickle
 import re
 from collections import Counter, defaultdict
 
@@ -37,8 +36,13 @@ def count_mutations(counts, row):
 
 
 def main(args):
-    with open(args.subset_file_in, "rb") as f:
-        subsamples = pickle.load(f)
+    # Load the subsampled tsv file.
+    subsamples = defaultdict(dict)
+    with open(args.subset_file_in, "rt") as f:
+        for line in f:
+            line = line.strip()
+            lineage, accession_id, seq = line.split("\t")
+            subsamples[lineage][accession_id] = seq.replace("_", "\n")
 
     # Count mutations via nextclade.
     lineage_mutation_counts = defaultdict(Counter)
@@ -91,7 +95,7 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Featurize nextclade mutations")
     parser.add_argument("--thresh", default=0.5, type=float)
-    parser.add_argument("--subset-file-in", default="results/gisaid.subset.pkl")
+    parser.add_argument("--subset-file-in", default="results/gisaid.subset.tsv")
     parser.add_argument("--features-file-out", default="results/nextclade.features.pt")
     args = parser.parse_args()
     main(args)

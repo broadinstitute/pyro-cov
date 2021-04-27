@@ -144,7 +144,7 @@ def main(args):
     # Run MCMC.
     mcmc_config = (
         "mcmc",
-        args.guide_type,
+        args.mcmc_type,
         args.num_steps,
         args.num_warmup,
         args.num_samples,
@@ -193,22 +193,11 @@ def main(args):
 
     # Add mcmc configs.
     inference_configs.append(mcmc_config)
-    inference_configs.append(
-        (
-            "mcmc",
-            "naive",
-            args.num_steps,
-            args.num_warmup,
-            args.num_samples,
-            args.num_chains,
-            args.max_tree_depth,
-        )
-    )
-    for guide_type in guide_types:
+    if args.mcmc_experiments:
         inference_configs.append(
             (
                 "mcmc",
-                guide_type,
+                "naive",
                 args.num_steps,
                 args.num_warmup,
                 args.num_samples,
@@ -216,6 +205,18 @@ def main(args):
                 args.max_tree_depth,
             )
         )
+        for guide_type in guide_types:
+            inference_configs.append(
+                (
+                    "mcmc",
+                    guide_type,
+                    args.num_steps,
+                    args.num_warmup,
+                    args.num_samples,
+                    args.num_chains,
+                    args.max_tree_depth,
+                )
+            )
 
     # Configure data holdouts.
     empty_holdout = ()
@@ -233,7 +234,7 @@ def main(args):
             (k, tuple(sorted(v.items()))) for k, v in sorted(holdout.items())
         )
         configs.append(svi_config + (holdout,))
-        # configs.append(mcmc_config + (holdout,))  # TODO
+        configs.append(mcmc_config + (holdout,))
 
     # Sequentially fit models.
     result = {}
@@ -256,7 +257,9 @@ if __name__ == "__main__":
     parser.add_argument("--max-feature-order", default=0, type=int)
     parser.add_argument("--svi", action="store_true", help="run only SVI inference")
     parser.add_argument("--mcmc", action="store_true", help="run only MCMC inference")
+    parser.add_argument("--mcmc-experiments", action="store_true")
     parser.add_argument("-g", "--guide-type", default="mvn_normal_dependent")
+    parser.add_argument("-m", "--mcmc-type", default="mvn_delta_dependent")
     parser.add_argument("-n", "--num-steps", default=10001, type=int)
     parser.add_argument("-lr", "--learning-rate", default=0.01, type=float)
     parser.add_argument("-lrd", "--learning-rate-decay", default=0.1, type=float)
