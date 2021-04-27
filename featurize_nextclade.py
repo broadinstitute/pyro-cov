@@ -14,7 +14,11 @@ logging.basicConfig(format="%(relativeCreated) 9d %(message)s", level=logging.IN
 
 
 def count_mutations(counts, row):
-    # TODO check whether row is valid
+    # Check whether row is valid
+    status = row["qc.overallStatus"]
+    if status != "good":
+        counts["error"] += 1  # hack to count errors
+        return
     counts[None] += 1  # hack to count number of lineages
     for col in ["aaSubstitutions", "aaDeletions"]:
         ms = row[col]
@@ -52,12 +56,21 @@ def main(args):
         for seq in sequences.values():
             db.schedule(seq, count_mutations, mutations)
     db.wait()
-    lineage_counts = {k: v.pop(None) for k, v in lineage_mutation_counts.items()}
+    num_errors = sum(v.pop("error", 0) for v in lineage_mutation_counts.values())
+    logger.info(f"Found {num_errors} sequencing errors")
+    lineage_counts = {
+        k: v.pop(None)
+        for k, v in lineage_mutation_counts.items()
+        if None in v
+    }
 
     # Filter to features that occur in the majority of at least one lineage.
     total = len(set().union(*lineage_mutation_counts.values()))
     mutations = set()
-    for lineage, mutation_counts in lineage_mutation_counts.items():
+    for lineage, mutation_counts in list(lineage_mutation_counts.items()):
+        if not mutation_counts:
+            lineage_mutation_counts.pop(lineage)
+            continue
         denominator = lineage_counts[lineage]
         for m, count in mutation_counts.items():
             if count / denominator >= args.thresh:
