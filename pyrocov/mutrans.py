@@ -251,29 +251,25 @@ class Guide(AutoStructured):
         self.guide_type = guide_type
         conditionals = {}
         dependencies = defaultdict(dict)
+        conditionals["concentration"] = "delta"
         if guide_type == "map":
             conditionals["feature_scale"] = "delta"
-            conditionals["concentration"] = "delta"
             conditionals["rate_coef"] = "delta"
             conditionals["init"] = "delta"
         elif guide_type.startswith("normal_delta"):
             conditionals["feature_scale"] = "normal"
-            conditionals["concentration"] = "normal"
             conditionals["rate_coef"] = "normal"
             conditionals["init"] = "delta"
         elif guide_type.startswith("normal"):
             conditionals["feature_scale"] = "normal"
-            conditionals["concentration"] = "normal"
             conditionals["rate_coef"] = "normal"
             conditionals["init"] = "normal"
         elif guide_type.startswith("mvn_delta"):
             conditionals["feature_scale"] = "normal"
-            conditionals["concentration"] = "normal"
             conditionals["rate_coef"] = "mvn"
             conditionals["init"] = "delta"
         elif guide_type.startswith("mvn_normal"):
             conditionals["feature_scale"] = "normal"
-            conditionals["concentration"] = "normal"
             conditionals["rate_coef"] = "mvn"
             conditionals["init"] = "normal"
         else:
@@ -283,11 +279,7 @@ class Guide(AutoStructured):
             T, P, S = dataset["weekly_strains"].shape
             S, F = dataset["features"].shape
             sparse_linear = SparseLinear(P, S, F)
-            dependencies["feature_scale"]["concentration"] = "linear"
-            dependencies["rate_coef"]["concentration"] = "linear"
             dependencies["rate_coef"]["feature_scale"] = "linear"
-            dependencies["init"]["concentration"] = "linear"
-            dependencies["init"]["feature_scale"] = "linear"
             dependencies["init"]["rate_coef"] = sparse_linear
 
         super().__init__(
