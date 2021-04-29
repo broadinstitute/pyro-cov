@@ -172,7 +172,9 @@ def main(args):
         "normal",
         "mvn_delta",
         "mvn_normal",
+        "normal_delta_dependent",
         "mvn_delta_dependent",
+        "normal_dependent",
         "mvn_normal_dependent",
     ]
 
