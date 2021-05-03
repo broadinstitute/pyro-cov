@@ -59,9 +59,7 @@ def main(args):
     num_errors = sum(v.pop("error", 0) for v in lineage_mutation_counts.values())
     logger.info(f"Found {num_errors} sequencing errors")
     lineage_counts = {
-        k: v.pop(None)
-        for k, v in lineage_mutation_counts.items()
-        if None in v
+        k: v.pop(None) for k, v in lineage_mutation_counts.items() if None in v
     }
 
     # Filter to features that occur in the majority of at least one lineage.

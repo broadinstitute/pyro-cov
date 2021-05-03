@@ -12,8 +12,9 @@ import torch
 from pyro import poutine
 from pyro.infer import MCMC, NUTS, SVI, Predictive, Trace_ELBO
 from pyro.infer.autoguide import AutoStructured, init_to_feasible
-from pyro.infer.reparam import StructuredReparam
+from pyro.infer.reparam import LocScaleReparam, StructuredReparam
 from pyro.optim import ClippedAdam
+from pyro.poutine.util import site_is_subsample
 
 import pyrocov.geo
 from pyrocov import pangolin
@@ -175,7 +176,7 @@ def load_jhu_data(gisaid_data):
     }
 
 
-def model(dataset):
+def model(dataset, *, obs=True):
     local_time = dataset["local_time"]
     weekly_strains = dataset["weekly_strains"]
     features = dataset["features"]
@@ -186,36 +187,34 @@ def model(dataset):
     assert feature_order.size(0) == features.size(-1)
     T, P, S = weekly_strains.shape
     S, F = features.shape
-    time_plate = pyro.plate("time", T, dim=-2)
-    place_plate = pyro.plate("place", P, dim=-1)
 
     # Assume relative growth rate depends on mutation features but not time or place.
     feature_scale = pyro.sample(
         "feature_scale",
         dist.LogNormal(0, 1).expand([feature_order_max + 1]).to_event(1),
-    )
-    rate_coef = pyro.sample(
-        "rate_coef", dist.SoftLaplace(0, feature_scale[feature_order]).to_event(1)
-    )
+    ).index_select(-1, feature_order)
+    with poutine.reparam(config={"rate_coef": LocScaleReparam()}):
+        rate_coef = pyro.sample(
+            "rate_coef", dist.SoftLaplace(0, feature_scale).to_event(1)
+        )
     rate = pyro.deterministic("rate", rate_coef @ features.T, event_dim=1)
 
-    # Assume places differ only in their initial infection count.
-    with place_plate:
-        init = pyro.sample("init", dist.SoftLaplace(0, 10).expand([S]).to_event(1))
-
     # Finally observe overdispersed counts.
-    strain_probs = (init + rate * local_time[:, :, None]).softmax(-1)
     concentration = pyro.sample("concentration", dist.LogNormal(2, 4))
-    with time_plate, place_plate:
-        pyro.sample(
-            "obs",
-            dist.DirichletMultinomial(
-                total_count=weekly_strains.sum(-1).max(),
-                concentration=concentration * strain_probs,
-                is_sparse=True,  # uses a faster algorithm
-            ),
-            obs=weekly_strains,
-        )
+    if obs:
+        with pyro.plate("place", P, dim=-1):
+            init = pyro.sample("init", dist.SoftLaplace(0, 10).expand([S]).to_event(1))
+            strain_probs = (init + rate * local_time[:, :, None]).softmax(-1)
+            with pyro.plate("time", T, dim=-2):
+                pyro.sample(
+                    "obs",
+                    dist.DirichletMultinomial(
+                        total_count=weekly_strains.sum(-1).max(),
+                        concentration=concentration * strain_probs,
+                        is_sparse=True,  # uses a faster algorithm
+                    ),
+                    obs=weekly_strains,
+                )
 
 
 def init_loc_fn(site):
@@ -225,7 +224,7 @@ def init_loc_fn(site):
         return torch.ones(shape)
     if name == "concentration":
         return torch.full(shape, 10.0)
-    if name in ("rate_coef", "init"):
+    if name in ("rate_coef", "rate_coef_decentered", "init"):
         return torch.zeros(shape)
     raise ValueError(site["name"])
 
@@ -245,7 +244,6 @@ class SparseLinear(torch.nn.Module):
         return (self.weight_s @ delta + self.weight_p @ delta).reshape(-1)
 
 
-# This requires https://github.com/pyro-ppl/pyro/pull/2812
 class Guide(AutoStructured):
     def __init__(self, dataset, guide_type="mvn_dependent"):
         self.guide_type = guide_type
@@ -254,27 +252,27 @@ class Guide(AutoStructured):
         if guide_type == "map":
             conditionals["feature_scale"] = "delta"
             conditionals["concentration"] = "delta"
-            conditionals["rate_coef"] = "delta"
+            conditionals["rate_coef_decentered"] = "delta"
             conditionals["init"] = "delta"
         elif guide_type.startswith("normal_delta"):
             conditionals["feature_scale"] = "normal"
             conditionals["concentration"] = "normal"
-            conditionals["rate_coef"] = "normal"
+            conditionals["rate_coef_decentered"] = "normal"
             conditionals["init"] = "delta"
         elif guide_type.startswith("normal"):
             conditionals["feature_scale"] = "normal"
             conditionals["concentration"] = "normal"
-            conditionals["rate_coef"] = "normal"
+            conditionals["rate_coef_decentered"] = "normal"
             conditionals["init"] = "normal"
         elif guide_type.startswith("mvn_delta"):
             conditionals["feature_scale"] = "normal"
             conditionals["concentration"] = "normal"
-            conditionals["rate_coef"] = "mvn"
+            conditionals["rate_coef_decentered"] = "mvn"
             conditionals["init"] = "delta"
         elif guide_type.startswith("mvn_normal"):
             conditionals["feature_scale"] = "normal"
             conditionals["concentration"] = "normal"
-            conditionals["rate_coef"] = "mvn"
+            conditionals["rate_coef_decentered"] = "mvn"
             conditionals["init"] = "normal"
         else:
             raise ValueError(f"Unsupported guide type: {guide_type}")
@@ -284,11 +282,11 @@ class Guide(AutoStructured):
             S, F = dataset["features"].shape
             sparse_linear = SparseLinear(P, S, F)
             dependencies["feature_scale"]["concentration"] = "linear"
-            dependencies["rate_coef"]["concentration"] = "linear"
-            dependencies["rate_coef"]["feature_scale"] = "linear"
+            dependencies["rate_coef_decentered"]["concentration"] = "linear"
+            dependencies["rate_coef_decentered"]["feature_scale"] = "linear"
             dependencies["init"]["concentration"] = "linear"
             dependencies["init"]["feature_scale"] = "linear"
-            dependencies["init"]["rate_coef"] = sparse_linear
+            dependencies["init"]["rate_coef_decentered"] = sparse_linear
 
         super().__init__(
             model,
@@ -299,22 +297,31 @@ class Guide(AutoStructured):
         )
 
     @torch.no_grad()
-    def stats(self, dataset):
-        result = {
-            "median": self.median(dataset),
-            "mean": {"rate_coef": self.locs.rate_coef.detach()},
+    @poutine.mask(mask=False)
+    def stats(self, dataset, *, num_samples=1000):
+        # Compute median point estimate.
+        result = {"median": self.median(dataset)}
+        trace = poutine.trace(poutine.condition(model, result["median"])).get_trace(
+            dataset, obs=False
+        )
+        for name, site in trace.nodes.items():
+            if site["type"] == "sample" and not site_is_subsample(site):
+                result["median"][name] = site["value"]
+
+        # Compute moments.
+        save_params = ["concentration", "feature_scale", "rate_coef_decentered"]
+        with pyro.plate("particles", num_samples, dim=-3):
+            samples = {k: v.v for k, v in self.get_deltas(save_params).items()}
+            trace = poutine.trace(poutine.condition(model, samples)).get_trace(
+                dataset, obs=False
+            )
+        samples = {
+            name: site["value"]
+            for name, site in trace.nodes.items()
+            if site["type"] == "sample" and not site_is_subsample(site)
         }
-        if self.guide_type == "normal":
-            result["std"] = {"rate_coef": self.scales.rate_coef.detach()}
-        elif "mvn" in self.guide_type:
-            scale = self.scales.rate_coef.detach()
-            scale_tril = self.scale_trils.rate_coef.detach()
-            scale_tril = scale[:, None] * scale_tril
-            result["cov"] = {"rate_coef": scale_tril @ scale_tril.T}
-            scale_tril = dataset["features"] @ scale_tril
-            result["cov"]["rate"] = scale_tril @ scale_tril.T
-            result["var"] = {k: v.diag() for k, v in result["cov"].items()}
-            result["std"] = {k: v.sqrt() for k, v in result["var"].items()}
+        result["mean"] = {k: v.mean(0).squeeze() for k, v in samples.items()}
+        result["std"] = {k: v.std(0).squeeze() for k, v in samples.items()}
         return result
 
 
