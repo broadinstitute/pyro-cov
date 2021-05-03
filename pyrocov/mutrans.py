@@ -12,7 +12,7 @@ import torch
 from pyro import poutine
 from pyro.infer import MCMC, NUTS, SVI, Predictive, Trace_ELBO
 from pyro.infer.autoguide import AutoStructured, init_to_feasible
-from pyro.infer.reparam import LocScaleReparam, StructuredReparam
+from pyro.infer.reparam import StructuredReparam
 from pyro.optim import ClippedAdam
 from pyro.poutine.util import site_is_subsample
 
@@ -193,10 +193,7 @@ def model(dataset, *, obs=True):
         "feature_scale",
         dist.LogNormal(0, 1).expand([feature_order_max + 1]).to_event(1),
     ).index_select(-1, feature_order)
-    with poutine.reparam(config={"rate_coef": LocScaleReparam()}):
-        rate_coef = pyro.sample(
-            "rate_coef", dist.SoftLaplace(0, feature_scale).to_event(1)
-        )
+    rate_coef = pyro.sample("rate_coef", dist.SoftLaplace(0, feature_scale).to_event(1))
     rate = pyro.deterministic("rate", rate_coef @ features.T, event_dim=1)
 
     # Finally observe overdispersed counts.
@@ -224,7 +221,7 @@ def init_loc_fn(site):
         return torch.ones(shape)
     if name == "concentration":
         return torch.full(shape, 10.0)
-    if name in ("rate_coef", "rate_coef_decentered", "init"):
+    if name in ("rate_coef", "init"):
         return torch.zeros(shape)
     raise ValueError(site["name"])
 
@@ -252,27 +249,27 @@ class Guide(AutoStructured):
         if guide_type == "map":
             conditionals["feature_scale"] = "delta"
             conditionals["concentration"] = "delta"
-            conditionals["rate_coef_decentered"] = "delta"
+            conditionals["rate_coef"] = "delta"
             conditionals["init"] = "delta"
         elif guide_type.startswith("normal_delta"):
             conditionals["feature_scale"] = "normal"
             conditionals["concentration"] = "normal"
-            conditionals["rate_coef_decentered"] = "normal"
+            conditionals["rate_coef"] = "normal"
             conditionals["init"] = "delta"
         elif guide_type.startswith("normal"):
             conditionals["feature_scale"] = "normal"
             conditionals["concentration"] = "normal"
-            conditionals["rate_coef_decentered"] = "normal"
+            conditionals["rate_coef"] = "normal"
             conditionals["init"] = "normal"
         elif guide_type.startswith("mvn_delta"):
             conditionals["feature_scale"] = "normal"
             conditionals["concentration"] = "normal"
-            conditionals["rate_coef_decentered"] = "mvn"
+            conditionals["rate_coef"] = "mvn"
             conditionals["init"] = "delta"
         elif guide_type.startswith("mvn_normal"):
             conditionals["feature_scale"] = "normal"
             conditionals["concentration"] = "normal"
-            conditionals["rate_coef_decentered"] = "mvn"
+            conditionals["rate_coef"] = "mvn"
             conditionals["init"] = "normal"
         else:
             raise ValueError(f"Unsupported guide type: {guide_type}")
@@ -282,11 +279,11 @@ class Guide(AutoStructured):
             S, F = dataset["features"].shape
             sparse_linear = SparseLinear(P, S, F)
             dependencies["feature_scale"]["concentration"] = "linear"
-            dependencies["rate_coef_decentered"]["concentration"] = "linear"
-            dependencies["rate_coef_decentered"]["feature_scale"] = "linear"
+            dependencies["rate_coef"]["concentration"] = "linear"
+            dependencies["rate_coef"]["feature_scale"] = "linear"
             dependencies["init"]["concentration"] = "linear"
             dependencies["init"]["feature_scale"] = "linear"
-            dependencies["init"]["rate_coef_decentered"] = sparse_linear
+            dependencies["init"]["rate_coef"] = sparse_linear
 
         super().__init__(
             model,
@@ -309,7 +306,7 @@ class Guide(AutoStructured):
                 result["median"][name] = site["value"]
 
         # Compute moments.
-        save_params = ["concentration", "feature_scale", "rate_coef_decentered"]
+        save_params = ["concentration", "feature_scale", "rate_coef"]
         with pyro.plate("particles", num_samples, dim=-3):
             samples = {k: v.v for k, v in self.get_deltas(save_params).items()}
             trace = poutine.trace(poutine.condition(model, samples)).get_trace(
