@@ -10,6 +10,7 @@ from timeit import default_timer
 import torch
 
 from pyrocov import mutrans
+from pyrocov.util import torch_map
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(format="%(relativeCreated) 9d %(message)s", level=logging.INFO)
@@ -239,19 +240,21 @@ def main(args):
         configs.append(mcmc_config + (holdout,))
 
     # Sequentially fit models.
-    result = {}
+    results = {}
     for config in configs:
         logger.info(f"Config: {config}")
         holdout = {k: dict(v) for k, v in config[-1]}
         dataset = load_data(args, **holdout)
         if config[0] == "mcmc":
-            result[config] = fit_mcmc(args, dataset, *config[1:])
+            result = fit_mcmc(args, dataset, *config[1:])
         else:
-            result[config] = fit_svi(args, dataset, *config)
-            result[config].pop("guide", None)  # to save space
-        result[config]["mutations"] = dataset["mutations"]
+            result = fit_svi(args, dataset, *config)
+            result.pop("guide", None)  # to save space
+        result["mutations"] = dataset["mutations"]
+        result = torch_map(result, device="cpu", dtype=torch.float)  # to save space
+        results[config] = result
     logger.info("saving results/mutrans.pt")
-    torch.save(result, "results/mutrans.pt")
+    torch.save(results, "results/mutrans.pt")
 
 
 if __name__ == "__main__":
