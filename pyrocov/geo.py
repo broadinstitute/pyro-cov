@@ -40,6 +40,7 @@ GISAID_TO_JHU = {
     "gibraltar": ("united kingdom", "gibraltar"),
     "guadeloupe": ("france", "guadeloupe"),
     "guam": ("us", "guam"),
+    "guyane": ("france", "french guiana"),
     "guyane francaise": ("france", "french guiana"),
     "hong kong": ("china", "hong kong"),
     "kavadarci": ("north macedonia",),
@@ -69,6 +70,7 @@ GISAID_TO_JHU = {
     "south korea": ("korea, south",),
     "st eustatius": ("netherlands", "bonaire, sint eustatius and saba"),
     "st. lucia": ("saint lucia",),
+    "swizterland": ("switzerland",),
     "taiwan": ("china",),  # ?
     "trinidad": ("trinidad and tobago",),
     "united states": ("us",),

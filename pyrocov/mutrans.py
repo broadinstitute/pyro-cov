@@ -25,18 +25,36 @@ logger = logging.getLogger(__name__)
 TIMESTEP = 14
 START_DATE = "2019-12-01"
 
-# The following countries had at least one subregion with at least 5000 samples
-# as of 2021-04-05, and will be finely partitioned into subregions. Remaining
-# countries will be coarsely aggregated to country level.
-FINE_COUNTRIES = {
-    "United Kingdom",
-    "Denmark",
-    "Australia",
-    "USA",
-    "Canada",
-    "Germany",
-    "Sweden",
-}
+
+def get_fine_countries(columns, min_samples=1000):
+    """
+    Select countries have at least two subregions with at least ``min_samples``
+    samples. These will be finely partitioned into subregions. Remaining
+    countries will be coarsely aggregated at country level.
+    """
+    # Count number of samples in each subregion.
+    counts = Counter()
+    for location in columns["location"]:
+        parts = location.split("/")
+        if len(parts) < 2:
+            continue
+        parts = tuple(p.strip() for p in parts[:3])
+        counts[parts] += 1
+
+    # Select fine countries.
+    fine_countries = Counter()
+    for parts, count in counts.items():
+        if count >= min_samples:
+            fine_countries[parts[1]] += 1
+    fine_countries = frozenset(
+        name for name, count in fine_countries.items() if count >= 2
+    )
+    logger.info(
+        "Partitioning the following countries into subregions: {}".format(
+            ", ".join(sorted(fine_countries))
+        )
+    )
+    return fine_countries
 
 
 def load_gisaid_data(
@@ -53,6 +71,7 @@ def load_gisaid_data(
         columns = pickle.load(f)
     logger.info("Training on {} rows with columns:".format(len(columns["day"])))
     logger.info(", ".join(columns.keys()))
+    fine_countries = get_fine_countries(columns)
 
     # Filter features into numbers of mutations.
     aa_features = torch.load("results/nextclade.features.pt")
@@ -72,12 +91,15 @@ def load_gisaid_data(
     lineage_id = {k: i for i, k in enumerate(lineage_id_inv)}
     sparse_data = Counter()
     location_id = OrderedDict()
+    skipped = set()
     for virus_name, day, location, lineage in zip(
         columns["virus_name"], columns["day"], columns["location"], lineages
     ):
         row = {"virus_name": virus_name, "location": location}
         if lineage not in lineage_id:
-            logger.warning(f"WARNING skipping unsampled lineage {lineage}")
+            if lineage not in skipped:
+                skipped.add(lineage)
+                logger.warning(f"WARNING skipping unsampled lineage {lineage}")
             continue
         if not all(v.search(row[k]) for k, v in include.items()):
             continue
@@ -87,7 +109,7 @@ def load_gisaid_data(
         if len(parts) < 2:
             continue
         parts = [p.strip() for p in parts[:3]]
-        if parts[1] not in FINE_COUNTRIES:
+        if parts[1] not in fine_countries:
             parts = parts[:2]
         location = " / ".join(parts)
         p = location_id.setdefault(location, len(location_id))
@@ -143,7 +165,7 @@ def load_jhu_data(gisaid_data):
     ).T
     logger.info(
         "Loaded {} x {} daily case data, totaling {}".format(
-            *daily_cases.shape, daily_cases.sum().item()
+            *daily_cases.shape, daily_cases[-1].sum().item()
         )
     )
 
