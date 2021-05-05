@@ -123,7 +123,10 @@ def load_gisaid_data(
     weekly_strains = torch.zeros(T, P, S)
     for (t, p, s), n in sparse_data.items():
         weekly_strains[t, p, s] = n
-    logger.info(f"Keeping {int(weekly_strains.sum())}/{len(lineages)} rows")
+    logger.info(
+        f"Keeping {int(weekly_strains.sum())}/{len(lineages)} rows "
+        f"(dropped {len(lineages) - int(weekly_strains.sum())})"
+    )
 
     # Filter regions.
     num_times_observed = (weekly_strains > 0).max(2).values.sum(0)

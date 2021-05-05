@@ -55,7 +55,7 @@ def main(args):
                 continue  # Drop rows with no month information.
             date = parse_date(datum["covv_collection_date"])
             if date < args.start_date:
-                continue  # Drop rows before start date.
+                date = args.start_date  # Clip rows before start date.
             lineage = datum["covv_lineage"]
             if lineage in (None, "None"):
                 continue  # Drop rows with unknown lineage.
