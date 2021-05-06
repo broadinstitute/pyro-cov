@@ -459,9 +459,9 @@ def fit_mcmc(
     predict = Predictive(
         model_,
         mcmc.get_samples(),
-        return_sites=["feature_scale", "concentration", "rate_coef", "rate", "init"],
+        return_sites=["feature_scale", "concentration", "rate_coef", "rate"],
     )
-    samples = predict(dataset)
+    samples = predict(dataset, obs=False)
 
     result = {}
     result["losses"] = losses

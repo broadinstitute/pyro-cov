@@ -169,14 +169,14 @@ def main(args):
         fit_svi(args, dataset, *svi_config)
         return
     guide_types = [
-        "normal_delta",
-        "normal",
-        "mvn_delta",
-        "mvn_normal",
-        "normal_delta_dependent",
+        # "normal_delta",
+        # "normal",
+        # "mvn_delta",
+        # "mvn_normal",
+        # "normal_delta_dependent",
         "mvn_delta_dependent",
-        "normal_dependent",
-        "mvn_normal_dependent",
+        # "normal_dependent",
+        # "mvn_normal_dependent",
     ]
 
     # Add SVI configs.
@@ -224,12 +224,12 @@ def main(args):
     # Configure data holdouts.
     empty_holdout = ()
     holdouts = [
-        {"exclude": {"location": "^Europe / United Kingdom"}},
-        {"exclude": {"location": "^North America / USA"}},
-        {"include": {"location": "^Europe / United Kingdom"}},
         {"include": {"location": "^North America / USA"}},
-        {"include": {"virus_name": "^hCoV-19/USA/..-CDC-"}},
-        {"include": {"virus_name": "^hCoV-19/USA/..-CDC-2-"}},
+        {"exclude": {"location": "^North America / USA"}},
+        # {"include": {"location": "^Europe / United Kingdom"}},
+        # {"exclude": {"location": "^Europe / United Kingdom"}},
+        # {"include": {"virus_name": "^hCoV-19/USA/..-CDC-"}},
+        # {"include": {"virus_name": "^hCoV-19/USA/..-CDC-2-"}},
     ]
     configs = [c + (empty_holdout,) for c in inference_configs]
     for holdout in holdouts:
@@ -263,7 +263,7 @@ if __name__ == "__main__":
     parser.add_argument("--svi", action="store_true", help="run only SVI inference")
     parser.add_argument("--mcmc", action="store_true", help="run only MCMC inference")
     parser.add_argument("--mcmc-experiments", action="store_true")
-    parser.add_argument("-g", "--guide-type", default="mvn_normal_dependent")
+    parser.add_argument("-g", "--guide-type", default="mvn_delta_dependent")
     parser.add_argument("-m", "--mcmc-type", default="mvn_delta_dependent")
     parser.add_argument("-n", "--num-steps", default=10001, type=int)
     parser.add_argument("-lr", "--learning-rate", default=0.01, type=float)
