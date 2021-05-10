@@ -22,7 +22,8 @@ from pyrocov import pangolin
 logger = logging.getLogger(__name__)
 
 # Reasonable values might be week (7), fortnight (14), or month (28)
-TIMESTEP = 14
+TIMESTEP = 14  # in days
+GENERATION_TIME = 5.5  # in days
 START_DATE = "2019-12-01"
 
 
@@ -139,7 +140,7 @@ def load_gisaid_data(
 
     # Construct region-local time scales centered around observations.
     num_obs = weekly_strains.sum(-1)
-    local_time = torch.arange(float(len(num_obs))) * TIMESTEP / 365.25  # in years
+    local_time = torch.arange(float(len(num_obs))) * TIMESTEP / GENERATION_TIME
     local_time = local_time[:, None]
     local_time = local_time - (local_time * num_obs).sum(0) / num_obs.sum(0)
 
