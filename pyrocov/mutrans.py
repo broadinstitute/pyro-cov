@@ -84,7 +84,7 @@ def load_gisaid_data(
     mutations = [m for k, m in zip(keep, mutations) if k]
     features = features[:, keep]
     feature_order = torch.tensor([m.count(",") for m in mutations])
-    logger.info("Loaded {} feature matrix".format(" x ".join(features.shape)))
+    logger.info("Loaded {} feature matrix".format(" x ".join(map(str, features.shape))))
 
     # Aggregate regions.
     lineages = list(map(pangolin.compress, columns["lineage"]))
@@ -217,10 +217,10 @@ def model(dataset, *, obs=True):
     # Assume relative growth rate depends on mutation features but not time or place.
     feature_scale = pyro.sample(
         "feature_scale",
-        dist.LogNormal(-4, 2).expand([feature_order_max + 1]).to_event(1),
+        dist.LogNormal(0, 1).expand([feature_order_max + 1]).to_event(1),
     ).index_select(-1, feature_order)
     rate_coef = pyro.sample("rate_coef", dist.SoftLaplace(0, feature_scale).to_event(1))
-    rate = pyro.deterministic("rate", rate_coef @ features.T, event_dim=1)
+    rate = pyro.deterministic("rate", 0.01 * rate_coef @ features.T, event_dim=1)
 
     # Finally observe overdispersed counts.
     concentration = pyro.sample("concentration", dist.LogNormal(2, 4))
@@ -233,7 +233,7 @@ def model(dataset, *, obs=True):
                     "obs",
                     dist.DirichletMultinomial(
                         total_count=weekly_strains.sum(-1).max(),
-                        concentration=concentration * strain_probs,
+                        concentration=concentration * strain_probs + 1e-20,
                         is_sparse=True,  # uses a faster algorithm
                     ),
                     obs=weekly_strains,
@@ -244,11 +244,11 @@ def init_loc_fn(site):
     name = site["name"]
     shape = site["fn"].shape()
     if name == "feature_scale":
-        return torch.full(shape, 0.02)
+        return torch.ones(shape)
     if name == "concentration":
         return torch.full(shape, 10.0)
     if name in ("rate_coef", "init"):
-        return torch.zeros(shape)
+        return torch.randn(shape) * 0.01
     raise ValueError(site["name"])
 
 
@@ -351,9 +351,9 @@ class Guide(AutoStructured):
 def fit_svi(
     dataset,
     guide_type,
-    learning_rate=0.01,
+    learning_rate=0.005,
     learning_rate_decay=0.01,
-    num_steps=3001,
+    num_steps=5001,
     log_every=50,
     seed=20210319,
 ):
@@ -371,7 +371,9 @@ def fit_svi(
     def optim_config(param_name):
         config = {"lr": learning_rate, "lrd": learning_rate_decay ** (1 / num_steps)}
         if "scale_tril" in param_name or "weight" in param_name:
-            config["lr"] *= 0.05
+            config["lr"] *= 0.1
+        elif "scales" in param_name:
+            config["lr"] *= 0.5
         return config
 
     optim = ClippedAdam(optim_config)
@@ -387,13 +389,18 @@ def fit_svi(
             median = guide.median()
             concentration = median["concentration"].item()
             feature_scale = median["feature_scale"].tolist()
-            assert median["feature_scale"].ge(0.02).all(), "implausible"
+            assert median["feature_scale"].ge(0.02).all(), "implausibly small feature_scale"
+            assert median["concentration"].ge(1).all(), "implausible small concentration"
             feature_scale = "[{}]".format(", ".join(f"{f:0.3g}" for f in feature_scale))
             logger.info(
                 f"step {step: >4d} loss = {loss / num_obs:0.6g}\t"
                 f"conc. = {concentration:0.3g}\t"
                 f"f.scale = {feature_scale}"
             )
+        if step >= 50:
+            prev = torch.tensor(losses[-50:-25], device="cpu").median().item()
+            curr = torch.tensor(losses[-25:], device="cpu").median().item()
+            assert (curr - prev) < num_obs, "loss is increasing"
 
     result = guide.stats(dataset)
     result["losses"] = losses

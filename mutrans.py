@@ -182,7 +182,7 @@ def main(args):
     # Add SVI configs.
     inference_configs = [
         svi_config,
-        ("map", 1001, 0.05, 1.0),
+        ("map", 2001, 0.01, 1.0),
     ]
     for guide_type in guide_types:
         inference_configs.append(
@@ -266,7 +266,7 @@ if __name__ == "__main__":
     parser.add_argument("-g", "--guide-type", default="mvn_delta_dependent")
     parser.add_argument("-m", "--mcmc-type", default="mvn_delta_dependent")
     parser.add_argument("-n", "--num-steps", default=10001, type=int)
-    parser.add_argument("-lr", "--learning-rate", default=0.01, type=float)
+    parser.add_argument("-lr", "--learning-rate", default=0.005, type=float)
     parser.add_argument("-lrd", "--learning-rate-decay", default=0.1, type=float)
     parser.add_argument("-w", "--num-warmup", default=500, type=int)
     parser.add_argument("-s", "--num-samples", default=500, type=int)
