@@ -84,7 +84,7 @@ def load_gisaid_data(
     mutations = [m for k, m in zip(keep, mutations) if k]
     features = features[:, keep]
     feature_order = torch.tensor([m.count(",") for m in mutations])
-    logger.info("Loaded {} feature matrix".format(features.shape))
+    logger.info("Loaded {} feature matrix".format(" x ".join(features.shape)))
 
     # Aggregate regions.
     lineages = list(map(pangolin.compress, columns["lineage"]))
@@ -217,7 +217,7 @@ def model(dataset, *, obs=True):
     # Assume relative growth rate depends on mutation features but not time or place.
     feature_scale = pyro.sample(
         "feature_scale",
-        dist.LogNormal(0, 1).expand([feature_order_max + 1]).to_event(1),
+        dist.LogNormal(-4, 2).expand([feature_order_max + 1]).to_event(1),
     ).index_select(-1, feature_order)
     rate_coef = pyro.sample("rate_coef", dist.SoftLaplace(0, feature_scale).to_event(1))
     rate = pyro.deterministic("rate", rate_coef @ features.T, event_dim=1)
@@ -244,7 +244,7 @@ def init_loc_fn(site):
     name = site["name"]
     shape = site["fn"].shape()
     if name == "feature_scale":
-        return torch.ones(shape)
+        return torch.full(shape, 0.02)
     if name == "concentration":
         return torch.full(shape, 10.0)
     if name in ("rate_coef", "init"):
