@@ -247,7 +247,7 @@ class InitLocFn:
         init.div_(init.sum(-1, True)).log_()
         init.sub_(init.mean(-1, True))
         self.init = init
-        logger.info("init stddev = {init.std():0.3g}")
+        logger.info(f"init stddev = {init.std():0.3g}")
 
     def __call__(self, site):
         name = site["name"]
