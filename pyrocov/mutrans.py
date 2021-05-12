@@ -334,6 +334,7 @@ class Guide(AutoStructured):
     @poutine.mask(mask=False)
     def stats(self, dataset, *, num_samples=1000):
         # Compute median point estimate.
+        # FIXME this silently fails for map inference.
         result = {"median": self.median(dataset)}
         trace = poutine.trace(poutine.condition(model, result["median"])).get_trace(
             dataset, obs=False
@@ -362,9 +363,9 @@ class Guide(AutoStructured):
 def fit_svi(
     dataset,
     guide_type,
-    learning_rate=0.01,
-    learning_rate_decay=0.01,
-    num_steps=5001,
+    learning_rate=0.02,
+    learning_rate_decay=0.1,
+    num_steps=3001,
     log_every=50,
     seed=20210319,
 ):
@@ -382,7 +383,7 @@ def fit_svi(
     def optim_config(param_name):
         config = {"lr": learning_rate, "lrd": learning_rate_decay ** (1 / num_steps)}
         if "scale_tril" in param_name or "weight" in param_name:
-            config["lr"] *= 0.05
+            config["lr"] *= 0.1
         elif "scales" in param_name:
             config["lr"] *= 0.5
         return config
@@ -429,6 +430,8 @@ def fit_svi(
 def log_stats(dataset, result):
     mutations = dataset["mutations"]
     mean = result["mean"]["rate_coef"].cpu()
+    if not mean.shape:
+        return  # Work around error in map estimation.
     std = result["std"]["rate_coef"].cpu()
     sig = mean.abs() / std
     logger.info(f"|μ|/σ [median,max] = [{sig.median():0.3g},{sig.max():0.3g}]")
