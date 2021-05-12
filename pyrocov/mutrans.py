@@ -240,16 +240,27 @@ def model(dataset, *, obs=True):
                 )
 
 
-def init_loc_fn(site):
-    name = site["name"]
-    shape = site["fn"].shape()
-    if name == "feature_scale":
-        return torch.ones(shape)
-    if name == "concentration":
-        return torch.full(shape, 10.0)
-    if name in ("rate_coef", "init"):
-        return torch.randn(shape) * 0.01
-    raise ValueError(site["name"])
+class InitLocFn:
+    def __init__(self, dataset):
+        # Initialize init to mean.
+        init = dataset["weekly_strains"].sum(0).add_(1)
+        init.div_(init.sum(-1, True)).log_()
+        init.sub_(init.mean(-1, True))
+        self.init = init
+        logger.info("init stddev = {init.std():0.3g}")
+
+    def __call__(self, site):
+        name = site["name"]
+        shape = site["fn"].shape()
+        if name == "feature_scale":
+            return torch.ones(shape)
+        if name == "concentration":
+            return torch.full(shape, 10.0)
+        if name == "rate_coef":
+            return torch.randn(shape) * 0.01
+        elif name == "init":
+            return self.init
+        raise ValueError(site["name"])
 
 
 class SparseLinear(torch.nn.Module):
@@ -315,7 +326,7 @@ class Guide(AutoStructured):
             model,
             conditionals=conditionals,
             dependencies=dependencies,
-            init_loc_fn=init_loc_fn,
+            init_loc_fn=InitLocFn(dataset),
             init_scale=0.01,
         )
 
@@ -351,7 +362,7 @@ class Guide(AutoStructured):
 def fit_svi(
     dataset,
     guide_type,
-    learning_rate=0.005,
+    learning_rate=0.01,
     learning_rate_decay=0.01,
     num_steps=5001,
     log_every=50,
@@ -371,7 +382,7 @@ def fit_svi(
     def optim_config(param_name):
         config = {"lr": learning_rate, "lrd": learning_rate_decay ** (1 / num_steps)}
         if "scale_tril" in param_name or "weight" in param_name:
-            config["lr"] *= 0.1
+            config["lr"] *= 0.05
         elif "scales" in param_name:
             config["lr"] *= 0.5
         return config
@@ -411,12 +422,12 @@ def fit_svi(
     result["params"] = {k: v.detach().clone() for k, v in param_store.items()}
     result["guide"] = guide.float()
 
-    log_stats(result)
+    log_stats(dataset, result)
     return result
 
 
-def log_stats(result):
-    mutations = result["mutations"]
+def log_stats(dataset, result):
+    mutations = dataset["mutations"]
     mean = result["mean"]["rate_coef"].cpu()
     std = result["std"]["rate_coef"].cpu()
     sig = mean.abs() / std
@@ -499,5 +510,5 @@ def fit_mcmc(
     # Save only a subset of samples, since data can be large.
     result["samples"] = {k: samples[k].squeeze() for k in ["rate_coef", "rate"]}
 
-    log_stats(result)
+    log_stats(dataset, result)
     return result
