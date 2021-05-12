@@ -389,8 +389,12 @@ def fit_svi(
             median = guide.median()
             concentration = median["concentration"].item()
             feature_scale = median["feature_scale"].tolist()
-            assert median["feature_scale"].ge(0.02).all(), "implausibly small feature_scale"
-            assert median["concentration"].ge(1).all(), "implausible small concentration"
+            assert (
+                median["feature_scale"].ge(0.02).all()
+            ), "implausibly small feature_scale"
+            assert (
+                median["concentration"].ge(1).all()
+            ), "implausible small concentration"
             feature_scale = "[{}]".format(", ".join(f"{f:0.3g}" for f in feature_scale))
             logger.info(
                 f"step {step: >4d} loss = {loss / num_obs:0.6g}\t"
@@ -406,7 +410,20 @@ def fit_svi(
     result["losses"] = losses
     result["params"] = {k: v.detach().clone() for k, v in param_store.items()}
     result["guide"] = guide.float()
+
+    log_stats(result)
     return result
+
+
+def log_stats(result):
+    mutations = result["mutations"]
+    mean = result["mean"]["rate_coef"].cpu()
+    std = result["std"]["rate_coef"].cpu()
+    sig = mean.abs() / std
+    logger.info(f"|μ|/σ [median,max] = [{sig.median():0.3g},{sig.max():0.3g}]")
+    for m in ["S:D614G", "S:N501Y", "S:E484K", "S:L452R"]:
+        i = mutations.index(m)
+        logger.info("ΔlogR({}) = {:0.3g} ± {:0.2f}".format(m, mean[i], std[i]))
 
 
 def hook_fn(log_every, losses, num_obs, kernel, params, stage, i):
@@ -481,4 +498,6 @@ def fit_mcmc(
     result["std"] = {k: v.std(0).squeeze() for k, v in samples.items()}
     # Save only a subset of samples, since data can be large.
     result["samples"] = {k: samples[k].squeeze() for k in ["rate_coef", "rate"]}
+
+    log_stats(result)
     return result
