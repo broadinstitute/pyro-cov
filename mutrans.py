@@ -181,7 +181,7 @@ def main(args):
         # "mvn_delta",
         # "mvn_normal",
         # "normal_delta_dependent",
-        "mvn_delta_dependent",
+        # "mvn_delta_dependent",
         # "normal_dependent",
         # "mvn_normal_dependent",
     ]
@@ -271,11 +271,11 @@ if __name__ == "__main__":
     parser.add_argument("--mcmc", action="store_true", help="run only one MCMC config")
     parser.add_argument("--svi-only", action="store_true", help="run only SVI configs")
     parser.add_argument("--mcmc-experiments", action="store_true")
-    parser.add_argument("-g", "--guide-type", default="mvn_delta_dependent")
+    parser.add_argument("-g", "--guide-type", default="mvn_normal_dependent")
     parser.add_argument("-m", "--mcmc-type", default="mvn_delta_dependent")
-    parser.add_argument("-n", "--num-steps", default=3001, type=int)
+    parser.add_argument("-n", "--num-steps", default=10001, type=int)
     parser.add_argument("-lr", "--learning-rate", default=0.02, type=float)
-    parser.add_argument("-lrd", "--learning-rate-decay", default=0.1, type=float)
+    parser.add_argument("-lrd", "--learning-rate-decay", default=0.05, type=float)
     parser.add_argument("-w", "--num-warmup", default=500, type=int)
     parser.add_argument("-s", "--num-samples", default=500, type=int)
     parser.add_argument("-c", "--num-chains", default=1, type=int)

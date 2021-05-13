@@ -22,7 +22,7 @@ from pyrocov import pangolin
 logger = logging.getLogger(__name__)
 
 # Reasonable values might be week (7), fortnight (14), or month (28)
-TIMESTEP = 14  # in days
+TIMESTEP = 7  # in days
 GENERATION_TIME = 5.5  # in days
 START_DATE = "2019-12-01"
 
