@@ -198,7 +198,7 @@ def load_jhu_data(gisaid_data):
     }
 
 
-def model(dataset, *, obs=True):
+def model(dataset, *, places=True, times=True):
     local_time = dataset["local_time"]
     weekly_strains = dataset["weekly_strains"]
     features = dataset["features"]
@@ -216,7 +216,7 @@ def model(dataset, *, obs=True):
     rate_coef = pyro.sample(
         "rate_coef", dist.SoftLaplace(torch.zeros(F), feature_scale).to_event(1)
     )
-    if not obs:
+    if not places:
         return
     with pyro.plate("place", P, dim=-1):
         rate_bias = pyro.sample(
@@ -227,6 +227,8 @@ def model(dataset, *, obs=True):
         # Finally observe overdispersed counts.
         init = pyro.sample("init", dist.SoftLaplace(torch.zeros(S), 10).to_event(1))
         strain_probs = (init + rate * local_time[:, :, None]).softmax(-1)
+        if not times:
+            return
         with pyro.plate("time", T, dim=-2):
             pyro.sample(
                 "obs",
@@ -265,10 +267,10 @@ class InitLocFn:
 
 
 class RateBiasRateCoefLinear(torch.nn.Module):
-    def __init__(self, P, S, F):
+    def __init__(self, P, S, F, features):
         super().__init__()
         self.PSF = P, S, F
-        self.weight = torch.nn.Parameter(torch.zeros(F, S))
+        self.register_buffer("weight", -features.T)
 
     def forward(self, x):
         P, S, F = self.PSF
@@ -330,7 +332,9 @@ class Guide(AutoStructured):
         if guide_type.endswith("_dependent"):
             T, P, S = dataset["weekly_strains"].shape
             S, F = dataset["features"].shape
-            dependencies["rate_bias"]["rate_coef"] = RateBiasRateCoefLinear(P, S, F)
+            dependencies["rate_bias"]["rate_coef"] = RateBiasRateCoefLinear(
+                P, S, F, dataset["features"]
+            )
             dependencies["init"]["rate_bias"] = InitRateBiasLinear(P, S)
 
         super().__init__(
@@ -348,7 +352,7 @@ class Guide(AutoStructured):
         # FIXME this silently fails for map inference.
         result = {"median": self.median(dataset)}
         trace = poutine.trace(poutine.condition(model, result["median"])).get_trace(
-            dataset, obs=False
+            dataset, times=False
         )
         for name, site in trace.nodes.items():
             if site["type"] == "sample" and not site_is_subsample(site):
@@ -359,7 +363,7 @@ class Guide(AutoStructured):
         with pyro.plate("particles", num_samples, dim=-3):
             samples = {k: v.v for k, v in self.get_deltas(save_params).items()}
             trace = poutine.trace(poutine.condition(model, samples)).get_trace(
-                dataset, obs=False
+                dataset, places=False
             )
         samples = {
             name: site["value"]
@@ -516,7 +520,7 @@ def fit_mcmc(
         mcmc.get_samples(),
         return_sites=["feature_scale", "concentration", "rate_coef", "rate"],
     )
-    samples = predict(dataset, obs=False)
+    samples = predict(dataset, places=False)
 
     result = {}
     result["losses"] = losses

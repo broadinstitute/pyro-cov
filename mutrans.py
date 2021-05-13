@@ -169,7 +169,7 @@ def main(args):
 
     inference_configs = [
         svi_config,
-        ("map", 1001, 0.05, 1.0),
+        ("map", 2001, 0.05, 0.1),
     ]
 
     # Add SVI configs.
