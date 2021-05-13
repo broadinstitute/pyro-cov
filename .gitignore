@@ -4,6 +4,7 @@ nextclade/
 /results
 /results.*
 .*.swp
+temp.*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

@@ -295,33 +295,25 @@ class Guide(AutoStructured):
         conditionals = {}
         dependencies = defaultdict(dict)
         conditionals["concentration"] = "delta"
+        conditionals["feature_scale"] = "delta"
+        conditionals["place_scale"] = "delta"
         if guide_type == "map":
-            conditionals["feature_scale"] = "delta"
-            conditionals["place_scale"] = "delta"
             conditionals["rate_coef"] = "delta"
             conditionals["rate_bias"] = "delta"
             conditionals["init"] = "delta"
         elif guide_type.startswith("normal_delta"):
-            conditionals["feature_scale"] = "normal"
-            conditionals["place_scale"] = "normal"
             conditionals["rate_coef"] = "normal"
             conditionals["rate_bias"] = "delta"
             conditionals["init"] = "delta"
         elif guide_type.startswith("normal"):
-            conditionals["feature_scale"] = "normal"
-            conditionals["place_scale"] = "normal"
             conditionals["rate_coef"] = "normal"
             conditionals["rate_bias"] = "normal"
             conditionals["init"] = "normal"
         elif guide_type.startswith("mvn_delta"):
-            conditionals["feature_scale"] = "normal"
-            conditionals["place_scale"] = "normal"
             conditionals["rate_coef"] = "mvn"
             conditionals["rate_bias"] = "delta"
             conditionals["init"] = "delta"
         elif guide_type.startswith("mvn_normal"):
-            conditionals["feature_scale"] = "normal"
-            conditionals["place_scale"] = "normal"
             conditionals["rate_coef"] = "mvn"
             conditionals["rate_bias"] = "normal"
             conditionals["init"] = "normal"
@@ -331,10 +323,6 @@ class Guide(AutoStructured):
         if guide_type.endswith("_dependent"):
             T, P, S = dataset["weekly_strains"].shape
             S, F = dataset["features"].shape
-            dependencies["place_scale"]["feature_scale"] = "linear"
-            dependencies["rate_coef"]["feature_scale"] = "linear"
-            dependencies["rate_coef"]["place_scale"] = "linear"
-            dependencies["rate_bias"]["place_scale"] = "linear"
             dependencies["rate_bias"]["rate_coef"] = RateBiasRateCoefLinear(P, S, F)
             dependencies["init"]["rate_bias"] = InitRateBiasLinear(P, S)
 
