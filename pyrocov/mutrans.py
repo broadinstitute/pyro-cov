@@ -283,10 +283,17 @@ class RateBiasRateCoefLinear(torch.nn.Module):
 class InitRateBiasLinear(torch.nn.Module):
     def __init__(self, P, S):
         super().__init__()
-        self.weight = torch.nn.Parameter(torch.zeros(P * S))
+        self.PS = P, S
+        self.weight_ps = torch.nn.Parameter(torch.zeros(P, S))
+        self.weight_ss = torch.nn.Parameter(torch.zeros(S, S))
 
     def forward(self, x):
-        return x * self.weight
+        P, S = self.PS
+        batch_shape = x.shape[:-1]
+        x = x.reshape(batch_shape + (P, S))
+        y = x * self.weight_ps + x @ self.weight_ss
+        y = y.reshape(batch_shape + (P * S,))
+        return y
 
 
 class Guide(AutoStructured):
@@ -372,6 +379,7 @@ def fit_svi(
     num_steps=3001,
     log_every=50,
     seed=20210319,
+    check_loss=False,
 ):
     logger.info(f"Fitting {guide_type} guide via SVI")
     pyro.set_rng_seed(seed)
@@ -386,10 +394,12 @@ def fit_svi(
 
     def optim_config(param_name):
         config = {"lr": learning_rate, "lrd": learning_rate_decay ** (1 / num_steps)}
-        if "scale_tril" in param_name or "weight" in param_name:
-            config["lr"] *= 0.1
-        elif "scales" in param_name:
+        if "scales" in param_name:
             config["lr"] *= 0.5
+        elif "scale_tril" in param_name:
+            config["lr"] *= 0.1
+        elif "weight" in param_name:
+            config["lr"] *= 0.05
         return config
 
     optim = ClippedAdam(optim_config)
@@ -419,7 +429,7 @@ def fit_svi(
                 f"f.scale = {feature_scale:0.3g}\t"
                 f"p.scale = {place_scale:0.3g}"
             )
-        if step >= 50:
+        if check_loss and step >= 50:
             prev = torch.tensor(losses[-50:-25], device="cpu").median().item()
             curr = torch.tensor(losses[-25:], device="cpu").median().item()
             assert (curr - prev) < num_obs, "loss is increasing"
