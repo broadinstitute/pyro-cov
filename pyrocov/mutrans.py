@@ -347,6 +347,21 @@ class Guide(AutoStructured):
             init_scale=0.01,
         )
 
+        self._dataset_for_init = dataset
+
+    def _setup_prototype(self, *args, **kwargs):
+        super()._setup_prototype(*args, **kwargs)
+        dataset = self._dataset_for_init
+        del self._dataset_for_init
+
+        # Initialize scale_trils.rate_coef.
+        features = dataset["features"]
+        S, F = features.shape
+        precision = features.T @ features + 0.01 * torch.eye(F)
+        scale_tril = _precision_to_scale_tril(precision)
+        assert scale_tril.shape == self.scale_trils.rate_coef.shape
+        self.scale_trils.rate_coef = scale_tril
+
     @torch.no_grad()
     @poutine.mask(mask=False)
     def stats(self, dataset, *, num_samples=1000):
@@ -375,6 +390,17 @@ class Guide(AutoStructured):
         result["mean"] = {k: v.mean(0).squeeze() for k, v in samples.items()}
         result["std"] = {k: v.std(0).squeeze() for k, v in samples.items()}
         return result
+
+
+# Copied from https://github.com/pytorch/pytorch/blob/v1.8.0/torch/distributions/multivariate_normal.py#L69
+def _precision_to_scale_tril(P):
+    # Ref: https://nbviewer.jupyter.org/gist/fehiepsi/5ef8e09e61604f10607380467eb82006#Precision-to-scale_tril
+    Lf = torch.cholesky(torch.flip(P, (-2, -1)))
+    L_inv = torch.transpose(torch.flip(Lf, (-2, -1)), -2, -1)
+    L = torch.triangular_solve(
+        torch.eye(P.shape[-1], dtype=P.dtype, device=P.device), L_inv, upper=False
+    )[0]
+    return L
 
 
 def fit_svi(
