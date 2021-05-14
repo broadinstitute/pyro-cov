@@ -271,6 +271,7 @@ class RateBiasRateCoefLinear(torch.nn.Module):
         super().__init__()
         self.PSF = P, S, F
         self.register_buffer("weight", -features.T)
+        self.scale = torch.nn.Parameter(torch.ones(P, S))
 
     def forward(self, x):
         P, S, F = self.PSF
@@ -278,6 +279,7 @@ class RateBiasRateCoefLinear(torch.nn.Module):
         y = x @ self.weight
         y = y.reshape(batch_shape + (1, S))
         y = y.expand(batch_shape + (P, S))
+        y = y * self.scale
         y = y.reshape(batch_shape + (-1,))
         return y
 
