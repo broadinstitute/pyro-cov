@@ -10,6 +10,8 @@ PANGOLIN_REPO = os.environ.get(
     "PANGOLIN_REPO", "~/github/cov-lineages/lineages-website"
 )
 
+# TODO replace this with
+# https://github.com/cov-lineages/pango-designation/blob/master/alias_key.json
 # See https://cov-lineages.org/lineages.html or
 # https://github.com/cov-lineages/lineages-website/lineages/*.md
 # This list can be updated via update_aliases() below.
@@ -30,6 +32,9 @@ PANGOLIN_ALIASES = {
     "AP": "B.1.1.70",
     "AQ": "B.1.1.39",
     "AS": "B.1.1.317",
+    "AT": "B.1.1.370",
+    "AU": "B.1.466.2",
+    "AV": "B.1.1.482",
     "C": "B.1.1.1",
     "D": "B.1.1.25",
     "E": "B.1.416",
@@ -43,6 +48,7 @@ PANGOLIN_ALIASES = {
     "M": "B.1.1.294",
     "N": "B.1.1.33",
     "P": "B.1.1.28",
+    "Q": "B.1.1.7",
     "R": "B.1.1.316",
     "S": "B.1.1.217",
     "U": "B.1.177.60",
