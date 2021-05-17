@@ -2,6 +2,7 @@
 
 import argparse
 import datetime
+import hashlib
 import json
 import logging
 import os
@@ -28,6 +29,15 @@ def parse_date(string):
         string = "-".join(parts)
         fmt = DATE_FORMATS[len(string)]
     return datetime.datetime.strptime(string, fmt)
+
+
+def debug_england(args, datum):
+    "Split England into 256 pieces"
+    hash_ = hashlib.sha1(datum["covv_accession_id"].encode("utf-8")).hexdigest()
+    part = int("0x" + hash_, 16) % 256
+    datum["covv_location"] = datum["covv_location"].replace(
+        " / England", f" / England_{part:08b}"
+    )
 
 
 FIELDS = ["virus_name", "accession_id", "collection_date", "location", "add_location"]
@@ -66,6 +76,8 @@ def main(args):
                 # https://github.com/cov-lineages/lineages-website/issues/11
                 warnings.warn(str(e))
                 continue
+            if args.debug_england and "England" in datum["covv_location"]:
+                debug_england(args, datum)
 
             # Collate.
             columns["lineage"].append(lineage)
@@ -122,6 +134,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--gisaid-file-in", default=os.path.expanduser("~/data/gisaid/provision.json")
     )
+    parser.add_argument("--debug-england", action="store_true")
     parser.add_argument("--columns-file-out", default="results/gisaid.columns.pkl")
     parser.add_argument("--stats-file-out", default="results/gisaid.stats.pkl")
     parser.add_argument("--subset-file-out", default="results/gisaid.subset.tsv")
