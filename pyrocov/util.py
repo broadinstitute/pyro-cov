@@ -40,7 +40,7 @@ def torch_map(x, **kwargs):
 
 
 @functools.singledispatch
-def _torch_map(x):
+def _torch_map(x, **kwargs):
     return x, False
 
 
@@ -62,7 +62,7 @@ def _(x, **kwargs):
     result = type(x)()
     changed = False
     for k, v in x.items():
-        v_, changed_ = _torch_map(v)
+        v_, changed_ = _torch_map(v, **kwargs)
         result[k] = v
         changed = changed or changed_
     return (result, True) if changed else (x, False)
@@ -74,7 +74,7 @@ def _(x, **kwargs):
     result = []
     changed = False
     for v in x:
-        v_, changed_ = _torch_map(v)
+        v_, changed_ = _torch_map(v, **kwargs)
         result.append(v)
         changed = changed or changed_
     result = type(x)(result)
