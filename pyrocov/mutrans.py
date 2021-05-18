@@ -217,23 +217,28 @@ def model(dataset, *, places=True, times=True):
         "rate_coef",
         dist.SoftLaplace(torch.zeros(F), feature_scale[..., None]).to_event(1),
     )
-    rate = pyro.deterministic("rate", rate_coef @ (0.01 * features.T))
+    rate = pyro.deterministic("rate", 0.01 * rate_coef @ features.T)
 
     # Finally observe overdispersed counts.
     concentration = pyro.sample("concentration", dist.LogNormal(2, 4))
+    mislabel = pyro.sample("mislabel", dist.Beta(100, 1))
     if not places:
         return
     with pyro.plate("place", P, dim=-1):
         init = pyro.sample("init", dist.SoftLaplace(torch.zeros(S), 10).to_event(1))
-        strain_probs = (init + rate * local_time[:, :, None]).softmax(-1)
         if not times:
             return
+        # Explicitly model mislabeling of time.
+        mislabel_probs = weekly_strains.sum(0).add_(1)
+        mislabel_probs /= mislabel_probs.sum(-1, True)
         with pyro.plate("time", T, dim=-2):
+            strain_probs = (init + rate * local_time[:, :, None]).softmax(-1)
+            good = (concentration * (1 - mislabel))[..., None]
+            bad = (concentration * mislabel)[..., None]
             pyro.sample(
                 "obs",
                 dist.DirichletMultinomial(
-                    total_count=weekly_strains.sum(-1).max(),
-                    concentration=concentration[..., None] * strain_probs + 1e-20,
+                    concentration=good * strain_probs + bad * mislabel_probs,
                     is_sparse=True,  # uses a faster algorithm
                     validate_args=False,  # allows scaled counts
                 ),
@@ -257,6 +262,8 @@ class InitLocFn:
             return torch.ones(shape)
         if name == "concentration":
             return torch.full(shape, 20.0)
+        if name == "mislabel":
+            return torch.full(shape, 0.001)
         if name == "rate_coef":
             return torch.randn(shape) * 0.01
         elif name == "init":
@@ -286,6 +293,7 @@ class Guide(AutoStructured):
         conditionals = {}
         dependencies = defaultdict(dict)
         conditionals["concentration"] = "delta"
+        conditionals["mislabel"] = "delta"
         conditionals["feature_scale"] = "delta"
         if guide_type == "map":
             conditionals["rate_coef"] = "delta"
@@ -335,7 +343,7 @@ class Guide(AutoStructured):
                 result["median"][name] = site["value"]
 
         # Compute moments.
-        save_params = ["concentration", "feature_scale", "rate_coef"]
+        save_params = ["concentration", "mislabel", "feature_scale", "rate_coef"]
         with pyro.plate("particles", num_samples, dim=-3):
             samples = {k: v.v for k, v in self.get_deltas(save_params).items()}
             trace = poutine.trace(poutine.condition(model, samples)).get_trace(
@@ -394,6 +402,8 @@ def fit_svi(
             config["lr"] *= 0.1
         elif "locs.concentration" in param_name:
             config["lr"] *= 0.2
+        elif "locs.mislabel" in param_name:
+            config["lr"] *= 0.2
         elif "locs.feature_scale" in param_name:
             config["lr"] *= 0.2
         return config
@@ -412,7 +422,8 @@ def fit_svi(
         if step % log_every == 0:
             median = guide.median()
             concentration = median["concentration"].item()
-            feature_scale = median["feature_scale"].tolist()
+            mislabel = median["mislabel"].item()
+            feature_scale = median["feature_scale"].item()
             assert (
                 median["feature_scale"].ge(0.02).all()
             ), "implausibly small feature_scale"
@@ -422,6 +433,7 @@ def fit_svi(
             logger.info(
                 f"step {step: >4d} loss = {loss / num_obs:0.6g}\t"
                 f"conc. = {concentration:0.3g}\t"
+                f"misl. = {mislabel:0.3g}\t"
                 f"f.scale = {feature_scale:0.3g}"
             )
         if check_loss and step >= 50:

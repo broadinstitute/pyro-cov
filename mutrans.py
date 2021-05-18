@@ -3,6 +3,7 @@
 import argparse
 import functools
 import logging
+import math
 import os
 import re
 from timeit import default_timer
@@ -117,7 +118,7 @@ def main(args):
 
     inference_configs = [
         svi_config,
-        # ("map", 2001, 0.05, 0.1),
+        # ("map", 2001, 1, 0.05, 0.1),
     ]
 
     # Add SVI configs.
@@ -180,7 +181,7 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Fit mutation-transmissibility models")
-    parser.add_argument("--max-obs", default=1000, type=int)
+    parser.add_argument("--max-obs", default=math.inf, type=int)
     parser.add_argument("--svi", action="store_true", help="run only one SVI config")
     parser.add_argument("-g", "--guide-type", default="mvn_normal_dependent")
     parser.add_argument("-n", "--num-steps", default=10001, type=int)
