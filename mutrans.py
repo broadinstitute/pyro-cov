@@ -185,7 +185,7 @@ if __name__ == "__main__":
     parser.add_argument("-g", "--guide-type", default="mvn_normal_dependent")
     parser.add_argument("-n", "--num-steps", default=10001, type=int)
     parser.add_argument("-p", "--num-particles", default=1, type=int)
-    parser.add_argument("-lr", "--learning-rate", default=0.02, type=float)
+    parser.add_argument("-lr", "--learning-rate", default=0.05, type=float)
     parser.add_argument("-lrd", "--learning-rate-decay", default=0.1, type=float)
     parser.add_argument("--double", action="store_true")
     parser.add_argument(

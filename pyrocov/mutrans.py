@@ -256,7 +256,7 @@ class InitLocFn:
         if name == "feature_scale":
             return torch.ones(shape)
         if name == "concentration":
-            return torch.full(shape, 10.0)
+            return torch.full(shape, 20.0)
         if name == "rate_coef":
             return torch.randn(shape) * 0.01
         elif name == "init":
@@ -387,10 +387,14 @@ def fit_svi(
     def optim_config(param_name):
         config = {"lr": learning_rate, "lrd": learning_rate_decay ** (1 / num_steps)}
         if "scales" in param_name:
-            config["lr"] *= 0.5
-        elif "scale_tril" in param_name:
             config["lr"] *= 0.2
+        elif "scale_tril" in param_name:
+            config["lr"] *= 0.1
         elif "weight" in param_name:
+            config["lr"] *= 0.1
+        elif "locs.concentration" in param_name:
+            config["lr"] *= 0.2
+        elif "locs.feature_scale" in param_name:
             config["lr"] *= 0.2
         return config
 
