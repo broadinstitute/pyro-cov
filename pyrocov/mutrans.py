@@ -377,6 +377,7 @@ def fit_svi(
     learning_rate_decay=0.1,
     num_steps=3001,
     num_particles=1,
+    clip_norm=10.0,
     log_every=50,
     seed=20210319,
     check_loss=False,
@@ -393,7 +394,11 @@ def fit_svi(
     logger.info(f"Training guide with {num_params} parameters:")
 
     def optim_config(param_name):
-        config = {"lr": learning_rate, "lrd": learning_rate_decay ** (1 / num_steps)}
+        config = {
+            "lr": learning_rate,
+            "lrd": learning_rate_decay ** (1 / num_steps),
+            "clip_norm": clip_norm,
+        }
         if "scales" in param_name:
             config["lr"] *= 0.2
         elif "scale_tril" in param_name:

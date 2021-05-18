@@ -75,6 +75,7 @@ def fit_svi(
     p=1,
     lr=0.01,
     lrd=0.1,
+    cn=10.0,
     holdout=(),
 ):
     start_time = default_timer()
@@ -85,6 +86,7 @@ def fit_svi(
         num_particles=p,
         learning_rate=lr,
         learning_rate_decay=lrd,
+        clip_norm=cn,
         log_every=args.log_every,
         seed=args.seed,
     )
@@ -110,6 +112,7 @@ def main(args):
         args.num_particles,
         args.learning_rate,
         args.learning_rate_decay,
+        args.clip_norm,
     )
     if args.svi:
         dataset = load_data(args)
@@ -118,7 +121,7 @@ def main(args):
 
     inference_configs = [
         svi_config,
-        # ("map", 2001, 1, 0.05, 0.1),
+        # ("map", 2001, 1, 0.05, 0.1, 10.0),
     ]
 
     # Add SVI configs.
@@ -140,6 +143,7 @@ def main(args):
                 args.num_particles,
                 args.learning_rate,
                 args.learning_rate_decay,
+                args.clip_norm,
             )
         )
 
@@ -188,6 +192,7 @@ if __name__ == "__main__":
     parser.add_argument("-p", "--num-particles", default=1, type=int)
     parser.add_argument("-lr", "--learning-rate", default=0.05, type=float)
     parser.add_argument("-lrd", "--learning-rate-decay", default=0.1, type=float)
+    parser.add_argument("-cn", "--clip-norm", default=10.0, type=float)
     parser.add_argument("--double", action="store_true")
     parser.add_argument(
         "--cuda", action="store_true", default=torch.cuda.is_available()
