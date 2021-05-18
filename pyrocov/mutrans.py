@@ -211,26 +211,33 @@ def model(dataset, *, places=True, times=True):
     T, P, S = weekly_strains.shape
     S, F = features.shape
 
-    # Assume relative growth rate depends strongly on mutations and weakly on place.
+    # Sample globals.
     feature_scale = pyro.sample("feature_scale", dist.LogNormal(0, 1))
+    place_scale = pyro.sample("place_scale", dist.LogNormal(-4, 1))
+    concentration = pyro.sample("concentration", dist.LogNormal(2, 4))
+    mislabel = pyro.sample("mislabel", dist.Beta(100, 1))
+
+    # Assume relative growth rate depends strongly on mutations and weakly on place.
     rate_coef = pyro.sample(
         "rate_coef",
         dist.SoftLaplace(torch.zeros(F), feature_scale[..., None]).to_event(1),
     )
-    rate = pyro.deterministic("rate", 0.01 * rate_coef @ features.T)
-
-    # Finally observe overdispersed counts.
-    concentration = pyro.sample("concentration", dist.LogNormal(2, 4))
-    mislabel = pyro.sample("mislabel", dist.Beta(100, 1))
     if not places:
         return
     with pyro.plate("place", P, dim=-1):
+        rate_bias = pyro.sample(
+            "rate_bias",
+            dist.Normal(torch.zeros(P, S), place_scale[..., None]).to_event(1),
+        )
+        rate = pyro.deterministic("rate", 0.01 * (rate_bias + rate_coef @ features.T))
+
+        # Finally observe overdispersed counts.
         init = pyro.sample("init", dist.SoftLaplace(torch.zeros(S), 10).to_event(1))
-        if not times:
-            return
         # Explicitly model mislabeling of time.
         mislabel_probs = weekly_strains.sum(0).add_(1)
         mislabel_probs /= mislabel_probs.sum(-1, True)
+        if not times:
+            return
         with pyro.plate("time", T, dim=-2):
             strain_probs = (init + rate * local_time[:, :, None]).softmax(-1)
             good = (concentration * (1 - mislabel))[..., None]
@@ -264,11 +271,47 @@ class InitLocFn:
             return torch.full(shape, 20.0)
         if name == "mislabel":
             return torch.full(shape, 0.001)
-        if name == "rate_coef":
+        if name in ("rate_coef", "rate_bias"):
             return torch.randn(shape) * 0.01
+        if name == "place_scale":
+            return torch.full(shape, 0.02)
         elif name == "init":
             return self.init
         raise ValueError(site["name"])
+
+
+class RateBiasRateCoefLinear(torch.nn.Module):
+    def __init__(self, P, S, F, features):
+        super().__init__()
+        self.PSF = P, S, F
+        self.register_buffer("weight", -features.T)
+        self.scale = torch.nn.Parameter(torch.ones(P, S))
+
+    def forward(self, x):
+        P, S, F = self.PSF
+        batch_shape = x.shape[:-1]
+        y = x @ self.weight
+        y = y.reshape(batch_shape + (1, S))
+        y = y.expand(batch_shape + (P, S))
+        y = y * self.scale
+        y = y.reshape(batch_shape + (-1,))
+        return y
+
+
+class InitRateBiasLinear(torch.nn.Module):
+    def __init__(self, P, S):
+        super().__init__()
+        self.PS = P, S
+        self.weight_ps = torch.nn.Parameter(torch.zeros(P, S))
+        self.weight_ss = torch.nn.Parameter(torch.zeros(S, S))
+
+    def forward(self, x):
+        P, S = self.PS
+        batch_shape = x.shape[:-1]
+        x = x.reshape(batch_shape + (P, S))
+        y = x * self.weight_ps + x @ self.weight_ss
+        y = y.reshape(batch_shape + (P * S,))
+        return y
 
 
 class InitRateCoefLinear(torch.nn.Module):
@@ -292,32 +335,40 @@ class Guide(AutoStructured):
         self.guide_type = guide_type
         conditionals = {}
         dependencies = defaultdict(dict)
+        conditionals["feature_scale"] = "delta"
+        conditionals["place_scale"] = "delta"
         conditionals["concentration"] = "delta"
         conditionals["mislabel"] = "delta"
-        conditionals["feature_scale"] = "delta"
         if guide_type == "map":
             conditionals["rate_coef"] = "delta"
+            conditionals["rate_bias"] = "delta"
             conditionals["init"] = "delta"
         elif guide_type.startswith("normal_delta"):
             conditionals["rate_coef"] = "normal"
+            conditionals["rate_bias"] = "delta"
             conditionals["init"] = "delta"
         elif guide_type.startswith("normal"):
             conditionals["rate_coef"] = "normal"
+            conditionals["rate_bias"] = "normal"
             conditionals["init"] = "normal"
         elif guide_type.startswith("mvn_delta"):
             conditionals["rate_coef"] = "mvn"
+            conditionals["rate_coef"] = "delta"
             conditionals["init"] = "delta"
         elif guide_type.startswith("mvn_normal"):
             conditionals["rate_coef"] = "mvn"
+            conditionals["rate_bias"] = "normal"
             conditionals["init"] = "normal"
         else:
             raise ValueError(f"Unsupported guide type: {guide_type}")
 
         if guide_type.endswith("_dependent"):
             T, P, S = dataset["weekly_strains"].shape
-            dependencies["init"]["rate_coef"] = InitRateCoefLinear(
-                P, dataset["features"]
+            S, F = dataset["features"].shape
+            dependencies["rate_bias"]["rate_coef"] = RateBiasRateCoefLinear(
+                P, S, F, dataset["features"]
             )
+            dependencies["init"]["rate_bias"] = InitRateBiasLinear(P, S)
 
         super().__init__(
             model,
@@ -343,7 +394,13 @@ class Guide(AutoStructured):
                 result["median"][name] = site["value"]
 
         # Compute moments.
-        save_params = ["concentration", "mislabel", "feature_scale", "rate_coef"]
+        save_params = [
+            "feature_scale",
+            "place_scale",
+            "concentration",
+            "mislabel",
+            "rate_coef",
+        ]
         with pyro.plate("particles", num_samples, dim=-3):
             samples = {k: v.v for k, v in self.get_deltas(save_params).items()}
             trace = poutine.trace(poutine.condition(model, samples)).get_trace(
@@ -429,17 +486,22 @@ def fit_svi(
             concentration = median["concentration"].item()
             mislabel = median["mislabel"].item()
             feature_scale = median["feature_scale"].item()
+            place_scale = median["place_scale"].item()
             assert (
                 median["feature_scale"].ge(0.02).all()
             ), "implausibly small feature_scale"
+            assert (
+                median["place_scale"].ge(0.001).all()
+            ), "implausibly small place_scale"
             assert (
                 median["concentration"].ge(1).all()
             ), "implausible small concentration"
             logger.info(
                 f"step {step: >4d} loss = {loss / num_obs:0.6g}\t"
-                f"conc. = {concentration:0.3g}\t"
-                f"misl. = {mislabel:0.3g}\t"
-                f"f.scale = {feature_scale:0.3g}"
+                f"con. = {concentration:0.3g}\t"
+                f"mis. = {mislabel:0.3g}\t"
+                f"f.scale = {feature_scale:0.3g}\t"
+                f"p.scale = {place_scale:0.3g}"
             )
         if check_loss and step >= 50:
             prev = torch.tensor(losses[-50:-25], device="cpu").median().item()
