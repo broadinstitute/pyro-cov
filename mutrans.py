@@ -52,7 +52,7 @@ def _load_data_filename(args, **kwargs):
 
 @cached(_load_data_filename)
 def load_data(args, **kwargs):
-    return mutrans.load_gisaid_data(device=args.device, **kwargs)
+    return mutrans.load_gisaid_data(device=args.device, max_obs=args.max_obs, **kwargs)
 
 
 def _fit_filename(name, *args):
@@ -71,6 +71,7 @@ def fit_svi(
     dataset,
     guide_type="mvn_dependent",
     n=1001,
+    p=1,
     lr=0.01,
     lrd=0.1,
     holdout=(),
@@ -80,6 +81,7 @@ def fit_svi(
         dataset,
         guide_type=guide_type,
         num_steps=n,
+        num_particles=p,
         learning_rate=lr,
         learning_rate_decay=lrd,
         log_every=args.log_every,
@@ -91,74 +93,20 @@ def fit_svi(
     return result
 
 
-@cached(lambda *args: _fit_filename("mcmc", *args))
-def fit_mcmc(
-    args,
-    dataset,
-    guide_type="naive",
-    num_steps=10001,
-    num_warmup=1000,
-    num_samples=1000,
-    num_chains=1,
-    max_tree_depth=10,
-    holdout=(),
-):
-    if guide_type == "naive":
-        guide = None
-    else:
-        guide = fit_svi(
-            args,
-            dataset,
-            guide_type,
-            num_steps,
-            0.01,
-            0.1,
-            holdout,
-        )["guide"].double()
-
-    start_time = default_timer()
-    result = mutrans.fit_mcmc(
-        dataset,
-        guide,
-        num_warmup=num_warmup,
-        num_samples=num_samples,
-        num_chains=num_chains,
-        max_tree_depth=max_tree_depth,
-        log_every=args.log_every,
-        seed=args.seed,
-    )
-    result["walltime"] = default_timer() - start_time
-
-    result["args"] = args
-    return result
-
-
 def main(args):
-    torch.set_default_dtype(torch.double)
+    torch.set_default_dtype(torch.double if args.double else torch.float)
     if args.cuda:
-        torch.set_default_tensor_type(torch.cuda.DoubleTensor)
+        torch.set_default_tensor_type(
+            torch.cuda.DoubleTensor if args.double else torch.cuda.FloatTensor
+        )
     if args.debug:
         torch.autograd.set_detect_anomaly(True)
-
-    # Run MCMC.
-    mcmc_config = (
-        "mcmc",
-        args.mcmc_type,
-        args.num_steps,
-        args.num_warmup,
-        args.num_samples,
-        args.num_chains,
-        args.max_tree_depth,
-    )
-    if args.mcmc:
-        dataset = load_data(args)
-        fit_mcmc(args, dataset, *mcmc_config[1:])
-        return
 
     # Configure guides.
     svi_config = (
         args.guide_type,
         args.num_steps,
+        args.num_particles,
         args.learning_rate,
         args.learning_rate_decay,
     )
@@ -169,7 +117,7 @@ def main(args):
 
     inference_configs = [
         svi_config,
-        ("map", 2001, 0.05, 0.1),
+        # ("map", 2001, 0.05, 0.1),
     ]
 
     # Add SVI configs.
@@ -188,45 +136,19 @@ def main(args):
             (
                 guide_type,
                 args.num_steps,
+                args.num_particles,
                 args.learning_rate,
                 args.learning_rate_decay,
             )
         )
 
-    # Add mcmc configs.
-    inference_configs.append(mcmc_config)
-    if args.mcmc_experiments:
-        inference_configs.append(
-            (
-                "mcmc",
-                "naive",
-                args.num_steps,
-                args.num_warmup,
-                args.num_samples,
-                args.num_chains,
-                args.max_tree_depth,
-            )
-        )
-        for guide_type in guide_types:
-            inference_configs.append(
-                (
-                    "mcmc",
-                    guide_type,
-                    args.num_steps,
-                    args.num_warmup,
-                    args.num_samples,
-                    args.num_chains,
-                    args.max_tree_depth,
-                )
-            )
-
     # Configure data holdouts.
     empty_holdout = ()
     holdouts = [
-        {"include": {"location": "^Europe"}},
-        {"exclude": {"location": "^Europe"}},
-        {"include": {"location": "^North America"}},
-        {"exclude": {"location": "^North America"}},
+        # {"include": {"location": "^Europe"}},
+        # {"exclude": {"location": "^Europe"}},
+        # {"include": {"location": "^North America"}},
+        # {"exclude": {"location": "^North America"}},
         # {"include": {"location": "^North America / USA"}},
         # {"exclude": {"location": "^North America / USA"}},
         # {"include": {"location": "^Europe / United Kingdom"}},
@@ -240,21 +162,15 @@ def main(args):
             (k, tuple(sorted(v.items()))) for k, v in sorted(holdout.items())
         )
         configs.append(svi_config + (holdout,))
-        configs.append(mcmc_config + (holdout,))
 
     # Sequentially fit models.
     results = {}
     for config in configs:
-        if args.svi_only and config[0] == "mcmc":
-            continue
         logger.info(f"Config: {config}")
         holdout = {k: dict(v) for k, v in config[-1]}
         dataset = load_data(args, **holdout)
-        if config[0] == "mcmc":
-            result = fit_mcmc(args, dataset, *config[1:])
-        else:
-            result = fit_svi(args, dataset, *config)
-            result.pop("guide", None)  # to save space
+        result = fit_svi(args, dataset, *config)
+        result.pop("guide", None)  # to save space
         result["mutations"] = dataset["mutations"]
         result = torch_map(result, device="cpu", dtype=torch.float)  # to save space
         results[config] = result
@@ -264,19 +180,14 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Fit mutation-transmissibility models")
+    parser.add_argument("--max-obs", default=1000, type=int)
     parser.add_argument("--svi", action="store_true", help="run only one SVI config")
-    parser.add_argument("--mcmc", action="store_true", help="run only one MCMC config")
-    parser.add_argument("--svi-only", action="store_true", help="run only SVI configs")
-    parser.add_argument("--mcmc-experiments", action="store_true")
     parser.add_argument("-g", "--guide-type", default="mvn_normal_dependent")
-    parser.add_argument("-m", "--mcmc-type", default="mvn_delta_dependent")
     parser.add_argument("-n", "--num-steps", default=10001, type=int)
+    parser.add_argument("-p", "--num-particles", default=1, type=int)
     parser.add_argument("-lr", "--learning-rate", default=0.02, type=float)
-    parser.add_argument("-lrd", "--learning-rate-decay", default=0.05, type=float)
-    parser.add_argument("-w", "--num-warmup", default=500, type=int)
-    parser.add_argument("-s", "--num-samples", default=500, type=int)
-    parser.add_argument("-c", "--num-chains", default=1, type=int)
-    parser.add_argument("-t", "--max-tree-depth", default=10, type=int)
+    parser.add_argument("-lrd", "--learning-rate-decay", default=0.1, type=float)
+    parser.add_argument("--double", action="store_true")
     parser.add_argument(
         "--cuda", action="store_true", default=torch.cuda.is_available()
     )

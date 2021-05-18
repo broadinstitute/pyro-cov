@@ -61,6 +61,7 @@ def get_fine_countries(columns, min_samples=1000):
 def load_gisaid_data(
     *,
     device="cpu",
+    max_obs=math.inf,
     include={},
     exclude={},
 ):
@@ -136,6 +137,11 @@ def load_gisaid_data(
     locations = [k for k, v in location_id.items() if v in ok_region_set]
     location_id = OrderedDict(zip(locations, range(len(locations))))
 
+    # Downscale highly-observed regions for numerical stability. Note it is
+    # unclear why this is needed, but e.g. England predictions are very bad
+    # without downscaling, and @sfs believes this is a numerical issue.
+    weekly_strains.div_(weekly_strains.sum(-1, True).div_(max_obs).clamp_(min=1))
+
     # Construct region-local time scales centered around observations.
     num_obs = weekly_strains.sum(-1)
     local_time = torch.arange(float(len(num_obs))) * TIMESTEP / GENERATION_TIME
@@ -207,24 +213,19 @@ def model(dataset, *, places=True, times=True):
     T, P, S = weekly_strains.shape
     S, F = features.shape
 
-    # Sample global parameters.
-    feature_scale = pyro.sample("feature_scale", dist.LogNormal(0, 1))
-    place_scale = pyro.sample("place_scale", dist.LogNormal(-4, 1))
-    concentration = pyro.sample("concentration", dist.LogNormal(2, 4))
-
     # Assume relative growth rate depends strongly on mutations and weakly on place.
+    feature_scale = pyro.sample("feature_scale", dist.LogNormal(0, 1))
     rate_coef = pyro.sample(
-        "rate_coef", dist.SoftLaplace(torch.zeros(F), feature_scale).to_event(1)
+        "rate_coef",
+        dist.SoftLaplace(torch.zeros(F), feature_scale[..., None]).to_event(1),
     )
+    rate = pyro.deterministic("rate", rate_coef @ (0.01 * features.T))
+
+    # Finally observe overdispersed counts.
+    concentration = pyro.sample("concentration", dist.LogNormal(2, 4))
     if not places:
         return
     with pyro.plate("place", P, dim=-1):
-        rate_bias = pyro.sample(
-            "rate_bias", dist.Normal(torch.zeros(P, S), place_scale).to_event(1)
-        )
-        rate = pyro.deterministic("rate", 0.01 * (rate_bias + rate_coef @ features.T))
-
-        # Finally observe overdispersed counts.
         init = pyro.sample("init", dist.SoftLaplace(torch.zeros(S), 10).to_event(1))
         strain_probs = (init + rate * local_time[:, :, None]).softmax(-1)
         if not times:
@@ -234,8 +235,9 @@ def model(dataset, *, places=True, times=True):
                 "obs",
                 dist.DirichletMultinomial(
                     total_count=weekly_strains.sum(-1).max(),
-                    concentration=concentration * strain_probs + 1e-20,
+                    concentration=concentration[..., None] * strain_probs + 1e-20,
                     is_sparse=True,  # uses a faster algorithm
+                    validate_args=False,  # allows scaled counts
                 ),
                 obs=weekly_strains,
             )
@@ -244,8 +246,8 @@ def model(dataset, *, places=True, times=True):
 class InitLocFn:
     def __init__(self, dataset):
         # Initialize init to mean.
-        init = dataset["weekly_strains"].sum(0).add_(1)
-        init.div_(init.sum(-1, True)).log_()
+        init = dataset["weekly_strains"].sum(0)
+        init.div_(init.sum(-1, True)).add_(0.01 / init.size(-1)).log_()
         init.sub_(init.mean(-1, True))
         self.init = init
         logger.info(f"init stddev = {init.std():0.3g}")
@@ -255,48 +257,28 @@ class InitLocFn:
         shape = site["fn"].shape()
         if name == "feature_scale":
             return torch.ones(shape)
-        if name == "place_scale":
-            return torch.full(shape, 0.02)
         if name == "concentration":
             return torch.full(shape, 10.0)
-        if name in ("rate_coef", "rate_bias"):
+        if name == "rate_coef":
             return torch.randn(shape) * 0.01
         elif name == "init":
             return self.init
         raise ValueError(site["name"])
 
 
-class RateBiasRateCoefLinear(torch.nn.Module):
-    def __init__(self, P, S, F, features):
+class InitRateCoefLinear(torch.nn.Module):
+    def __init__(self, P, features):
         super().__init__()
-        self.PSF = P, S, F
-        self.register_buffer("weight", -features.T)
-        self.scale = torch.nn.Parameter(torch.ones(P, S))
-
-    def forward(self, x):
-        P, S, F = self.PSF
-        batch_shape = x.shape[:-1]
-        y = x @ self.weight
-        y = y.reshape(batch_shape + (1, S))
-        y = y.expand(batch_shape + (P, S))
-        y = y * self.scale
-        y = y.reshape(batch_shape + (-1,))
-        return y
-
-
-class InitRateBiasLinear(torch.nn.Module):
-    def __init__(self, P, S):
-        super().__init__()
-        self.PS = P, S
+        S, F = features.shape
+        self.register_buffer("features", features)
         self.weight_ps = torch.nn.Parameter(torch.zeros(P, S))
         self.weight_ss = torch.nn.Parameter(torch.zeros(S, S))
 
     def forward(self, x):
-        P, S = self.PS
         batch_shape = x.shape[:-1]
-        x = x.reshape(batch_shape + (P, S))
+        x = x[..., None, :] @ self.features.T
         y = x * self.weight_ps + x @ self.weight_ss
-        y = y.reshape(batch_shape + (P * S,))
+        y = y.reshape(batch_shape + (-1,))
         return y
 
 
@@ -307,37 +289,29 @@ class Guide(AutoStructured):
         dependencies = defaultdict(dict)
         conditionals["concentration"] = "delta"
         conditionals["feature_scale"] = "delta"
-        conditionals["place_scale"] = "delta"
         if guide_type == "map":
             conditionals["rate_coef"] = "delta"
-            conditionals["rate_bias"] = "delta"
             conditionals["init"] = "delta"
         elif guide_type.startswith("normal_delta"):
             conditionals["rate_coef"] = "normal"
-            conditionals["rate_bias"] = "delta"
             conditionals["init"] = "delta"
         elif guide_type.startswith("normal"):
             conditionals["rate_coef"] = "normal"
-            conditionals["rate_bias"] = "normal"
             conditionals["init"] = "normal"
         elif guide_type.startswith("mvn_delta"):
             conditionals["rate_coef"] = "mvn"
-            conditionals["rate_bias"] = "delta"
             conditionals["init"] = "delta"
         elif guide_type.startswith("mvn_normal"):
             conditionals["rate_coef"] = "mvn"
-            conditionals["rate_bias"] = "normal"
             conditionals["init"] = "normal"
         else:
             raise ValueError(f"Unsupported guide type: {guide_type}")
 
         if guide_type.endswith("_dependent"):
             T, P, S = dataset["weekly_strains"].shape
-            S, F = dataset["features"].shape
-            dependencies["rate_bias"]["rate_coef"] = RateBiasRateCoefLinear(
-                P, S, F, dataset["features"]
+            dependencies["init"]["rate_coef"] = InitRateCoefLinear(
+                P, dataset["features"]
             )
-            dependencies["init"]["rate_bias"] = InitRateBiasLinear(P, S)
 
         super().__init__(
             model,
@@ -348,19 +322,6 @@ class Guide(AutoStructured):
         )
 
         self._dataset_for_init = dataset
-
-    def _setup_prototype(self, *args, **kwargs):
-        super()._setup_prototype(*args, **kwargs)
-        dataset = self._dataset_for_init
-        del self._dataset_for_init
-
-        # Initialize scale_trils.rate_coef.
-        features = dataset["features"]
-        S, F = features.shape
-        precision = features.T @ features + 0.01 * torch.eye(F)
-        scale_tril = _precision_to_scale_tril(precision)
-        assert scale_tril.shape == self.scale_trils.rate_coef.shape
-        self.scale_trils.rate_coef = scale_tril
 
     @torch.no_grad()
     @poutine.mask(mask=False)
@@ -376,7 +337,7 @@ class Guide(AutoStructured):
                 result["median"][name] = site["value"]
 
         # Compute moments.
-        save_params = ["concentration", "feature_scale", "place_scale", "rate_coef"]
+        save_params = ["concentration", "feature_scale", "rate_coef"]
         with pyro.plate("particles", num_samples, dim=-3):
             samples = {k: v.v for k, v in self.get_deltas(save_params).items()}
             trace = poutine.trace(poutine.condition(model, samples)).get_trace(
@@ -409,6 +370,7 @@ def fit_svi(
     learning_rate=0.02,
     learning_rate_decay=0.1,
     num_steps=3001,
+    num_particles=1,
     log_every=50,
     seed=20210319,
     check_loss=False,
@@ -429,13 +391,15 @@ def fit_svi(
         if "scales" in param_name:
             config["lr"] *= 0.5
         elif "scale_tril" in param_name:
-            config["lr"] *= 0.1
+            config["lr"] *= 0.2
         elif "weight" in param_name:
-            config["lr"] *= 0.05
+            config["lr"] *= 0.2
         return config
 
     optim = ClippedAdam(optim_config)
-    elbo = Trace_ELBO(max_plate_nesting=2)
+    elbo = Trace_ELBO(
+        max_plate_nesting=2, num_particles=num_particles, vectorize_particles=True
+    )
     svi = SVI(model, guide, optim, elbo)
     losses = []
     num_obs = dataset["weekly_strains"].count_nonzero()
@@ -447,19 +411,16 @@ def fit_svi(
             median = guide.median()
             concentration = median["concentration"].item()
             feature_scale = median["feature_scale"].tolist()
-            place_scale = median["place_scale"].tolist()
             assert (
                 median["feature_scale"].ge(0.02).all()
             ), "implausibly small feature_scale"
-            assert median["place_scale"].ge(0.001).all(), "implausibly small bias_scale"
             assert (
                 median["concentration"].ge(1).all()
             ), "implausible small concentration"
             logger.info(
                 f"step {step: >4d} loss = {loss / num_obs:0.6g}\t"
                 f"conc. = {concentration:0.3g}\t"
-                f"f.scale = {feature_scale:0.3g}\t"
-                f"p.scale = {place_scale:0.3g}"
+                f"f.scale = {feature_scale:0.3g}"
             )
         if check_loss and step >= 50:
             prev = torch.tensor(losses[-50:-25], device="cpu").median().item()
