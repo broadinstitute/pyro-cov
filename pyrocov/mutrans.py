@@ -1,5 +1,4 @@
 import datetime
-import functools
 import logging
 import math
 import pickle
@@ -10,9 +9,8 @@ import pyro
 import pyro.distributions as dist
 import torch
 from pyro import poutine
-from pyro.infer import MCMC, NUTS, SVI, Predictive, Trace_ELBO
-from pyro.infer.autoguide import AutoStructured, init_to_feasible
-from pyro.infer.reparam import StructuredReparam
+from pyro.infer import SVI, Trace_ELBO
+from pyro.infer.autoguide import AutoStructured
 from pyro.optim import ClippedAdam
 from pyro.poutine.util import site_is_subsample
 
@@ -447,80 +445,3 @@ def log_stats(dataset, result):
     for m in ["S:D614G", "S:N501Y", "S:E484K", "S:L452R"]:
         i = mutations.index(m)
         logger.info("ΔlogR({}) = {:0.3g} ± {:0.2f}".format(m, mean[i], std[i]))
-
-
-def hook_fn(log_every, losses, num_obs, kernel, params, stage, i):
-    loss = float(kernel._potential_energy_last)
-    if log_every and len(losses) % log_every == 0:
-        logger.info(f"loss = {loss / num_obs:0.6g}")
-    losses.append(loss)
-
-
-def fit_mcmc(
-    dataset,
-    guide=None,
-    num_warmup=1000,
-    num_samples=1000,
-    num_chains=1,
-    max_tree_depth=10,
-    log_every=50,
-    seed=20210319,
-):
-    pyro.set_rng_seed(seed)
-
-    # Configure a kernel.
-    model_ = model if guide is None else StructuredReparam(guide).reparam(model)
-    with torch.no_grad(), pyro.validation_enabled(False):
-        numel = {
-            name: site["value"].numel()
-            for name, site in poutine.trace(model_)
-            .get_trace(dataset)
-            .iter_stochastic_nodes()
-            if "Subsample" not in type(site["fn"]).__name__
-        }
-    num_params = sum(numel.values())
-    save_params = [name for name, n in numel.items() if n <= 10000]
-    logger.info(f"Fitting via MCMC over {num_params} parameters")
-    kernel = NUTS(
-        model_,
-        init_strategy=init_to_feasible,
-        max_tree_depth=max_tree_depth,
-        max_plate_nesting=2,
-        jit_compile=True,
-        ignore_jit_warnings=True,
-    )
-
-    # Run MCMC.
-    losses = []
-    num_obs = dataset["weekly_strains"].count_nonzero()
-    hook_fn_ = functools.partial(hook_fn, log_every, losses, num_obs)
-    mcmc = MCMC(
-        kernel,
-        warmup_steps=num_warmup,
-        num_samples=num_samples,
-        num_chains=num_chains,
-        mp_context=(None if torch.zeros(()).device.type == "cpu" else "spawn"),
-        hook_fn=hook_fn_,
-        save_params=save_params,
-    )
-    mcmc.run(dataset)
-    predict = Predictive(
-        model_,
-        mcmc.get_samples(),
-        return_sites=["feature_scale", "concentration", "rate_coef", "rate"],
-    )
-    samples = predict(dataset, places=False)
-
-    result = {}
-    result["losses"] = losses
-    result["diagnostics"] = mcmc.diagnostics()
-    result["median"] = median = {} if guide is None else guide.median()
-    for k, v in samples.items():
-        median[k] = v.median(0).values.squeeze()
-    result["mean"] = {k: v.mean(0).squeeze() for k, v in samples.items()}
-    result["std"] = {k: v.std(0).squeeze() for k, v in samples.items()}
-    # Save only a subset of samples, since data can be large.
-    result["samples"] = {k: samples[k].squeeze() for k in ["rate_coef", "rate"]}
-
-    log_stats(dataset, result)
-    return result
