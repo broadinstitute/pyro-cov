@@ -43,7 +43,7 @@ def _safe_str(v):
 
 
 def _load_data_filename(args, **kwargs):
-    parts = ["data"]
+    parts = ["data", "double" if args.double else "single"]
     for k, v in sorted(kwargs.get("include", {}).items()):
         parts.append(f"I{k}={_safe_str(v)}")
     for k, v in sorted(kwargs.get("exclude", {}).items()):
@@ -193,7 +193,8 @@ if __name__ == "__main__":
     parser.add_argument("-lr", "--learning-rate", default=0.05, type=float)
     parser.add_argument("-lrd", "--learning-rate-decay", default=0.1, type=float)
     parser.add_argument("-cn", "--clip-norm", default=10.0, type=float)
-    parser.add_argument("--double", action="store_true")
+    parser.add_argument("-fp64", "--double", action="store_true")
+    parser.add_argument("-fp32", "--float", action="store_false", dest="double")
     parser.add_argument(
         "--cuda", action="store_true", default=torch.cuda.is_available()
     )
