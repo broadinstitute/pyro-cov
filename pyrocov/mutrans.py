@@ -456,18 +456,18 @@ def fit_svi(
             "lrd": learning_rate_decay ** (1 / num_steps),
             "clip_norm": clip_norm,
         }
-        if "scales" in param_name:
-            config["lr"] *= 0.2
-        elif "scale_tril" in param_name:
-            config["lr"] *= 0.1
-        elif "weight" in param_name:
-            config["lr"] *= 0.1
-        elif "locs.concentration" in param_name:
+        if "locs.concentration" in param_name:
             config["lr"] *= 0.2
         elif "locs.mislabel" in param_name:
             config["lr"] *= 0.2
         elif "locs.feature_scale" in param_name:
             config["lr"] *= 0.2
+        elif "scales" in param_name:
+            config["lr"] *= 0.1
+        elif "scale_tril" in param_name:
+            config["lr"] *= 0.05
+        elif "weight" in param_name:
+            config["lr"] *= 0.05
         return config
 
     optim = ClippedAdam(optim_config)
@@ -475,41 +475,41 @@ def fit_svi(
         max_plate_nesting=2, num_particles=num_particles, vectorize_particles=True
     )
     svi = SVI(model, guide, optim, elbo)
+    series = {
+        key: [] for key in ["concentration", "mislabel", "feature_scale", "place_scale"]
+    }
     losses = []
     num_obs = dataset["weekly_strains"].count_nonzero()
+    concentration, mislabel, feature_scale, place_scale = [None] * 4  # flake8
     for step in range(num_steps):
         loss = svi.step(dataset)
         assert not math.isnan(loss)
         losses.append(loss)
+        median = guide.median()
+        for key, values in series.items():
+            values.append(median[key].data.item())
         if step % log_every == 0:
-            median = guide.median()
-            concentration = median["concentration"].item()
-            mislabel = median["mislabel"].item()
-            feature_scale = median["feature_scale"].item()
-            place_scale = median["place_scale"].item()
-            assert (
-                median["feature_scale"].ge(0.02).all()
-            ), "implausibly small feature_scale"
-            assert (
-                median["place_scale"].ge(0.001).all()
-            ), "implausibly small place_scale"
-            assert (
-                median["concentration"].ge(1).all()
-            ), "implausible small concentration"
+            assert series["feature_scale"][-1] > 0.02, "implausibly small feature_scale"
+            assert series["place_scale"][-1] > 0.001, "implausibly small place_scale"
+            assert series["concentration"][-1] > 1, "implausible small concentration"
             logger.info(
-                f"step {step: >4d} loss = {loss / num_obs:0.6g}\t"
-                f"con. = {concentration:0.3g}\t"
-                f"mis. = {mislabel:0.3g}\t"
-                f"f.scale = {feature_scale:0.3g}\t"
-                f"p.scale = {place_scale:0.3g}"
+                "\t".join(
+                    [f"step {step: >4d} L={loss / num_obs:0.6g}"]
+                    + [
+                        "{}={:0.3g}".format(k[:1].upper(), v[-1])
+                        for k, v in series.items()
+                    ]
+                )
             )
         if check_loss and step >= 50:
             prev = torch.tensor(losses[-50:-25], device="cpu").median().item()
             curr = torch.tensor(losses[-25:], device="cpu").median().item()
             assert (curr - prev) < num_obs, "loss is increasing"
 
+    series["loss"] = losses
     result = guide.stats(dataset)
     result["losses"] = losses
+    result["series"] = series
     result["params"] = {k: v.detach().clone() for k, v in param_store.items()}
     result["guide"] = guide.float()
 
