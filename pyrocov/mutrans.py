@@ -258,7 +258,7 @@ class InitLocFn:
         # Initialize init to mean.
         init = dataset["weekly_strains"].sum(0)
         init.div_(init.sum(-1, True)).add_(0.01 / init.size(-1)).log_()
-        init.sub_(init.mean(-1, True))
+        init.sub_(init.median(-1, True).values)
         self.init = init
         logger.info(f"init stddev = {init.std():0.3g}")
 
@@ -447,10 +447,14 @@ def fit_svi(
     guide(dataset)
     num_params = sum(p.numel() for p in guide.parameters())
     logger.info(f"Training guide with {num_params} parameters:")
-    gradient_norms = defaultdict(list)
+
+    # Log gradient norms during inference.
+    series = defaultdict(list)
     for name, value in pyro.get_param_store().named_parameters():
         value.register_hook(
-            lambda g, name=name: gradient_norms[name].append(g.norm().item())
+            lambda g, gs=series[name]: gs.append(
+                torch.linalg.norm(g.reshape(-1), math.inf).item() / g.numel()
+            )
         )
 
     def optim_config(param_name):
@@ -459,11 +463,8 @@ def fit_svi(
             "lrd": learning_rate_decay ** (1 / num_steps),
             "clip_norm": clip_norm,
         }
-        if "locs.concentration" in param_name:
-            config["lr"] *= 0.2
-        elif "locs.mislabel" in param_name:
-            config["lr"] *= 0.2
-        elif "locs.feature_scale" in param_name:
+        scalars = ["concentration", "mislabel", "feature_scale", "place_scale"]
+        if any("locs." + s in name for s in scalars):
             config["lr"] *= 0.2
         elif "scales" in param_name:
             config["lr"] *= 0.1
@@ -478,9 +479,6 @@ def fit_svi(
         max_plate_nesting=2, num_particles=num_particles, vectorize_particles=True
     )
     svi = SVI(model, guide, optim, elbo)
-    series = {
-        key: [] for key in ["concentration", "mislabel", "feature_scale", "place_scale"]
-    }
     losses = []
     num_obs = dataset["weekly_strains"].count_nonzero()
     concentration, mislabel, feature_scale, place_scale = [None] * 4  # flake8
@@ -489,18 +487,20 @@ def fit_svi(
         assert not math.isnan(loss)
         losses.append(loss)
         median = guide.median()
-        for key, values in series.items():
-            values.append(median[key].data.item())
+        for name, value in median.items():
+            if value.numel() == 1:
+                series[name].append(float(value))
         if step % log_every == 0:
-            assert series["feature_scale"][-1] > 0.02, "implausibly small feature_scale"
-            assert series["place_scale"][-1] > 0.001, "implausibly small place_scale"
-            assert series["concentration"][-1] > 1, "implausible small concentration"
+            assert median["feature_scale"] > 0.02, "implausibly small feature_scale"
+            assert median["place_scale"] > 0.001, "implausibly small place_scale"
+            assert median["concentration"] > 1, "implausible small concentration"
             logger.info(
                 "\t".join(
                     [f"step {step: >4d} L={loss / num_obs:0.6g}"]
                     + [
-                        "{}={:0.3g}".format(k[:1].upper(), v[-1])
-                        for k, v in series.items()
+                        "{}={:0.3g}".format(k[:1].upper(), v)
+                        for k, v in median.items()
+                        if v.numel() == 1
                     ]
                 )
             )
@@ -510,10 +510,9 @@ def fit_svi(
             assert (curr - prev) < num_obs, "loss is increasing"
 
     series["loss"] = losses
-    series.update(gradient_norms)
     result = guide.stats(dataset)
     result["losses"] = losses
-    result["series"] = series
+    result["series"] = dict(series)
     result["params"] = {k: v.detach().clone() for k, v in param_store.items()}
     result["guide"] = guide.float()
 
