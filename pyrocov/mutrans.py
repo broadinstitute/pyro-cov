@@ -269,7 +269,7 @@ class InitLocFn:
             return torch.full(shape, 40.0)
         if name == "mislabel":
             return torch.full(shape, 0.01)
-        if name in ("feature_scale", "place_sale"):
+        if name in ("feature_scale", "place_scale"):
             return torch.ones(shape)
         if name in ("rate_coef", "rate_bias"):
             return torch.rand(shape).sub_(0.5).mul_(0.01)
