@@ -97,7 +97,7 @@ def decompress(name):
         return DECOMPRESS[name]
     except KeyError:
         pass
-    if name.split(".")[0] in ("A", "B"):
+    if name.split(".")[0] in ("A", "B") or name.count(".") <= 3:
         DECOMPRESS[name] = name
         return name
     for key, value in PANGOLIN_ALIASES.items():
