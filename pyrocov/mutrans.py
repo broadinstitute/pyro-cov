@@ -442,11 +442,16 @@ def fit_svi(
     pyro.clear_param_store()
     param_store = pyro.get_param_store()
 
-    # Initialize guide so we can count parameters.
+    # Initialize guide so we can count parameters and register hooks.
     guide = Guide(dataset, guide_type)
     guide(dataset)
     num_params = sum(p.numel() for p in guide.parameters())
     logger.info(f"Training guide with {num_params} parameters:")
+    gradient_norms = defaultdict(list)
+    for name, value in pyro.get_param_store().named_parameters():
+        value.register_hook(
+            lambda g, name=name: gradient_norms[name].append(g.norm().item())
+        )
 
     def optim_config(param_name):
         config = {
@@ -505,6 +510,7 @@ def fit_svi(
             assert (curr - prev) < num_obs, "loss is increasing"
 
     series["loss"] = losses
+    series.update(gradient_norms)
     result = guide.stats(dataset)
     result["losses"] = losses
     result["series"] = series
