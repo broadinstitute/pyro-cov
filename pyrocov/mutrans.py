@@ -213,7 +213,7 @@ def model(dataset, *, places=True, times=True):
 
     # Sample globals.
     feature_scale = pyro.sample("feature_scale", dist.LogNormal(0, 1))
-    place_scale = pyro.sample("place_scale", dist.LogNormal(-4, 1))
+    place_scale = pyro.sample("place_scale", dist.LogNormal(-2, 4))
     concentration = pyro.sample("concentration", dist.LogNormal(2, 4))
     mislabel = pyro.sample("mislabel", dist.Beta(100, 1))
 
@@ -265,16 +265,14 @@ class InitLocFn:
     def __call__(self, site):
         name = site["name"]
         shape = site["fn"].shape()
-        if name == "feature_scale":
-            return torch.ones(shape)
         if name == "concentration":
-            return torch.full(shape, 20.0)
+            return torch.full(shape, 40.0)
         if name == "mislabel":
-            return torch.full(shape, 0.001)
+            return torch.full(shape, 0.01)
+        if name in ("feature_scale", "place_sale"):
+            return torch.ones(shape)
         if name in ("rate_coef", "rate_bias"):
-            return torch.randn(shape) * 0.01
-        if name == "place_scale":
-            return torch.full(shape, 0.02)
+            return torch.rand(shape).sub_(0.5).mul_(0.01)
         elif name == "init":
             return self.init
         raise ValueError(site["name"])
