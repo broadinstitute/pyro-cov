@@ -158,7 +158,13 @@ def load_gisaid_data(
     }
 
 
-def subset_gisaid_data(gisaid_dataset, location_queries, max_strains=math.inf):
+def subset_gisaid_data(
+    gisaid_dataset,
+    location_queries,
+    max_strains=math.inf,
+    obs_scale=1.0,
+    round_method="random",
+):
     old = gisaid_dataset
     new = old.copy()
 
@@ -190,18 +196,37 @@ def subset_gisaid_data(gisaid_dataset, location_queries, max_strains=math.inf):
     new["mutations"] = [new["mutations"][i] for i in ids.tolist()]
     new["features"] = new["features"].index_select(-1, ids)
 
+    # Downsample counts.
+    counts = new["weekly_strains"]
+    if obs_scale != 1:
+        new["weekly_strains"] = round_counts(counts * obs_scale, round_method)
+
     logger.info(
-        "Selected {}/{} places, {}/{} strains, {}/{} mutations".format(
+        "Selected {}/{} places, {}/{} strains, {}/{} mutations, {}/{} samples".format(
             len(new["location_id"]),
             len(old["location_id"]),
             len(new["lineage_id"]),
             len(old["lineage_id"]),
             len(new["mutations"]),
             len(old["mutations"]),
+            int(new["weekly_strains"].sum()),
+            int(counts.sum()),
         )
     )
 
     return new
+
+
+def round_counts(counts, method):
+    if method == "floor":
+        return counts.floor()
+    if method == "ceil":
+        return counts.ceil()
+    if method == "random":
+        result = counts.floor()
+        result += torch.bernoulli(counts - result)
+        return result
+    raise ValueError(f"Unknown round_counts method: {repr(method)}")
 
 
 def load_jhu_data(gisaid_data):
