@@ -70,6 +70,7 @@ def _fit_filename(name, *args):
 def fit_svi(
     args,
     dataset,
+    model_type="",
     guide_type="mvn_dependent",
     n=1001,
     p=1,
@@ -80,6 +81,7 @@ def fit_svi(
 ):
     result = mutrans.fit_svi(
         dataset,
+        model_type=model_type,
         guide_type=guide_type,
         num_steps=n,
         num_particles=p,
@@ -110,8 +112,24 @@ def main(args):
         for num_steps in grid:
             configs.append(
                 (
+                    args.model_type,
                     args.guide_type,
                     num_steps,
+                    args.num_particles,
+                    args.learning_rate,
+                    args.learning_rate_decay,
+                    args.clip_norm,
+                    empty_holdout,
+                )
+            )
+    elif args.vary_model_type:
+        grid = ["", "mislabel", "rate_bias", "mislabel+rate_bias"]
+        for model_type in grid:
+            configs.append(
+                (
+                    model_type,
+                    args.guide_type,
+                    args.num_steps,
                     args.num_particles,
                     args.learning_rate,
                     args.learning_rate_decay,
@@ -133,6 +151,7 @@ def main(args):
         for guide_type in grid:
             configs.append(
                 (
+                    args.model_type,
                     guide_type,
                     args.num_steps,
                     args.num_particles,
@@ -162,6 +181,7 @@ def main(args):
             )
             configs.append(
                 (
+                    args.model_type,
                     args.guide_type,
                     args.num_steps,
                     args.num_particles,
@@ -174,6 +194,7 @@ def main(args):
     else:
         configs.append(
             (
+                args.model_type,
                 args.guide_type,
                 args.num_steps,
                 args.num_particles,
@@ -203,9 +224,11 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Fit mutation-transmissibility models")
     parser.add_argument("--max-obs", default=math.inf, type=int)
+    parser.add_argument("--vary-model-type", action="store_true")
     parser.add_argument("--vary-guide-type", action="store_true")
     parser.add_argument("--vary-num-steps", action="store_true")
     parser.add_argument("--vary-holdout", action="store_true")
+    parser.add_argument("-m", "--model-type", default="")
     parser.add_argument("-g", "--guide-type", default="mvn_normal_dependent")
     parser.add_argument("-n", "--num-steps", default=10001, type=int)
     parser.add_argument("-p", "--num-particles", default=1, type=int)

@@ -1,4 +1,5 @@
 import datetime
+import functools
 import logging
 import math
 import pickle
@@ -163,7 +164,7 @@ def subset_gisaid_data(
     location_queries,
     max_strains=math.inf,
     obs_scale=1.0,
-    round_method="random",
+    round_method=None,
 ):
     old = gisaid_dataset
     new = old.copy()
@@ -218,6 +219,8 @@ def subset_gisaid_data(
 
 
 def round_counts(counts, method):
+    if method is None:
+        return counts
     if method == "floor":
         return counts.floor()
     if method == "ceil":
@@ -274,7 +277,7 @@ def load_jhu_data(gisaid_data):
     }
 
 
-def model(dataset, *, places=True, times=True):
+def model(dataset, *, places=True, times=True, model_type=""):
     local_time = dataset["local_time"]
     weekly_strains = dataset["weekly_strains"]
     features = dataset["features"]
@@ -283,12 +286,16 @@ def model(dataset, *, places=True, times=True):
         assert local_time.shape == weekly_strains.shape[:2]
     T, P, S = weekly_strains.shape
     S, F = features.shape
+    place_plate = pyro.plate("place", P, dim=-1)
+    time_plate = pyro.plate("time", T, dim=-2)
 
     # Sample globals.
     feature_scale = pyro.sample("feature_scale", dist.LogNormal(0, 1))
-    place_scale = pyro.sample("place_scale", dist.LogNormal(-2, 4))
     concentration = pyro.sample("concentration", dist.LogNormal(2, 4))
-    mislabel = pyro.sample("mislabel", dist.Beta(100, 1))
+    if "rate_bias" in model_type:
+        place_scale = pyro.sample("place_scale", dist.LogNormal(-2, 4))
+    if "mislabel" in model_type:
+        mislabel = pyro.sample("mislabel", dist.Beta(100, 1))
 
     # Assume relative growth rate depends strongly on mutations and weakly on place.
     rate_coef = pyro.sample(
@@ -297,28 +304,40 @@ def model(dataset, *, places=True, times=True):
     )
     if not places:
         return
-    with pyro.plate("place", P, dim=-1):
-        rate_bias = pyro.sample(
-            "rate_bias",
-            dist.Normal(torch.zeros(P, S), place_scale[..., None]).to_event(1),
-        )
-        rate = pyro.deterministic("rate", 0.01 * (rate_bias + rate_coef @ features.T))
+    if "rate_bias" in model_type:
+        place_scale = pyro.sample("place_scale", dist.LogNormal(-2, 4))
+        with place_plate:
+            rate_bias = pyro.sample(
+                "rate_bias",
+                dist.Normal(torch.zeros(P, S), place_scale[..., None]).to_event(1),
+            )
+            rate = pyro.deterministic(
+                "rate", 0.01 * (rate_bias + rate_coef @ features.T)
+            )
+    else:
+        rate = pyro.deterministic("rate", 0.01 * (rate_coef @ features.T))
 
-        # Finally observe overdispersed counts.
+    # Assume initial infections depend on place.
+    with place_plate:
         init = pyro.sample("init", dist.SoftLaplace(torch.zeros(S), 10).to_event(1))
-        # Explicitly model mislabeling of time.
-        mislabel_probs = weekly_strains.sum(0).add_(1)
-        mislabel_probs /= mislabel_probs.sum(-1, True)
         if not times:
             return
-        with pyro.plate("time", T, dim=-2):
-            strain_probs = (init + rate * local_time[:, :, None]).softmax(-1)
+        strain_probs = (init + rate * local_time[:, :, None]).softmax(-1)
+        if "mislabel" in model_type:
+            # Explicitly model mislabeling of time.
             good = (concentration * (1 - mislabel))[..., None]
             bad = (concentration * mislabel)[..., None]
+            mislabel_probs = weekly_strains.sum(0).add_(1)
+            mislabel_probs /= mislabel_probs.sum(-1, True)
+            concentration_ = good * strain_probs + bad * mislabel_probs
+        else:
+            concentration_ = concentration[..., None] * strain_probs
+        # Finally observe overdispersed counts.
+        with time_plate:
             pyro.sample(
                 "obs",
                 dist.DirichletMultinomial(
-                    concentration=good * strain_probs + bad * mislabel_probs,
+                    concentration=concentration_,
                     is_sparse=True,  # uses a faster algorithm
                     validate_args=False,  # allows scaled counts
                 ),
@@ -333,6 +352,7 @@ class InitLocFn:
         init.div_(init.sum(-1, True)).add_(0.01 / init.size(-1)).log_()
         init.sub_(init.median(-1, True).values)
         self.init = init
+        assert not torch.isnan(init).any()
         logger.info(f"init stddev = {init.std():0.3g}")
 
     def __call__(self, site):
@@ -402,14 +422,12 @@ class InitRateCoefLinear(torch.nn.Module):
 
 
 class Guide(AutoStructured):
-    def __init__(self, dataset, guide_type="mvn_dependent"):
+    def __init__(self, model, dataset, model_type, guide_type):
         self.guide_type = guide_type
         conditionals = {}
         dependencies = defaultdict(dict)
         conditionals["feature_scale"] = "delta"
-        conditionals["place_scale"] = "delta"
         conditionals["concentration"] = "delta"
-        conditionals["mislabel"] = "delta"
         if guide_type == "map":
             conditionals["rate_coef"] = "delta"
             conditionals["rate_bias"] = "delta"
@@ -433,13 +451,24 @@ class Guide(AutoStructured):
         else:
             raise ValueError(f"Unsupported guide type: {guide_type}")
 
+        if "mislabel" in model_type:
+            conditionals["mislabel"] = "delta"
+        if "rate_bias" in model_type:
+            conditionals["place_scale"] = "delta"
+            conditionals["rate_bias"] = conditionals["init"]
+
         if guide_type.endswith("_dependent"):
             T, P, S = dataset["weekly_strains"].shape
             S, F = dataset["features"].shape
-            dependencies["rate_bias"]["rate_coef"] = RateBiasRateCoefLinear(
-                P, S, F, dataset["features"]
-            )
-            dependencies["init"]["rate_bias"] = InitRateBiasLinear(P, S)
+            if "rate_bias" in model_type:
+                dependencies["rate_bias"]["rate_coef"] = RateBiasRateCoefLinear(
+                    P, S, F, dataset["features"]
+                )
+                dependencies["init"]["rate_bias"] = InitRateBiasLinear(P, S)
+            else:
+                dependencies["init"]["rate_coef"] = InitRateCoefLinear(
+                    P, dataset["features"]
+                )
 
         super().__init__(
             model,
@@ -500,6 +529,8 @@ def _precision_to_scale_tril(P):
 
 def fit_svi(
     dataset,
+    *,
+    model_type,
     guide_type,
     learning_rate=0.02,
     learning_rate_decay=0.1,
@@ -517,19 +548,20 @@ def fit_svi(
     param_store = pyro.get_param_store()
 
     # Initialize guide so we can count parameters and register hooks.
-    guide = Guide(dataset, guide_type)
+    model_ = functools.partial(model, model_type=model_type)
+    guide = Guide(model_, dataset, model_type, guide_type)
     guide(dataset)
     num_params = sum(p.numel() for p in guide.parameters())
     logger.info(f"Training guide with {num_params} parameters:")
 
     # Log gradient norms during inference.
     series = defaultdict(list)
+
+    def hook(g, series):
+        series.append(torch.linalg.norm(g.reshape(-1), math.inf).item())
+
     for name, value in pyro.get_param_store().named_parameters():
-        value.register_hook(
-            lambda g, gs=series[name]: gs.append(
-                torch.linalg.norm(g.reshape(-1), math.inf).item() / g.numel()
-            )
-        )
+        value.register_hook(functools.partial(hook, series=series[name]))
 
     def optim_config(param_name):
         config = {
@@ -552,7 +584,7 @@ def fit_svi(
     elbo = JitTrace_ELBO(
         max_plate_nesting=2, num_particles=num_particles, vectorize_particles=True
     )
-    svi = SVI(model, guide, optim, elbo)
+    svi = SVI(model_, guide, optim, elbo)
     losses = []
     num_obs = dataset["weekly_strains"].count_nonzero()
     concentration, mislabel, feature_scale, place_scale = [None] * 4  # flake8
@@ -566,7 +598,7 @@ def fit_svi(
                 series[name].append(float(value))
         if step % log_every == 0:
             assert median["feature_scale"] > 0.02, "implausibly small feature_scale"
-            assert median["place_scale"] > 0.001, "implausibly small place_scale"
+            assert median.get("place_scale", 1) > 0.001, "implausibly small place_scale"
             assert median["concentration"] > 1, "implausible small concentration"
             logger.info(
                 "\t".join(
