@@ -105,68 +105,87 @@ def main(args):
     if args.debug:
         torch.autograd.set_detect_anomaly(True)
 
-    # Configure guides.
-    svi_config = (
-        args.guide_type,
-        args.num_steps,
-        args.num_particles,
-        args.learning_rate,
-        args.learning_rate_decay,
-        args.clip_norm,
-    )
-    if args.svi:
-        dataset = load_data(args)
-        fit_svi(args, dataset, *svi_config)
-        return
-
-    inference_configs = [
-        svi_config,
-        # ("map", 2001, 1, 0.05, 0.1, 10.0),
-    ]
-
-    # Add SVI configs.
-    guide_types = [
-        # "normal_delta",
-        # "normal",
-        # "mvn_delta",
-        # "mvn_normal",
-        # "normal_delta_dependent",
-        # "mvn_delta_dependent",
-        # "normal_dependent",
-        # "mvn_normal_dependent",
-    ]
-    for guide_type in guide_types:
-        inference_configs.append(
+    # Configure fits.
+    configs = []
+    empty_holdout = ()
+    if args.vary_num_steps:
+        grid = [1001, 2001, 5001, 10001, 20001, 50001, 100001]
+        for num_steps in grid:
+            configs.append(
+                (
+                    args.guide_type,
+                    num_steps,
+                    args.num_particles,
+                    args.learning_rate,
+                    args.learning_rate_decay,
+                    args.clip_norm,
+                    empty_holdout,
+                )
+            )
+    elif args.vary_guide_type:
+        grid = [
+            "normal_delta",
+            "normal",
+            "mvn_delta",
+            "mvn_normal",
+            "normal_delta_dependent",
+            "mvn_delta_dependent",
+            "normal_dependent",
+            "mvn_normal_dependent",
+        ]
+        for guide_type in grid:
+            configs.append(
+                (
+                    guide_type,
+                    args.num_steps,
+                    args.num_particles,
+                    args.learning_rate,
+                    args.learning_rate_decay,
+                    args.clip_norm,
+                    empty_holdout,
+                )
+            )
+    elif args.vary_holdout:
+        grid = [
+            {},
+            {"include": {"location": "^Europe"}},
+            {"exclude": {"location": "^Europe"}},
+            # {"include": {"location": "^North America"}},
+            # {"exclude": {"location": "^North America"}},
+            # {"include": {"location": "^North America / USA"}},
+            # {"exclude": {"location": "^North America / USA"}},
+            # {"include": {"location": "^Europe / United Kingdom"}},
+            # {"exclude": {"location": "^Europe / United Kingdom"}},
+            # {"include": {"virus_name": "^hCoV-19/USA/..-CDC-"}},
+            # {"include": {"virus_name": "^hCoV-19/USA/..-CDC-2-"}},
+        ]
+        for holdout in grid:
+            holdout = tuple(
+                (k, tuple(sorted(v.items()))) for k, v in sorted(holdout.items())
+            )
+            configs.append(
+                (
+                    args.guide_type,
+                    args.num_steps,
+                    args.num_particles,
+                    args.learning_rate,
+                    args.learning_rate_decay,
+                    args.clip_norm,
+                    holdout,
+                )
+            )
+    else:
+        configs.append(
             (
-                guide_type,
+                args.guide_type,
                 args.num_steps,
                 args.num_particles,
                 args.learning_rate,
                 args.learning_rate_decay,
                 args.clip_norm,
+                empty_holdout,
             )
         )
-
-    # Configure data holdouts.
-    empty_holdout = ()
-    holdouts = [
-        # {"include": {"location": "^Europe"}},
-        # {"exclude": {"location": "^Europe"}},
-        # {"include": {"location": "^North America"}},
-        # {"exclude": {"location": "^North America"}},
-        # {"include": {"location": "^North America / USA"}},
-        # {"exclude": {"location": "^North America / USA"}},
-        # {"include": {"location": "^Europe / United Kingdom"}},
-        # {"exclude": {"location": "^Europe / United Kingdom"}},
-        # {"include": {"virus_name": "^hCoV-19/USA/..-CDC-"}},
-        # {"include": {"virus_name": "^hCoV-19/USA/..-CDC-2-"}},
-    ]
-    configs = [c + (empty_holdout,) for c in inference_configs]
-    for holdout in holdouts:
-        holdout = tuple(
-            (k, tuple(sorted(v.items()))) for k, v in sorted(holdout.items())
-        )
-        configs.append(svi_config + (holdout,))
 
     # Sequentially fit models.
     results = {}
@@ -186,7 +205,9 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Fit mutation-transmissibility models")
     parser.add_argument("--max-obs", default=math.inf, type=int)
-    parser.add_argument("--svi", action="store_true", help="run only one SVI config")
+    parser.add_argument("--vary-guide-type", action="store_true")
+    parser.add_argument("--vary-num-steps", action="store_true")
+    parser.add_argument("--vary-holdout", action="store_true")
     parser.add_argument("-g", "--guide-type", default="mvn_normal_dependent")
     parser.add_argument("-n", "--num-steps", default=10001, type=int)
     parser.add_argument("-p", "--num-particles", default=1, type=int)
