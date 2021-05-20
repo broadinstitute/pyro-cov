@@ -6,7 +6,6 @@ import logging
 import math
 import os
 import re
-from timeit import default_timer
 
 import torch
 
@@ -24,8 +23,9 @@ def cached(filename):
             f = filename(*args, **kwargs) if callable(filename) else filename
             if not os.path.exists(f):
                 result = fn(*args, **kwargs)
-                logger.info(f"saving {f}")
-                torch.save(result, f)
+                if not args[0].test:
+                    logger.info(f"saving {f}")
+                    torch.save(result, f)
             else:
                 logger.info(f"loading cached {f}")
                 result = torch.load(f, map_location=torch.empty(()).device)
@@ -78,7 +78,6 @@ def fit_svi(
     cn=10.0,
     holdout=(),
 ):
-    start_time = default_timer()
     result = mutrans.fit_svi(
         dataset,
         guide_type=guide_type,
@@ -90,8 +89,6 @@ def fit_svi(
         log_every=args.log_every,
         seed=args.seed,
     )
-    result["walltime"] = default_timer() - start_time
-
     result["args"] = args
     return result
 
@@ -198,8 +195,9 @@ def main(args):
         result["mutations"] = dataset["mutations"]
         result = torch_map(result, device="cpu", dtype=torch.float)  # to save space
         results[config] = result
-    logger.info("saving results/mutrans.pt")
-    torch.save(results, "results/mutrans.pt")
+    if not args.test:
+        logger.info("saving results/mutrans.pt")
+        torch.save(results, "results/mutrans.pt")
 
 
 if __name__ == "__main__":
@@ -222,6 +220,7 @@ if __name__ == "__main__":
     parser.add_argument("--cpu", dest="cuda", action="store_false")
     parser.add_argument("--seed", default=20210319, type=int)
     parser.add_argument("-l", "--log-every", default=50, type=int)
+    parser.add_argument("--test", action="store_true")
     parser.add_argument("--debug", action="store_true")
     args = parser.parse_args()
     args.device = "cuda" if args.cuda else "cpu"

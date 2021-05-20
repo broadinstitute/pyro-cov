@@ -4,12 +4,13 @@ import math
 import pickle
 import re
 from collections import Counter, OrderedDict, defaultdict
+from timeit import default_timer
 
 import pyro
 import pyro.distributions as dist
 import torch
 from pyro import poutine
-from pyro.infer import SVI, Trace_ELBO
+from pyro.infer import SVI, JitTrace_ELBO
 from pyro.infer.autoguide import AutoStructured
 from pyro.optim import ClippedAdam
 from pyro.poutine.util import site_is_subsample
@@ -157,6 +158,52 @@ def load_gisaid_data(
     }
 
 
+def subset_gisaid_data(gisaid_dataset, location_queries, max_strains=math.inf):
+    old = gisaid_dataset
+    new = old.copy()
+
+    # Select locations.
+    locations = sorted(
+        {
+            location
+            for location in new["location_id"]
+            if any(q in location for q in location_queries)
+        }
+    )
+    ids = torch.tensor([old["location_id"][location] for location in locations])
+    new["location_id"] = {name: i for i, name in enumerate(locations)}
+    new["weekly_strains"] = new["weekly_strains"].index_select(1, ids)
+    new["local_time"] = new["local_time"].index_select(1, ids)
+
+    # Select strains.
+    ids = (
+        old["weekly_strains"].sum([0, 1]).sort(0, descending=True).indices[:max_strains]
+    )
+    new["weekly_strains"] = new["weekly_strains"].index_select(-1, ids)
+    new["features"] = new["features"].index_select(0, ids)
+    new["lineage_id_inv"] = [new["lineage_id_inv"][i] for i in ids.tolist()]
+    new["lineage_id"] = {name: i for i, name in enumerate(new["lineage_id_inv"])}
+
+    # Select mutations.
+    gaps = new["features"].max(0).values - new["features"].min(0).values
+    ids = (gaps >= 0.5).nonzero(as_tuple=True)[0]
+    new["mutations"] = [new["mutations"][i] for i in ids.tolist()]
+    new["features"] = new["features"].index_select(-1, ids)
+
+    logger.info(
+        "Selected {}/{} places, {}/{} strains, {}/{} mutations".format(
+            len(new["location_id"]),
+            len(old["location_id"]),
+            len(new["lineage_id"]),
+            len(old["lineage_id"]),
+            len(new["mutations"]),
+            len(old["mutations"]),
+        )
+    )
+
+    return new
+
+
 def load_jhu_data(gisaid_data):
     # Load raw JHU case count data.
     us_cases_df = pyrocov.geo.read_csv("time_series_covid19_confirmed_US.csv")
@@ -206,8 +253,9 @@ def model(dataset, *, places=True, times=True):
     local_time = dataset["local_time"]
     weekly_strains = dataset["weekly_strains"]
     features = dataset["features"]
-    assert weekly_strains.shape[-1] == features.shape[0]
-    assert local_time.shape == weekly_strains.shape[:2]
+    if not torch._C._get_tracing_state():
+        assert weekly_strains.shape[-1] == features.shape[0]
+        assert local_time.shape == weekly_strains.shape[:2]
     T, P, S = weekly_strains.shape
     S, F = features.shape
 
@@ -437,6 +485,7 @@ def fit_svi(
     seed=20210319,
     check_loss=False,
 ):
+    start_time = default_timer()
     logger.info(f"Fitting {guide_type} guide via SVI")
     pyro.set_rng_seed(seed)
     pyro.clear_param_store()
@@ -475,7 +524,7 @@ def fit_svi(
         return config
 
     optim = ClippedAdam(optim_config)
-    elbo = Trace_ELBO(
+    elbo = JitTrace_ELBO(
         max_plate_nesting=2, num_particles=num_particles, vectorize_particles=True
     )
     svi = SVI(model, guide, optim, elbo)
@@ -483,7 +532,7 @@ def fit_svi(
     num_obs = dataset["weekly_strains"].count_nonzero()
     concentration, mislabel, feature_scale, place_scale = [None] * 4  # flake8
     for step in range(num_steps):
-        loss = svi.step(dataset)
+        loss = svi.step(dataset=dataset)
         assert not math.isnan(loss)
         losses.append(loss)
         median = guide.median()
@@ -517,6 +566,8 @@ def fit_svi(
     result["guide"] = guide.float()
 
     log_stats(dataset, result)
+
+    result["walltime"] = default_timer() - start_time
     return result
 
 

@@ -97,7 +97,7 @@ def decompress(name):
         return DECOMPRESS[name]
     except KeyError:
         pass
-    if name.split(".")[0] in ("A", "B") or name.count(".") <= 3:
+    if name.split(".")[0] in ("A", "B"):
         DECOMPRESS[name] = name
         return name
     for key, value in PANGOLIN_ALIASES.items():
@@ -105,7 +105,7 @@ def decompress(name):
             result = value + name[len(key) :]
             DECOMPRESS[name] = result
             return result
-    raise ValueError(f"Unknown alias: {name}")
+    raise ValueError(f"Unknown alias: {repr(name)}")
 
 
 def compress(name):
@@ -115,13 +115,14 @@ def compress(name):
     result = COMPRESS.get(name)
     if result is None:
         result = name
-        for key, value in PANGOLIN_ALIASES.items():
-            if key == "I":
-                continue  # obsolete
-            if name == value or name.startswith(value + "."):
-                result = key + name[len(value) :]
+        if name.count(".") > 3:
+            for key, value in PANGOLIN_ALIASES.items():
+                if key == "I":
+                    continue  # obsolete
+                if name == value or name.startswith(value + "."):
+                    result = key + name[len(value) :]
+                    break
                 COMPRESS[name] = result
-                break
     assert re.match(r"^[A-Z]+(\.[0-9]+)*$", result), result
     return result
 
