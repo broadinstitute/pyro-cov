@@ -115,14 +115,16 @@ def compress(name):
     result = COMPRESS.get(name)
     if result is None:
         result = name
-        if name.count(".") > 3:
+        if name.count(".") <= 3:
+            COMPRESS[name] = result
+        else:
             for key, value in PANGOLIN_ALIASES.items():
                 if key == "I":
                     continue  # obsolete
                 if name == value or name.startswith(value + "."):
                     result = key + name[len(value) :]
+                    COMPRESS[name] = result
                     break
-                COMPRESS[name] = result
     assert re.match(r"^[A-Z]+(\.[0-9]+)*$", result), result
     return result
 

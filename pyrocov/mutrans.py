@@ -61,7 +61,6 @@ def get_fine_countries(columns, min_samples=1000):
 def load_gisaid_data(
     *,
     device="cpu",
-    max_obs=math.inf,
     include={},
     exclude={},
 ):
@@ -137,11 +136,6 @@ def load_gisaid_data(
     locations = [k for k, v in location_id.items() if v in ok_region_set]
     location_id = OrderedDict(zip(locations, range(len(locations))))
 
-    # Downscale highly-observed regions for numerical stability. Note it is
-    # unclear why this is needed, but e.g. England predictions are very bad
-    # without downscaling, and @sfs believes this is a numerical issue.
-    weekly_strains.div_(weekly_strains.sum(-1, True).div_(max_obs).clamp_(min=1))
-
     # Construct region-local time scales centered around observations.
     num_obs = weekly_strains.sum(-1)
     local_time = torch.arange(float(len(num_obs))) * TIMESTEP / GENERATION_TIME
@@ -161,35 +155,41 @@ def load_gisaid_data(
 
 def subset_gisaid_data(
     gisaid_dataset,
-    location_queries,
+    location_queries=None,
     max_strains=math.inf,
     obs_scale=1.0,
+    obs_max=math.inf,
     round_method=None,
 ):
     old = gisaid_dataset
     new = old.copy()
 
     # Select locations.
-    locations = sorted(
-        {
-            location
-            for location in new["location_id"]
-            if any(q in location for q in location_queries)
-        }
-    )
-    ids = torch.tensor([old["location_id"][location] for location in locations])
-    new["location_id"] = {name: i for i, name in enumerate(locations)}
-    new["weekly_strains"] = new["weekly_strains"].index_select(1, ids)
-    new["local_time"] = new["local_time"].index_select(1, ids)
+    if location_queries is not None:
+        locations = sorted(
+            {
+                location
+                for location in new["location_id"]
+                if any(q in location for q in location_queries)
+            }
+        )
+        ids = torch.tensor([old["location_id"][location] for location in locations])
+        new["location_id"] = {name: i for i, name in enumerate(locations)}
+        new["weekly_strains"] = new["weekly_strains"].index_select(1, ids)
+        new["local_time"] = new["local_time"].index_select(1, ids)
 
     # Select strains.
-    ids = (
-        old["weekly_strains"].sum([0, 1]).sort(0, descending=True).indices[:max_strains]
-    )
-    new["weekly_strains"] = new["weekly_strains"].index_select(-1, ids)
-    new["features"] = new["features"].index_select(0, ids)
-    new["lineage_id_inv"] = [new["lineage_id_inv"][i] for i in ids.tolist()]
-    new["lineage_id"] = {name: i for i, name in enumerate(new["lineage_id_inv"])}
+    if new["weekly_strains"].size(-1) > max_strains:
+        ids = (
+            new["weekly_strains"]
+            .sum([0, 1])
+            .sort(0, descending=True)
+            .indices[:max_strains]
+        )
+        new["weekly_strains"] = new["weekly_strains"].index_select(-1, ids)
+        new["features"] = new["features"].index_select(0, ids)
+        new["lineage_id_inv"] = [new["lineage_id_inv"][i] for i in ids.tolist()]
+        new["lineage_id"] = {name: i for i, name in enumerate(new["lineage_id_inv"])}
 
     # Select mutations.
     gaps = new["features"].max(0).values - new["features"].min(0).values
@@ -197,10 +197,17 @@ def subset_gisaid_data(
     new["mutations"] = [new["mutations"][i] for i in ids.tolist()]
     new["features"] = new["features"].index_select(-1, ids)
 
-    # Downsample counts.
-    counts = new["weekly_strains"]
+    # Downsample highly-observed (time,place) bins for numerical stability. It
+    # is unclear why this is needed, but e.g. England predictions are very bad
+    # without downsampling, and @sfs believes this is a numerical issue.
+    old_obs_sum = new["weekly_strains"].sum()
     if obs_scale != 1:
-        new["weekly_strains"] = round_counts(counts * obs_scale, round_method)
+        new["weekly_strains"] = new["weekly_strains"] * obs_scale
+    if obs_max is not None:
+        new["weekly_strains"] = new["weekly_strains"] * (
+            obs_max / new["weekly_strains"].sum(-1, True).clamp_(min=obs_max)
+        )
+    new["weekly_strains"] = round_counts(new["weekly_strains"], round_method)
 
     logger.info(
         "Selected {}/{} places, {}/{} strains, {}/{} mutations, {}/{} samples".format(
@@ -211,7 +218,7 @@ def subset_gisaid_data(
             len(new["mutations"]),
             len(old["mutations"]),
             int(new["weekly_strains"].sum()),
-            int(counts.sum()),
+            int(old_obs_sum),
         )
     )
 

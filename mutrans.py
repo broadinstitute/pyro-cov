@@ -3,7 +3,6 @@
 import argparse
 import functools
 import logging
-import math
 import os
 import re
 
@@ -53,7 +52,7 @@ def _load_data_filename(args, **kwargs):
 
 @cached(_load_data_filename)
 def load_data(args, **kwargs):
-    return mutrans.load_gisaid_data(device=args.device, max_obs=args.max_obs, **kwargs)
+    return mutrans.load_gisaid_data(device=args.device, **kwargs)
 
 
 def _fit_filename(name, *args):
@@ -211,6 +210,9 @@ def main(args):
         logger.info(f"Config: {config}")
         holdout = {k: dict(v) for k, v in config[-1]}
         dataset = load_data(args, **holdout)
+        dataset = mutrans.subset_gisaid_data(
+            dataset, obs_max=args.obs_max, round_method=args.round_method
+        )
         result = fit_svi(args, dataset, *config)
         result.pop("guide", None)  # to save space
         result["mutations"] = dataset["mutations"]
@@ -223,7 +225,8 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Fit mutation-transmissibility models")
-    parser.add_argument("--max-obs", default=math.inf, type=int)
+    parser.add_argument("--obs-max", default=100, type=int)
+    parser.add_argument("--round-method", help="one of: floor, ceil, random")
     parser.add_argument("--vary-model-type", action="store_true")
     parser.add_argument("--vary-guide-type", action="store_true")
     parser.add_argument("--vary-num-steps", action="store_true")
