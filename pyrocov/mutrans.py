@@ -11,7 +11,7 @@ import pyro
 import pyro.distributions as dist
 import torch
 from pyro import poutine
-from pyro.infer import SVI, JitTrace_ELBO
+from pyro.infer import SVI, JitTrace_ELBO, Trace_ELBO
 from pyro.infer.autoguide import AutoStructured
 from pyro.optim import ClippedAdam
 from pyro.poutine.util import site_is_subsample
@@ -203,7 +203,7 @@ def subset_gisaid_data(
     old_obs_sum = new["weekly_strains"].sum()
     if obs_scale != 1:
         new["weekly_strains"] = new["weekly_strains"] * obs_scale
-    if obs_max is not None:
+    if obs_max not in (None, math.inf):
         new["weekly_strains"] = new["weekly_strains"] * (
             obs_max / new["weekly_strains"].sum(-1, True).clamp_(min=obs_max)
         )
@@ -521,6 +521,10 @@ class Guide(AutoStructured):
         result["mean"] = {k: v.mean(0).squeeze() for k, v in samples.items()}
         result["std"] = {k: v.std(0).squeeze() for k, v in samples.items()}
         return result
+
+    def loss(self, dataset):
+        elbo = Trace_ELBO(max_plate_nesting=2)
+        return elbo.loss(self.model, self, dataset)
 
 
 # Copied from https://github.com/pytorch/pytorch/blob/v1.8.0/torch/distributions/multivariate_normal.py#L69

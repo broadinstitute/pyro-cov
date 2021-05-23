@@ -225,7 +225,7 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Fit mutation-transmissibility models")
-    parser.add_argument("--obs-max", default=100, type=int)
+    parser.add_argument("--obs-max", default=100, type=float)
     parser.add_argument("--round-method", help="one of: floor, ceil, random")
     parser.add_argument("--vary-model-type", action="store_true")
     parser.add_argument("--vary-guide-type", action="store_true")
