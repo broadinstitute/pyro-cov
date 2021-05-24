@@ -329,27 +329,52 @@ def model(dataset, *, places=True, times=True, model_type=""):
         init = pyro.sample("init", dist.SoftLaplace(torch.zeros(S), 10).to_event(1))
         if not times:
             return
-        strain_probs = (init + rate * local_time[:, :, None]).softmax(-1)
-        if "mislabel" in model_type:
-            # Explicitly model mislabeling of time.
-            good = (concentration * (1 - mislabel))[..., None]
-            bad = (concentration * mislabel)[..., None]
-            mislabel_probs = weekly_strains.sum(0).add_(1)
-            mislabel_probs /= mislabel_probs.sum(-1, True)
-            concentration_ = good * strain_probs + bad * mislabel_probs
+        if "logits" in model_type:
+            strain_logits = init + rate * local_time[:, :, None]
         else:
-            concentration_ = concentration[..., None] * strain_probs
+            strain_probs = (init + rate * local_time[:, :, None]).softmax(-1)
+            if "mislabel" in model_type:
+                # Explicitly model mislabeling of time.
+                good = (concentration * (1 - mislabel))[..., None]
+                bad = (concentration * mislabel)[..., None]
+                mislabel_probs = weekly_strains.sum(0).add_(1)
+                mislabel_probs /= mislabel_probs.sum(-1, True)
+                concentration_ = good * strain_probs + bad * mislabel_probs
+            else:
+                concentration_ = concentration[..., None] * strain_probs
+
         # Finally observe overdispersed counts.
         with time_plate:
-            pyro.sample(
-                "obs",
-                dist.DirichletMultinomial(
-                    concentration=concentration_,
-                    is_sparse=True,  # uses a faster algorithm
-                    validate_args=False,  # allows scaled counts
-                ),
-                obs=weekly_strains,
-            )
+            if "logits" in model_type:
+                assert "mislabel" not in model_type
+                logits = (
+                    pyro.sample(
+                        "logits",
+                        dist.Normal(
+                            torch.zeros_like(strain_logits),
+                            concentration[..., None].reciprocal(),
+                        ).to_event(1),
+                    )
+                    + strain_logits
+                )
+                pyro.sample(
+                    "obs",
+                    dist.Multinomial(
+                        total_count=int(weekly_strains.sum(-1).max()),
+                        logits=logits,
+                    ),
+                    obs=weekly_strains,
+                )
+            else:
+                pyro.sample(
+                    "obs",
+                    dist.DirichletMultinomial(
+                        concentration=concentration_,
+                        is_sparse=True,  # uses a faster algorithm
+                        validate_args=False,  # allows scaled counts
+                    ),
+                    obs=weekly_strains,
+                )
 
 
 class InitLocFn:
@@ -373,8 +398,10 @@ class InitLocFn:
             return torch.ones(shape)
         if name in ("rate_coef", "rate_bias"):
             return torch.rand(shape).sub_(0.5).mul_(0.01)
-        elif name == "init":
+        if name == "init":
             return self.init
+        if name == "logits":
+            return torch.zeros(shape)
         raise ValueError(site["name"])
 
 
@@ -428,6 +455,40 @@ class InitRateCoefLinear(torch.nn.Module):
         return y
 
 
+class LogitsLinear(torch.nn.Module):
+    def __init__(self, features, local_time):
+        super().__init__()
+        S, F = features.shape
+        T, P = local_time.shape
+        self.register_buffer("features", features)
+        self.register_buffer("local_time", local_time)
+        self.scale_tp = torch.nn.Parameter(torch.zeros(T, P, 1))
+        self.scale_ps = torch.nn.Parameter(torch.zeros(1, P, S))
+        self.scale_ts = torch.nn.Parameter(torch.zeros(T, 1, S))
+
+    def forward(self):
+        return self.scale_tp + self.scale_ps + self.scale_ts
+
+    def init(self, x):
+        S, F = self.features.shape
+        T, P = self.local_time.shape
+        batch_shape = x.shape[:-1]
+        init = x.reshape(batch_shape + (1, P, S))
+        y = init * self()
+        y = y.reshape(batch_shape + (T * P * S,))
+        return y
+
+    def rate_coef(self, x):
+        S, F = self.features.shape
+        T, P = self.local_time.shape
+        batch_shape = x.shape[:-1]
+        rate_coef = x.reshape(batch_shape + (1, 1, F))
+        rate = 0.01 * (rate_coef @ self.features.T) * self.local_time[:, :, None]
+        y = rate * self()
+        y = y.reshape(batch_shape + (T * P * S,))
+        return y
+
+
 class Guide(AutoStructured):
     def __init__(self, model, dataset, model_type, guide_type):
         self.guide_type = guide_type
@@ -463,7 +524,10 @@ class Guide(AutoStructured):
         if "rate_bias" in model_type:
             conditionals["place_scale"] = "delta"
             conditionals["rate_bias"] = conditionals["init"]
+        if "logits" in model_type:
+            conditionals["logits"] = conditionals["init"]
 
+        logits_linear = None
         if guide_type.endswith("_dependent"):
             T, P, S = dataset["weekly_strains"].shape
             S, F = dataset["features"].shape
@@ -476,6 +540,11 @@ class Guide(AutoStructured):
                 dependencies["init"]["rate_coef"] = InitRateCoefLinear(
                     P, dataset["features"]
                 )
+            if "logits" in model_type:
+                assert "rate_bias" not in model_type
+                logits_linear = LogitsLinear(dataset["features"], dataset["local_time"])
+                dependencies["logits"]["init"] = logits_linear.init
+                dependencies["logits"]["rate_coef"] = logits_linear.rate_coef
 
         super().__init__(
             model,
@@ -486,6 +555,7 @@ class Guide(AutoStructured):
         )
 
         self._dataset_for_init = dataset
+        self._logits_linear = logits_linear
 
     @torch.no_grad()
     @poutine.mask(mask=False)
@@ -548,6 +618,7 @@ def fit_svi(
     num_steps=3001,
     num_particles=1,
     clip_norm=10.0,
+    jit=False,
     log_every=50,
     seed=20210319,
     check_loss=False,
@@ -592,7 +663,8 @@ def fit_svi(
         return config
 
     optim = ClippedAdam(optim_config)
-    elbo = JitTrace_ELBO(
+    Elbo = JitTrace_ELBO if jit else Trace_ELBO
+    elbo = Elbo(
         max_plate_nesting=2, num_particles=num_particles, vectorize_particles=True
     )
     svi = SVI(model_, guide, optim, elbo)
