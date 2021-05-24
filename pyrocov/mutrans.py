@@ -290,7 +290,7 @@ def load_jhu_data(gisaid_data):
     }
 
 
-def model(dataset, *, places=True, times=True, model_type=""):
+def model1(dataset, *, places=True, times=True, model_type=""):
     local_time = dataset["local_time"]
     weekly_strains = dataset["weekly_strains"]
     features = dataset["features"]
@@ -382,6 +382,47 @@ def model(dataset, *, places=True, times=True, model_type=""):
                     ),
                     obs=weekly_strains,
                 )
+
+
+def model(dataset, *, places=True, times=True, model_type=""):
+    local_time = dataset["local_time"]
+    weekly_strains = dataset["weekly_strains"]
+    features = dataset["features"]
+    if not torch._C._get_tracing_state():
+        assert weekly_strains.shape[-1] == features.shape[0]
+        assert local_time.shape == weekly_strains.shape[:2]
+    T, P, S = weekly_strains.shape
+    S, F = features.shape
+    place_plate = pyro.plate("place", P, dim=-1)
+    time_plate = pyro.plate("time", T, dim=-2)
+
+    # Sample globals.
+    feature_scale = pyro.sample("feature_scale", dist.LogNormal(0, 1))
+
+    # Assume relative growth rate depends on mutations but not place.
+    rate_coef = pyro.sample(
+        "rate_coef",
+        dist.SoftLaplace(torch.zeros(F), feature_scale[..., None]).to_event(1),
+    )
+    rate = pyro.deterministic("rate", 0.01 * (rate_coef @ features.T))
+
+    # Assume initial infections depend on place.
+    if not places:
+        return
+    with place_plate:
+        init = pyro.sample("init", dist.SoftLaplace(torch.zeros(S), 10).to_event(1))
+
+        # Finally observe overdispersed counts.
+        if not times:
+            return
+        with time_plate:
+            pyro.sample(
+                "obs",
+                dist.Multinomial(
+                    logits=init + rate * local_time[:, :, None], validate_args=False
+                ),
+                obs=weekly_strains,
+            )
 
 
 class InitLocFn:
@@ -502,7 +543,6 @@ class Guide(AutoStructured):
         conditionals = {}
         dependencies = defaultdict(dict)
         conditionals["feature_scale"] = "delta"
-        conditionals["concentration"] = "delta"
         if guide_type == "map":
             conditionals["rate_coef"] = "delta"
             conditionals["rate_bias"] = "delta"
@@ -526,6 +566,8 @@ class Guide(AutoStructured):
         else:
             raise ValueError(f"Unsupported guide type: {guide_type}")
 
+        if "concentration" in model_type:
+            conditionals["concentration"] = "delta"
         if "mislabel" in model_type:
             conditionals["mislabel"] = "delta"
         if "rate_bias" in model_type:
@@ -625,7 +667,7 @@ def fit_svi(
     num_steps=3001,
     num_particles=1,
     clip_norm=10.0,
-    jit=False,
+    jit=True,
     log_every=50,
     seed=20210319,
     check_loss=False,
@@ -689,7 +731,9 @@ def fit_svi(
         if step % log_every == 0:
             assert median["feature_scale"] > 0.02, "implausibly small feature_scale"
             assert median.get("place_scale", 1) > 0.001, "implausibly small place_scale"
-            assert median["concentration"] > 1, "implausible small concentration"
+            assert (
+                median.get("concentration", math.inf) > 1
+            ), "implausible small concentration"
             logger.info(
                 "\t".join(
                     [f"step {step: >4d} L={loss / num_obs:0.6g}"]
