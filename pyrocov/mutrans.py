@@ -11,10 +11,8 @@ import pyro
 import pyro.distributions as dist
 import torch
 from pyro import poutine
-from pyro.distributions import constraints
 from pyro.infer import SVI, JitTrace_ELBO, Trace_ELBO
 from pyro.infer.autoguide import AutoStructured
-from pyro.nn import PyroModule
 from pyro.optim import ClippedAdam
 from pyro.poutine.util import site_is_subsample
 
@@ -27,11 +25,6 @@ logger = logging.getLogger(__name__)
 TIMESTEP = 7  # in days
 GENERATION_TIME = 5.5  # in days
 START_DATE = "2019-12-01"
-
-
-class Multinomial(dist.Multinomial):
-    # Work around over-zealous checking of .probs in Distribution.__init__().
-    arg_constraints = {"logits": constraints.independent(constraints.real, 1)}
 
 
 def get_fine_countries(columns, min_samples=1000):
@@ -323,14 +316,9 @@ def model(dataset, *, places=True, times=True, model_type=""):
     if "overdispersed" in model_type:
         noise_scale = pyro.sample("noise_scale", dist.LogNormal(-2, 2))
         with place_plate, time_plate:
-            noise = pyro.sample(
-                "noise",
-                dist.Normal(
-                    torch.zeros_like(logits),
-                    noise_scale[..., None],
-                ).to_event(1),
+            logits = pyro.sample(
+                "logits", dist.Normal(logits, noise_scale[..., None],).to_event(1),
             )
-            logits = logits + noise
 
     # Finally observe counts.
     with place_plate, time_plate:
@@ -344,12 +332,15 @@ def model(dataset, *, places=True, times=True, model_type=""):
 class InitLocFn:
     def __init__(self, dataset):
         # Initialize init to mean.
-        init = dataset["weekly_strains"].sum(0)
+        weekly_strains = dataset["weekly_strains"]
+        init = weekly_strains.sum(0)
         init.div_(init.sum(-1, True)).add_(0.01 / init.size(-1)).log_()
         init.sub_(init.median(-1, True).values)
         self.init = init
         assert not torch.isnan(init).any()
         logger.info(f"init stddev = {init.std():0.3g}")
+        self.logits = weekly_strains.add(1 / weekly_strains.size(-1)).log()
+        self.logits -= self.logits.mean(-1, True)
 
     def __call__(self, site):
         name = site["name"]
@@ -362,8 +353,8 @@ class InitLocFn:
             return torch.rand(shape).sub_(0.5).mul_(0.01)
         if name == "init":
             return self.init
-        if name == "noise":
-            return torch.zeros(shape)
+        if name == "logits":
+            return self.logits
         raise ValueError(
             "InitLocFn found unexpected site {}".format(repr(site["name"]))
         )
@@ -382,40 +373,6 @@ class InitRateCoefLinear(torch.nn.Module):
         x = x[..., None, :] @ self.features.T
         y = x * self.weight_ps + x @ self.weight_ss
         y = y.reshape(batch_shape + (-1,))
-        return y
-
-
-class NoiseLinear(PyroModule):
-    def __init__(self, features, local_time):
-        super().__init__()
-        S, F = features.shape
-        T, P = local_time.shape
-        self.register_buffer("features", features)
-        self.register_buffer("local_time", local_time)
-        self.scale_tp = torch.nn.Parameter(torch.zeros(T, P, 1))
-        self.scale_ps = torch.nn.Parameter(torch.zeros(1, P, S))
-        self.scale_ts = torch.nn.Parameter(torch.zeros(T, 1, S))
-
-    def forward(self):
-        return self.scale_tp + self.scale_ps + self.scale_ts
-
-    def init(self, x):
-        S, F = self.features.shape
-        T, P = self.local_time.shape
-        batch_shape = x.shape[:-1]
-        init = x.reshape(batch_shape + (1, P, S))
-        y = init * self()
-        y = y.reshape(batch_shape + (T * P * S,))
-        return y
-
-    def rate_coef(self, x):
-        S, F = self.features.shape
-        T, P = self.local_time.shape
-        batch_shape = x.shape[:-1]
-        rate_coef = x.reshape(batch_shape + (1, 1, F))
-        rate = 0.01 * (rate_coef @ self.features.T) * self.local_time[:, :, None]
-        y = rate * self()
-        y = y.reshape(batch_shape + (T * P * S,))
         return y
 
 
@@ -446,7 +403,7 @@ class Guide(AutoStructured):
 
         if "overdispersed" in model_type:
             conditionals["noise_scale"] = "delta"
-            conditionals["noise"] = conditionals["init"]
+            conditionals["logits"] = conditionals["init"]
 
         noise_linear = None
         if guide_type.endswith("_dependent"):
@@ -455,10 +412,6 @@ class Guide(AutoStructured):
             dependencies["init"]["rate_coef"] = InitRateCoefLinear(
                 P, dataset["features"]
             )
-            if "overdispersed" in model_type:
-                noise_linear = NoiseLinear(dataset["features"], dataset["local_time"])
-                dependencies["noise"]["init"] = noise_linear.init
-                dependencies["noise"]["rate_coef"] = noise_linear.rate_coef
 
         super().__init__(
             model,
