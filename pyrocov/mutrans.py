@@ -11,6 +11,7 @@ import pyro
 import pyro.distributions as dist
 import torch
 from pyro import poutine
+from pyro.distributions import constraints
 from pyro.infer import SVI, JitTrace_ELBO, Trace_ELBO
 from pyro.infer.autoguide import AutoStructured
 from pyro.optim import ClippedAdam
@@ -25,6 +26,11 @@ logger = logging.getLogger(__name__)
 TIMESTEP = 7  # in days
 GENERATION_TIME = 5.5  # in days
 START_DATE = "2019-12-01"
+
+
+class Multinomial(dist.Multinomial):
+    # Work around over-zealous checking of .probs in Distribution.__init__().
+    arg_constraints = {"logits": constraints.independent(constraints.real, 1)}
 
 
 def get_fine_countries(columns, min_samples=1000):
@@ -359,9 +365,10 @@ def model(dataset, *, places=True, times=True, model_type=""):
                 )
                 pyro.sample(
                     "obs",
-                    dist.Multinomial(
+                    Multinomial(
                         total_count=int(weekly_strains.sum(-1).max()),
                         logits=logits,
+                        validate_args=False,
                     ),
                     obs=weekly_strains,
                 )
