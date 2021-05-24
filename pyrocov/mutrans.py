@@ -14,6 +14,7 @@ from pyro import poutine
 from pyro.distributions import constraints
 from pyro.infer import SVI, JitTrace_ELBO, Trace_ELBO
 from pyro.infer.autoguide import AutoStructured
+from pyro.nn import PyroModule
 from pyro.optim import ClippedAdam
 from pyro.poutine.util import site_is_subsample
 
@@ -290,100 +291,6 @@ def load_jhu_data(gisaid_data):
     }
 
 
-def model1(dataset, *, places=True, times=True, model_type=""):
-    local_time = dataset["local_time"]
-    weekly_strains = dataset["weekly_strains"]
-    features = dataset["features"]
-    if not torch._C._get_tracing_state():
-        assert weekly_strains.shape[-1] == features.shape[0]
-        assert local_time.shape == weekly_strains.shape[:2]
-    T, P, S = weekly_strains.shape
-    S, F = features.shape
-    place_plate = pyro.plate("place", P, dim=-1)
-    time_plate = pyro.plate("time", T, dim=-2)
-
-    # Sample globals.
-    feature_scale = pyro.sample("feature_scale", dist.LogNormal(0, 1))
-    concentration = pyro.sample("concentration", dist.LogNormal(2, 4))
-    if "rate_bias" in model_type:
-        place_scale = pyro.sample("place_scale", dist.LogNormal(-2, 4))
-    if "mislabel" in model_type:
-        mislabel = pyro.sample("mislabel", dist.Beta(100, 1))
-
-    # Assume relative growth rate depends strongly on mutations and weakly on place.
-    rate_coef = pyro.sample(
-        "rate_coef",
-        dist.SoftLaplace(torch.zeros(F), feature_scale[..., None]).to_event(1),
-    )
-    if not places:
-        return
-    if "rate_bias" in model_type:
-        place_scale = pyro.sample("place_scale", dist.LogNormal(-2, 4))
-        with place_plate:
-            rate_bias = pyro.sample(
-                "rate_bias",
-                dist.Normal(torch.zeros(P, S), place_scale[..., None]).to_event(1),
-            )
-            rate = pyro.deterministic(
-                "rate", 0.01 * (rate_bias + rate_coef @ features.T)
-            )
-    else:
-        rate = pyro.deterministic("rate", 0.01 * (rate_coef @ features.T))
-
-    # Assume initial infections depend on place.
-    with place_plate:
-        init = pyro.sample("init", dist.SoftLaplace(torch.zeros(S), 10).to_event(1))
-        if not times:
-            return
-        if "logits" in model_type:
-            strain_logits = init + rate * local_time[:, :, None]
-        else:
-            strain_probs = (init + rate * local_time[:, :, None]).softmax(-1)
-            if "mislabel" in model_type:
-                # Explicitly model mislabeling of time.
-                good = (concentration * (1 - mislabel))[..., None]
-                bad = (concentration * mislabel)[..., None]
-                mislabel_probs = weekly_strains.sum(0).add_(1)
-                mislabel_probs /= mislabel_probs.sum(-1, True)
-                concentration_ = good * strain_probs + bad * mislabel_probs
-            else:
-                concentration_ = concentration[..., None] * strain_probs
-
-        # Finally observe overdispersed counts.
-        with time_plate:
-            if "logits" in model_type:
-                assert "mislabel" not in model_type
-                logits = (
-                    pyro.sample(
-                        "logits",
-                        dist.Normal(
-                            torch.zeros_like(strain_logits),
-                            concentration[..., None].reciprocal(),
-                        ).to_event(1),
-                    )
-                    + strain_logits
-                )
-                pyro.sample(
-                    "obs",
-                    Multinomial(
-                        total_count=int(weekly_strains.sum(-1).max()),
-                        logits=logits,
-                        validate_args=False,
-                    ),
-                    obs=weekly_strains,
-                )
-            else:
-                pyro.sample(
-                    "obs",
-                    dist.DirichletMultinomial(
-                        concentration=concentration_,
-                        is_sparse=True,  # uses a faster algorithm
-                        validate_args=False,  # allows scaled counts
-                    ),
-                    obs=weekly_strains,
-                )
-
-
 def model(dataset, *, places=True, times=True, model_type=""):
     local_time = dataset["local_time"]
     weekly_strains = dataset["weekly_strains"]
@@ -396,10 +303,8 @@ def model(dataset, *, places=True, times=True, model_type=""):
     place_plate = pyro.plate("place", P, dim=-1)
     time_plate = pyro.plate("time", T, dim=-2)
 
-    # Sample globals.
-    feature_scale = pyro.sample("feature_scale", dist.LogNormal(0, 1))
-
     # Assume relative growth rate depends on mutations but not place.
+    feature_scale = pyro.sample("feature_scale", dist.LogNormal(0, 1))
     rate_coef = pyro.sample(
         "rate_coef",
         dist.SoftLaplace(torch.zeros(F), feature_scale[..., None]).to_event(1),
@@ -412,17 +317,28 @@ def model(dataset, *, places=True, times=True, model_type=""):
     with place_plate:
         init = pyro.sample("init", dist.SoftLaplace(torch.zeros(S), 10).to_event(1))
 
-        # Finally observe overdispersed counts.
-        if not times:
-            return
-        with time_plate:
-            pyro.sample(
-                "obs",
-                dist.Multinomial(
-                    logits=init + rate * local_time[:, :, None], validate_args=False
-                ),
-                obs=weekly_strains,
+    # Model logits as optionally overdispersed.
+    with place_plate, time_plate:
+        logits = init + rate * local_time[:, :, None]
+    if "overdispersed" in model_type:
+        noise_scale = pyro.sample("noise_scale", dist.LogNormal(-2, 2))
+        with place_plate, time_plate:
+            noise = pyro.sample(
+                "noise",
+                dist.Normal(
+                    torch.zeros_like(logits),
+                    noise_scale[..., None],
+                ).to_event(1),
             )
+            logits = logits + noise
+
+    # Finally observe counts.
+    with place_plate, time_plate:
+        pyro.sample(
+            "obs",
+            dist.Multinomial(logits=logits, validate_args=False),
+            obs=weekly_strains,
+        )
 
 
 class InitLocFn:
@@ -438,53 +354,19 @@ class InitLocFn:
     def __call__(self, site):
         name = site["name"]
         shape = site["fn"].shape()
-        if name == "concentration":
-            return torch.full(shape, 40.0)
-        if name == "mislabel":
-            return torch.full(shape, 0.01)
-        if name in ("feature_scale", "place_scale"):
+        if name == "noise_scale":
+            return torch.full(shape, 0.1)
+        if name == "feature_scale":
             return torch.ones(shape)
-        if name in ("rate_coef", "rate_bias"):
+        if name == "rate_coef":
             return torch.rand(shape).sub_(0.5).mul_(0.01)
         if name == "init":
             return self.init
-        if name == "logits":
+        if name == "noise":
             return torch.zeros(shape)
-        raise ValueError(site["name"])
-
-
-class RateBiasRateCoefLinear(torch.nn.Module):
-    def __init__(self, P, S, F, features):
-        super().__init__()
-        self.PSF = P, S, F
-        self.register_buffer("weight", -features.T)
-        self.scale = torch.nn.Parameter(torch.ones(P, S))
-
-    def forward(self, x):
-        P, S, F = self.PSF
-        batch_shape = x.shape[:-1]
-        y = x @ self.weight
-        y = y.reshape(batch_shape + (1, S))
-        y = y.expand(batch_shape + (P, S))
-        y = y * self.scale
-        y = y.reshape(batch_shape + (-1,))
-        return y
-
-
-class InitRateBiasLinear(torch.nn.Module):
-    def __init__(self, P, S):
-        super().__init__()
-        self.PS = P, S
-        self.weight_ps = torch.nn.Parameter(torch.zeros(P, S))
-        self.weight_ss = torch.nn.Parameter(torch.zeros(S, S))
-
-    def forward(self, x):
-        P, S = self.PS
-        batch_shape = x.shape[:-1]
-        x = x.reshape(batch_shape + (P, S))
-        y = x * self.weight_ps + x @ self.weight_ss
-        y = y.reshape(batch_shape + (P * S,))
-        return y
+        raise ValueError(
+            "InitLocFn found unexpected site {}".format(repr(site["name"]))
+        )
 
 
 class InitRateCoefLinear(torch.nn.Module):
@@ -503,7 +385,7 @@ class InitRateCoefLinear(torch.nn.Module):
         return y
 
 
-class LogitsLinear(torch.nn.Module):
+class NoiseLinear(PyroModule):
     def __init__(self, features, local_time):
         super().__init__()
         S, F = features.shape
@@ -545,15 +427,12 @@ class Guide(AutoStructured):
         conditionals["feature_scale"] = "delta"
         if guide_type == "map":
             conditionals["rate_coef"] = "delta"
-            conditionals["rate_bias"] = "delta"
             conditionals["init"] = "delta"
         elif guide_type.startswith("normal_delta"):
             conditionals["rate_coef"] = "normal"
-            conditionals["rate_bias"] = "delta"
             conditionals["init"] = "delta"
         elif guide_type.startswith("normal"):
             conditionals["rate_coef"] = "normal"
-            conditionals["rate_bias"] = "normal"
             conditionals["init"] = "normal"
         elif guide_type.startswith("mvn_delta"):
             conditionals["rate_coef"] = "mvn"
@@ -561,39 +440,25 @@ class Guide(AutoStructured):
             conditionals["init"] = "delta"
         elif guide_type.startswith("mvn_normal"):
             conditionals["rate_coef"] = "mvn"
-            conditionals["rate_bias"] = "normal"
             conditionals["init"] = "normal"
         else:
             raise ValueError(f"Unsupported guide type: {guide_type}")
 
-        if "concentration" in model_type:
-            conditionals["concentration"] = "delta"
-        if "mislabel" in model_type:
-            conditionals["mislabel"] = "delta"
-        if "rate_bias" in model_type:
-            conditionals["place_scale"] = "delta"
-            conditionals["rate_bias"] = conditionals["init"]
-        if "logits" in model_type:
-            conditionals["logits"] = conditionals["init"]
+        if "overdispersed" in model_type:
+            conditionals["noise_scale"] = "delta"
+            conditionals["noise"] = conditionals["init"]
 
-        logits_linear = None
+        noise_linear = None
         if guide_type.endswith("_dependent"):
             T, P, S = dataset["weekly_strains"].shape
             S, F = dataset["features"].shape
-            if "rate_bias" in model_type:
-                dependencies["rate_bias"]["rate_coef"] = RateBiasRateCoefLinear(
-                    P, S, F, dataset["features"]
-                )
-                dependencies["init"]["rate_bias"] = InitRateBiasLinear(P, S)
-            else:
-                dependencies["init"]["rate_coef"] = InitRateCoefLinear(
-                    P, dataset["features"]
-                )
-            if "logits" in model_type:
-                assert "rate_bias" not in model_type
-                logits_linear = LogitsLinear(dataset["features"], dataset["local_time"])
-                dependencies["logits"]["init"] = logits_linear.init
-                dependencies["logits"]["rate_coef"] = logits_linear.rate_coef
+            dependencies["init"]["rate_coef"] = InitRateCoefLinear(
+                P, dataset["features"]
+            )
+            if "overdispersed" in model_type:
+                noise_linear = NoiseLinear(dataset["features"], dataset["local_time"])
+                dependencies["noise"]["init"] = noise_linear.init
+                dependencies["noise"]["rate_coef"] = noise_linear.rate_coef
 
         super().__init__(
             model,
@@ -604,7 +469,7 @@ class Guide(AutoStructured):
         )
 
         self._dataset_for_init = dataset
-        self._logits_linear = logits_linear
+        self._noise_linear = noise_linear
 
     @torch.no_grad()
     @poutine.mask(mask=False)
@@ -620,13 +485,7 @@ class Guide(AutoStructured):
                 result["median"][name] = site["value"]
 
         # Compute moments.
-        save_params = [
-            "feature_scale",
-            "place_scale",
-            "concentration",
-            "mislabel",
-            "rate_coef",
-        ]
+        save_params = ["noise_scale", "feature_scale", "rate_coef"]
         with pyro.plate("particles", num_samples, dim=-3):
             samples = {k: v.v for k, v in self.get_deltas(save_params).items()}
             trace = poutine.trace(poutine.condition(model, samples)).get_trace(
@@ -700,7 +559,7 @@ def fit_svi(
             "lrd": learning_rate_decay ** (1 / num_steps),
             "clip_norm": clip_norm,
         }
-        scalars = ["concentration", "mislabel", "feature_scale", "place_scale"]
+        scalars = ["noise_scale", "feature_scale"]
         if any("locs." + s in name for s in scalars):
             config["lr"] *= 0.2
         elif "scales" in param_name:
@@ -719,7 +578,6 @@ def fit_svi(
     svi = SVI(model_, guide, optim, elbo)
     losses = []
     num_obs = dataset["weekly_strains"].count_nonzero()
-    concentration, mislabel, feature_scale, place_scale = [None] * 4  # flake8
     for step in range(num_steps):
         loss = svi.step(dataset=dataset)
         assert not math.isnan(loss)
@@ -730,10 +588,6 @@ def fit_svi(
                 series[name].append(float(value))
         if step % log_every == 0:
             assert median["feature_scale"] > 0.02, "implausibly small feature_scale"
-            assert median.get("place_scale", 1) > 0.001, "implausibly small place_scale"
-            assert (
-                median.get("concentration", math.inf) > 1
-            ), "implausible small concentration"
             logger.info(
                 "\t".join(
                     [f"step {step: >4d} L={loss / num_obs:0.6g}"]

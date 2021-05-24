@@ -3,6 +3,7 @@
 import argparse
 import functools
 import logging
+import math
 import os
 import re
 
@@ -122,7 +123,7 @@ def main(args):
                 )
             )
     elif args.vary_model_type:
-        grid = ["", "mislabel", "rate_bias", "mislabel+rate_bias"]
+        grid = ["", "overdispersed"]
         for model_type in grid:
             configs.append(
                 (
@@ -210,9 +211,10 @@ def main(args):
         logger.info(f"Config: {config}")
         holdout = {k: dict(v) for k, v in config[-1]}
         dataset = load_data(args, **holdout)
-        dataset = mutrans.subset_gisaid_data(
-            dataset, obs_max=args.obs_max, round_method=args.round_method
-        )
+        if args.obs_max != math.inf:
+            dataset = mutrans.subset_gisaid_data(
+                dataset, obs_max=args.obs_max, round_method=args.round_method
+            )
         result = fit_svi(args, dataset, *config)
         result.pop("guide", None)  # to save space
         result["mutations"] = dataset["mutations"]
@@ -225,7 +227,7 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Fit mutation-transmissibility models")
-    parser.add_argument("--obs-max", default=100, type=float)
+    parser.add_argument("--obs-max", default=math.inf, type=float)
     parser.add_argument("--round-method", help="one of: floor, ceil, random")
     parser.add_argument("--vary-model-type", action="store_true")
     parser.add_argument("--vary-guide-type", action="store_true")
