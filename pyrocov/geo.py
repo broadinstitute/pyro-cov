@@ -21,6 +21,8 @@ GISAID_TO_JHU = {
     "bermuda": ("united kingdom", "bermuda"),
     "british virgin islands": ("united kingdom", "british virgin islands"),
     "bonaire": ("netherlands", "bonaire, sint eustatius and saba"),
+    "bosni and herzegovina": ("bosni and herzegovina",),
+    "burkinafaso": ("burkina faso",),
     "caribbean": ("dominican republic",),  # most populous island
     "cayman islands": ("united kingdom", "cayman islands"),
     "cote divoire": ("cote d'ivoire",),
@@ -39,6 +41,7 @@ GISAID_TO_JHU = {
     "gaborone": ("botswana",),
     "gibraltar": ("united kingdom", "gibraltar"),
     "guadeloupe": ("france", "guadeloupe"),
+    "guinea bissau": ("guinea-bissau",),
     "guam": ("us", "guam"),
     "guyane": ("france", "french guiana"),
     "guyane francaise": ("france", "french guiana"),
