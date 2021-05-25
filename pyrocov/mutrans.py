@@ -12,7 +12,7 @@ import pyro.distributions as dist
 import torch
 from pyro import poutine
 from pyro.infer import SVI, JitTrace_ELBO, Trace_ELBO
-from pyro.infer.autoguide import AutoStructured
+from pyro.infer.autoguide import AutoLowRankMultivariateNormal, AutoStructured
 from pyro.optim import ClippedAdam
 from pyro.poutine.util import site_is_subsample
 
@@ -29,9 +29,9 @@ START_DATE = "2019-12-01"
 
 def get_fine_countries(columns, min_samples=1000):
     """
-    Select countries have at least two subregions with at least ``min_samples``
-    samples. These will be finely partitioned into subregions. Remaining
-    countries will be coarsely aggregated at country level.
+    Select countries that have at least two subregions with at least
+    ``min_samples`` samples. These will be finely partitioned into subregions.
+    Remaining countries will be coarsely aggregated at country level.
     """
     # Count number of samples in each subregion.
     counts = Counter()
@@ -330,34 +330,43 @@ def model(dataset, *, places=True, times=True, model_type=""):
 
 
 class InitLocFn:
-    def __init__(self, dataset):
-        # Initialize init to mean.
-        weekly_strains = dataset["weekly_strains"]
-        init = weekly_strains.sum(0)
-        init.div_(init.sum(-1, True)).add_(0.01 / init.size(-1)).log_()
-        init.sub_(init.median(-1, True).values)
-        self.init = init
-        assert not torch.isnan(init).any()
-        logger.info(f"init stddev = {init.std():0.3g}")
-        self.logits = weekly_strains.add(1 / weekly_strains.size(-1)).log()
-        self.logits -= self.logits.mean(-1, True)
+    def __init__(self, dataset, init_data={}):
+        self.__dict__.update(init_data)
+
+        # Initialize init.
+        if "init" not in init_data:
+            init = dataset["weekly_strains"].sum(0)
+            init.div_(init.sum(-1, True)).add_(0.01 / init.size(-1)).log_()
+            init.sub_(init.median(-1, True).values)
+            self.init = init
+        assert not torch.isnan(self.init).any()
+        logger.info(f"init stddev = {self.init.std():0.3g}")
+
+        # Initialize logits.
+        if "logits" in init_data:
+            pass
+        elif "rate_coef" in init_data and "init" in init_data:
+            rate = 0.01 * (self.rate_coef @ dataset["features"].T)
+            self.logits = self.init + rate * dataset["local_time"][:, :, None]
+        else:
+            weekly_strains = dataset["weekly_strains"]
+            self.logits = weekly_strains.add(1 / weekly_strains.size(-1)).log()
+            self.logits -= self.logits.mean(-1, True)
 
     def __call__(self, site):
         name = site["name"]
         shape = site["fn"].shape()
+        if hasattr(self, name):
+            result = getattr(self, name)
+            assert result.shape == shape
+            return result
         if name == "noise_scale":
-            return torch.full(shape, 0.1)
+            return torch.full(shape, 0.001)
         if name == "feature_scale":
             return torch.ones(shape)
         if name == "rate_coef":
             return torch.rand(shape).sub_(0.5).mul_(0.01)
-        if name == "init":
-            return self.init
-        if name == "logits":
-            return self.logits
-        raise ValueError(
-            "InitLocFn found unexpected site {}".format(repr(site["name"]))
-        )
+        raise ValueError("InitLocFn found unexpected site {}".format(repr(name)))
 
 
 class InitRateCoefLinear(torch.nn.Module):
@@ -377,7 +386,11 @@ class InitRateCoefLinear(torch.nn.Module):
 
 
 class Guide(AutoStructured):
-    def __init__(self, model, dataset, model_type, guide_type):
+    """
+    Structured guide for training on large data.
+    """
+
+    def __init__(self, model, dataset, model_type, guide_type, *, init_loc_fn):
         self.guide_type = guide_type
         conditionals = {}
         dependencies = defaultdict(dict)
@@ -417,7 +430,7 @@ class Guide(AutoStructured):
             model,
             conditionals=conditionals,
             dependencies=dependencies,
-            init_loc_fn=InitLocFn(dataset),
+            init_loc_fn=init_loc_fn,
             init_scale=0.01,
         )
 
@@ -428,7 +441,6 @@ class Guide(AutoStructured):
     @poutine.mask(mask=False)
     def stats(self, dataset, *, num_samples=1000):
         # Compute median point estimate.
-        # FIXME this silently fails for map inference.
         result = {"median": self.median(dataset)}
         trace = poutine.trace(poutine.condition(model, result["median"])).get_trace(
             dataset, times=False
@@ -447,7 +459,47 @@ class Guide(AutoStructured):
         samples = {
             name: site["value"]
             for name, site in trace.nodes.items()
-            if site["type"] == "sample" and not site_is_subsample(site)
+            if site["type"] == "sample"
+            if not site_is_subsample(site)
+            if name != "obs"
+        }
+        result["mean"] = {k: v.mean(0).squeeze() for k, v in samples.items()}
+        result["std"] = {k: v.std(0).squeeze() for k, v in samples.items()}
+        return result
+
+    def loss(self, dataset):
+        elbo = Trace_ELBO(max_plate_nesting=2)
+        return elbo.loss(self.model, self, dataset)
+
+
+class FullGuide(AutoLowRankMultivariateNormal):
+    """
+    Full guide for testing on small subsets of data.
+    """
+
+    @torch.no_grad()
+    @poutine.mask(mask=False)
+    def stats(self, dataset, *, num_samples=1000):
+        # Compute median point estimate.
+        # FIXME this silently fails for map inference.
+        result = {"median": self.median(dataset)}
+        trace = poutine.trace(poutine.condition(model, result["median"])).get_trace(
+            dataset, times=False
+        )
+        for name, site in trace.nodes.items():
+            if site["type"] == "sample" and not site_is_subsample(site):
+                result["median"][name] = site["value"]
+
+        # Compute moments.
+        with pyro.plate("particles", num_samples, dim=-3):
+            trace = poutine.trace(self).get_trace(dataset)
+            trace = poutine.trace(poutine.replay(model, trace)).get_trace(dataset)
+        samples = {
+            name: site["value"]
+            for name, site in trace.nodes.items()
+            if site["type"] == "sample"
+            if not site_is_subsample(site)
+            if name != "obs"
         }
         result["mean"] = {k: v.mean(0).squeeze() for k, v in samples.items()}
         result["std"] = {k: v.std(0).squeeze() for k, v in samples.items()}
@@ -474,7 +526,8 @@ def fit_svi(
     *,
     model_type,
     guide_type,
-    learning_rate=0.02,
+    init_data={},
+    learning_rate=0.05,
     learning_rate_decay=0.1,
     num_steps=3001,
     num_particles=1,
@@ -485,6 +538,20 @@ def fit_svi(
     check_loss=False,
 ):
     start_time = default_timer()
+
+    if isinstance(init_data, str):
+        init_data = fit_svi(
+            dataset,
+            model_type=init_data,
+            guide_type="map",
+            learning_rate=0.05,
+            learning_rate_decay=1.0,
+            num_steps=1001,
+            num_particles=1,
+            log_every=log_every,
+            seed=seed,
+        )["median"]
+
     logger.info(f"Fitting {guide_type} guide via SVI")
     pyro.set_rng_seed(seed)
     pyro.clear_param_store()
@@ -492,7 +559,11 @@ def fit_svi(
 
     # Initialize guide so we can count parameters and register hooks.
     model_ = functools.partial(model, model_type=model_type)
-    guide = Guide(model_, dataset, model_type, guide_type)
+    init_loc_fn = InitLocFn(dataset, init_data)
+    if guide_type == "full":
+        guide = FullGuide(model_, init_loc_fn=init_loc_fn, init_scale=0.01)
+    else:
+        guide = Guide(model_, dataset, model_type, guide_type, init_loc_fn=init_loc_fn)
     guide(dataset)
     num_params = sum(p.numel() for p in guide.parameters())
     logger.info(f"Training guide with {num_params} parameters:")
