@@ -449,7 +449,8 @@ class Guide(AutoStructured):
         )
         for name, site in trace.nodes.items():
             if site["type"] == "sample" and not site_is_subsample(site):
-                result["median"][name] = site["value"]
+                if name != "obs":
+                    result["median"][name] = site["value"]
 
         # Compute moments.
         save_params = ["noise_scale", "feature_scale", "rate_coef"]
