@@ -218,13 +218,16 @@ def main(args):
                 dataset, obs_max=args.obs_max, round_method=args.round_method
             )
         result = fit_svi(args, dataset, *config)
+        mutrans.log_stats(dataset, result)
         result.pop("guide", None)  # to save space
         result["mutations"] = dataset["mutations"]
         result = torch_map(result, device="cpu", dtype=torch.float)  # to save space
         results[config] = result
+
         del dataset
         pyro.clear_param_store()
         gc.collect()
+
     if not args.test:
         logger.info("saving results/mutrans.pt")
         torch.save(results, "results/mutrans.pt")

@@ -562,9 +562,6 @@ def fit_svi(
     result["series"] = dict(series)
     result["params"] = {k: v.detach().clone() for k, v in param_store.items()}
     result["guide"] = guide.float()
-
-    log_stats(dataset, result)
-
     result["walltime"] = default_timer() - start_time
     return result
 
