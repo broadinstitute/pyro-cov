@@ -120,6 +120,7 @@ def fit_bootstrap(
         learning_rate=lr,
         learning_rate_decay=lrd,
         clip_norm=cn,
+        log_every=args.log_every,
         seed=args.seed,
     )
     result["args"] = args
@@ -139,7 +140,7 @@ def main(args):
     configs = []
     empty_holdout = ()
     if args.vary_num_steps:
-        grid = [1001, 2001, 5001, 10001, 20001, 50001, 100001]
+        grid = sorted(int(n) for n in args.vary_num_steps.split(","))
         for num_steps in grid:
             configs.append(
                 (
@@ -271,7 +272,7 @@ if __name__ == "__main__":
     parser.add_argument("--round-method", help="one of: floor, ceil, random")
     parser.add_argument("--vary-model-type", action="store_true")
     parser.add_argument("--vary-guide-type", action="store_true")
-    parser.add_argument("--vary-num-steps", action="store_true")
+    parser.add_argument("--vary-num-steps", help="comma delimited list of num_steps")
     parser.add_argument("--vary-holdout", action="store_true")
     parser.add_argument("--bootstrap", type=int)
     parser.add_argument("-m", "--model-type", default="")
