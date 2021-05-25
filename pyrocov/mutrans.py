@@ -317,7 +317,7 @@ def model(dataset, *, places=True, times=True, model_type=""):
         noise_scale = pyro.sample("noise_scale", dist.LogNormal(-2, 2))
         with place_plate, time_plate:
             logits = pyro.sample(
-                "logits", dist.Normal(logits, noise_scale[..., None],).to_event(1),
+                "logits", dist.Normal(logits, noise_scale[..., None]).to_event(1)
             )
 
     # Finally observe counts.

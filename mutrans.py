@@ -2,11 +2,13 @@
 
 import argparse
 import functools
+import gc
 import logging
 import math
 import os
 import re
 
+import pyro
 import torch
 
 from pyrocov import mutrans
@@ -220,6 +222,9 @@ def main(args):
         result["mutations"] = dataset["mutations"]
         result = torch_map(result, device="cpu", dtype=torch.float)  # to save space
         results[config] = result
+        del dataset
+        pyro.clear_param_store()
+        gc.collect()
     if not args.test:
         logger.info("saving results/mutrans.pt")
         torch.save(results, "results/mutrans.pt")
@@ -233,7 +238,7 @@ if __name__ == "__main__":
     parser.add_argument("--vary-guide-type", action="store_true")
     parser.add_argument("--vary-num-steps", action="store_true")
     parser.add_argument("--vary-holdout", action="store_true")
-    parser.add_argument("-m", "--model-type", default="")
+    parser.add_argument("-m", "--model-type", default="overdispersed")
     parser.add_argument("-g", "--guide-type", default="mvn_normal_dependent")
     parser.add_argument("-n", "--num-steps", default=10001, type=int)
     parser.add_argument("-p", "--num-particles", default=1, type=int)
