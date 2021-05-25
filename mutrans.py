@@ -97,6 +97,35 @@ def fit_svi(
     return result
 
 
+@cached(lambda *args: _fit_filename("bootstrap", *args))
+def fit_bootstrap(
+    args,
+    dataset,
+    num_samples,
+    model_type="",
+    guide_type="mvn_dependent",
+    n=1001,
+    p=1,
+    lr=0.01,
+    lrd=0.1,
+    cn=10.0,
+    holdout=(),
+):
+    result = mutrans.fit_bootstrap(
+        dataset,
+        num_samples=num_samples,
+        model_type=model_type,
+        guide_type=guide_type,
+        num_steps=n,
+        learning_rate=lr,
+        learning_rate_decay=lrd,
+        clip_norm=cn,
+        seed=args.seed,
+    )
+    result["args"] = args
+    return result
+
+
 def main(args):
     torch.set_default_dtype(torch.double if args.double else torch.float)
     if args.cuda:
@@ -217,7 +246,10 @@ def main(args):
             dataset = mutrans.subset_gisaid_data(
                 dataset, obs_max=args.obs_max, round_method=args.round_method
             )
-        result = fit_svi(args, dataset, *config)
+        if args.bootstrap:
+            result = fit_bootstrap(args, dataset, args.bootstrap, *config)
+        else:
+            result = fit_svi(args, dataset, *config)
         mutrans.log_stats(dataset, result)
         result.pop("guide", None)  # to save space
         result["mutations"] = dataset["mutations"]
@@ -241,6 +273,7 @@ if __name__ == "__main__":
     parser.add_argument("--vary-guide-type", action="store_true")
     parser.add_argument("--vary-num-steps", action="store_true")
     parser.add_argument("--vary-holdout", action="store_true")
+    parser.add_argument("--bootstrap", type=int)
     parser.add_argument("-m", "--model-type", default="")
     parser.add_argument("-g", "--guide-type", default="mvn_normal_dependent")
     parser.add_argument("-n", "--num-steps", default=10001, type=int)

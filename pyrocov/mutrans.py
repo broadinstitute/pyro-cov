@@ -1,5 +1,6 @@
 import datetime
 import functools
+import gc
 import logging
 import math
 import pickle
@@ -13,6 +14,7 @@ import torch
 from pyro import poutine
 from pyro.infer import SVI, JitTrace_ELBO, Trace_ELBO
 from pyro.infer.autoguide import AutoLowRankMultivariateNormal, AutoStructured
+from pyro.ops.welford import WelfordCovariance
 from pyro.optim import ClippedAdam
 from pyro.poutine.util import site_is_subsample
 
@@ -336,8 +338,8 @@ class InitLocFn:
         # Initialize init.
         if "init" not in init_data:
             init = dataset["weekly_strains"].sum(0)
-            init.div_(init.sum(-1, True)).add_(0.01 / init.size(-1)).log_()
-            init.sub_(init.median(-1, True).values)
+            init.add_(1 / init.size(-1)).div_(init.sum(-1, True))
+            init.log_().sub_(init.median(-1, True).values)
             self.init = init
         assert not torch.isnan(self.init).any()
         logger.info(f"init stddev = {self.init.std():0.3g}")
@@ -531,6 +533,7 @@ def fit_svi(
     learning_rate_decay=0.1,
     num_steps=3001,
     num_particles=1,
+    num_samples=1000,
     clip_norm=10.0,
     jit=True,
     log_every=50,
@@ -610,7 +613,7 @@ def fit_svi(
         for name, value in median.items():
             if value.numel() == 1:
                 series[name].append(float(value))
-        if step % log_every == 0:
+        if log_every and step % log_every == 0:
             assert median["feature_scale"] > 0.02, "implausibly small feature_scale"
             logger.info(
                 "\t".join(
@@ -628,11 +631,67 @@ def fit_svi(
             assert (curr - prev) < num_obs, "loss is increasing"
 
     series["loss"] = losses
-    result = guide.stats(dataset)
+    result = guide.stats(dataset, num_samples=num_samples)
     result["losses"] = losses
     result["series"] = dict(series)
     result["params"] = {k: v.detach().clone() for k, v in param_store.items()}
     result["guide"] = guide.float()
+    result["walltime"] = default_timer() - start_time
+    return result
+
+
+def fit_bootstrap(
+    dataset,
+    *,
+    model_type,
+    guide_type,
+    learning_rate=0.05,
+    learning_rate_decay=0.1,
+    num_steps=3001,
+    num_samples=100,
+    clip_norm=10.0,
+    jit=True,
+    log_every=None,
+    seed=20210319,
+    check_loss=False,
+):
+    start_time = default_timer()
+    logger.info(f"Fitting {guide_type} guide via bootstrap")
+    if log_every is None:
+        log_every = num_steps - 1
+
+    # Block bootstrap over places.
+    T, P, S = dataset["weekly_strains"].shape
+    weight_dist = dist.Multinomial(total_count=P, probs=torch.full((P,), 1 / P))
+    weighted_dataset = dataset.copy()
+
+    moments = defaultdict(WelfordCovariance)
+    for step in range(num_samples):
+        pyro.set_rng_seed(seed + step)
+        weights = weight_dist.sample()[:, None]
+        weighted_dataset["weekly_strains"] = weights * dataset["weekly_strains"]
+
+        median = fit_svi(
+            weighted_dataset,
+            model_type=model_type,
+            guide_type=guide_type,
+            learning_rate=learning_rate,
+            learning_rate_decay=learning_rate_decay,
+            num_steps=num_steps,
+            num_samples=1,
+            log_every=log_every,
+            seed=seed + step,
+        )["median"]
+        for k, v in median.items():
+            moments[k].update(v.cpu())
+
+        del median
+        pyro.clear_param_store()
+        gc.collect()
+
+    result = {}
+    result["mean"] = {k: v._mean for k, v in moments.items()}
+    result["std"] = {k: v.get_covariance(regularize=False) for k, v in moments.items()}
     result["walltime"] = default_timer() - start_time
     return result
 
