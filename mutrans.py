@@ -241,7 +241,7 @@ if __name__ == "__main__":
     parser.add_argument("--vary-guide-type", action="store_true")
     parser.add_argument("--vary-num-steps", action="store_true")
     parser.add_argument("--vary-holdout", action="store_true")
-    parser.add_argument("-m", "--model-type", default="overdispersed")
+    parser.add_argument("-m", "--model-type", default="")
     parser.add_argument("-g", "--guide-type", default="mvn_normal_dependent")
     parser.add_argument("-n", "--num-steps", default=10001, type=int)
     parser.add_argument("-p", "--num-particles", default=1, type=int)
