@@ -78,6 +78,7 @@ def fit_svi(
     lr=0.01,
     lrd=0.1,
     cn=10.0,
+    r=10,
     holdout=(),
 ):
     result = mutrans.fit_svi(
@@ -88,6 +89,7 @@ def fit_svi(
         learning_rate=lr,
         learning_rate_decay=lrd,
         clip_norm=cn,
+        rank=r,
         log_every=args.log_every,
         seed=args.seed,
     )
@@ -107,6 +109,7 @@ def fit_bootstrap(
     lr=0.01,
     lrd=0.1,
     cn=10.0,
+    r=10,
     holdout=(),
 ):
     result = mutrans.fit_bootstrap(
@@ -118,6 +121,7 @@ def fit_bootstrap(
         learning_rate=lr,
         learning_rate_decay=lrd,
         clip_norm=cn,
+        rank=r,
         log_every=args.log_every,
         seed=args.seed,
     )
@@ -148,6 +152,7 @@ def main(args):
                     args.learning_rate,
                     args.learning_rate_decay,
                     args.clip_norm,
+                    args.rank,
                     empty_holdout,
                 )
             )
@@ -162,6 +167,7 @@ def main(args):
                     args.learning_rate,
                     args.learning_rate_decay,
                     args.clip_norm,
+                    args.rank,
                     empty_holdout,
                 )
             )
@@ -185,6 +191,7 @@ def main(args):
                     args.learning_rate,
                     args.learning_rate_decay,
                     args.clip_norm,
+                    args.rank,
                     empty_holdout,
                 )
             )
@@ -214,6 +221,7 @@ def main(args):
                     args.learning_rate,
                     args.learning_rate_decay,
                     args.clip_norm,
+                    args.rank,
                     holdout,
                 )
             )
@@ -226,6 +234,7 @@ def main(args):
                 args.learning_rate,
                 args.learning_rate_decay,
                 args.clip_norm,
+                args.rank,
                 empty_holdout,
             )
         )
@@ -274,6 +283,7 @@ if __name__ == "__main__":
     parser.add_argument("-lr", "--learning-rate", default=0.05, type=float)
     parser.add_argument("-lrd", "--learning-rate-decay", default=0.1, type=float)
     parser.add_argument("-cn", "--clip-norm", default=10.0, type=float)
+    parser.add_argument("-r", "--rank", default=10, type=int)
     parser.add_argument("-fp64", "--double", action="store_true")
     parser.add_argument("-fp32", "--float", action="store_false", dest="double")
     parser.add_argument(

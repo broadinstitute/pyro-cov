@@ -29,11 +29,10 @@ GENERATION_TIME = 5.5  # in days
 START_DATE = "2019-12-01"
 
 
-def get_fine_countries(columns, min_samples=1000):
+def get_fine_regions(columns, min_samples=50):
     """
-    Select countries that have at least two subregions with at least
-    ``min_samples`` samples. These will be finely partitioned into subregions.
-    Remaining countries will be coarsely aggregated at country level.
+    Select regions that have at least ``min_samples`` samples.
+    Remaining regions will be coarsely aggregated into country level.
     """
     # Count number of samples in each subregion.
     counts = Counter()
@@ -45,19 +44,7 @@ def get_fine_countries(columns, min_samples=1000):
         counts[parts] += 1
 
     # Select fine countries.
-    fine_countries = Counter()
-    for parts, count in counts.items():
-        if count >= min_samples:
-            fine_countries[parts[1]] += 1
-    fine_countries = frozenset(
-        name for name, count in fine_countries.items() if count >= 2
-    )
-    logger.info(
-        "Partitioning the following countries into subregions: {}".format(
-            ", ".join(sorted(fine_countries))
-        )
-    )
-    return fine_countries
+    return frozenset(parts for parts, count in counts.items() if count >= min_samples)
 
 
 def load_gisaid_data(
@@ -73,7 +60,7 @@ def load_gisaid_data(
         columns = pickle.load(f)
     logger.info("Training on {} rows with columns:".format(len(columns["day"])))
     logger.info(", ".join(columns.keys()))
-    fine_countries = get_fine_countries(columns)
+    fine_regions = get_fine_regions(columns)
 
     # Filter features into numbers of mutations.
     aa_features = torch.load("results/nextclade.features.pt")
@@ -109,8 +96,8 @@ def load_gisaid_data(
         parts = location.split("/")
         if len(parts) < 2:
             continue
-        parts = [p.strip() for p in parts[:3]]
-        if parts[1] not in fine_countries:
+        parts = tuple(p.strip() for p in parts[:3])
+        if len(parts) == 3 and parts not in fine_regions:
             parts = parts[:2]
         location = " / ".join(parts)
         p = location_id.setdefault(location, len(location_id))
@@ -453,15 +440,15 @@ class Guide(AutoStructured):
         )
         for name, site in trace.nodes.items():
             if site["type"] == "sample" and not site_is_subsample(site):
-                if site["value"].numel() < 1e4:
+                if site["value"].numel() < 1e5:
                     result["median"][name] = site["value"]
 
         # Compute moments.
-        save_params = [k for k, v in self.median(dataset).items() if v.numel() < 1e4]
+        save_params = [k for k, v in self.median(dataset).items() if v.numel() < 1e5]
         with pyro.plate("particles", num_samples, dim=-3):
             samples = {k: v.v for k, v in self.get_deltas(save_params).items()}
             trace = poutine.trace(poutine.condition(model, samples)).get_trace(
-                dataset, max_numel=1e4
+                dataset, max_numel=1e5
             )
         samples = {
             name: site["value"]
@@ -501,9 +488,8 @@ class FullGuide(AutoLowRankMultivariateNormal):
         with pyro.plate("particles", num_samples, dim=-3):
             trace = poutine.trace(self).get_trace(dataset)
             trace = poutine.trace(poutine.replay(model, trace)).get_trace(
-                dataset, max_numel=1e4
+                dataset, max_numel=1e5
             )
-            assert "probs" in trace.nodes
         samples = {
             name: site["value"]
             for name, site in trace.nodes.items()
@@ -542,6 +528,7 @@ def fit_svi(
     num_steps=3001,
     num_samples=1000,
     clip_norm=10.0,
+    rank=10,
     jit=True,
     log_every=50,
     seed=20210319,
@@ -656,6 +643,7 @@ def fit_bootstrap(
     num_steps=3001,
     num_samples=100,
     clip_norm=10.0,
+    rank=10,
     jit=True,
     log_every=None,
     seed=20210319,
@@ -685,6 +673,8 @@ def fit_bootstrap(
             learning_rate_decay=learning_rate_decay,
             num_steps=num_steps,
             num_samples=1,
+            clip_norm=clip_norm,
+            rank=rank,
             log_every=log_every,
             seed=seed + step,
         )["median"]
