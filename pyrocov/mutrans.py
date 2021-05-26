@@ -638,7 +638,9 @@ def fit_svi(
     result = guide.stats(dataset, num_samples=num_samples)
     result["losses"] = losses
     result["series"] = dict(series)
-    result["params"] = {k: v.detach().clone() for k, v in param_store.items()}
+    result["params"] = {
+        k: v.detach().float().clone() for k, v in param_store.items() if v.numel() < 1e7
+    }
     result["guide"] = guide.float()
     result["walltime"] = default_timer() - start_time
     return result

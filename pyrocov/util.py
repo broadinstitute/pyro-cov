@@ -79,3 +79,20 @@ def _(x, **kwargs):
         changed = changed or v_changed
     result = type(x)(result)
     return (result, True) if changed else (x, False)
+
+
+def pretty_print(x, *, name="", max_items=10):
+    if isinstance(x, (int, float, str, bool)):
+        print(f"{name} = {repr(x)}")
+    elif isinstance(x, torch.Tensor):
+        print(f"{name}: {type(x).__name__} of shape {tuple(x.shape)}")
+    elif isinstance(x, (tuple, list)):
+        print(f"{name}: {type(x).__name__} of length {len(x)}")
+        for i, v in zip(range(max_items), x):
+            pretty_print(v, name=f"{name}[{i}]", max_items=max_items)
+    elif isinstance(x, dict):
+        print(f"{name}: {type(x).__name__} of length {len(x)}")
+        for _, (k, v) in zip(range(max_items), x.items()):
+            pretty_print(v, name=f"{name}[{repr(k)}]", max_items=max_items)
+    else:
+        print(f"{name}: {type(x).__name__}")
