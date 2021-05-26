@@ -286,7 +286,7 @@ def load_jhu_data(gisaid_data):
     }
 
 
-def model(dataset, *, places=True, times=True, model_type=""):
+def model(dataset, *, model_type="", max_numel=math.inf):
     local_time = dataset["local_time"]
     weekly_strains = dataset["weekly_strains"]
     features = dataset["features"]
@@ -307,12 +307,14 @@ def model(dataset, *, places=True, times=True, model_type=""):
     rate = pyro.deterministic("rate", 0.01 * (rate_coef @ features.T))
 
     # Assume initial infections depend on place.
-    if not places:
+    if not torch._C._get_tracing_state() and P * S > max_numel:
         return
     with place_plate:
         init = pyro.sample("init", dist.SoftLaplace(torch.zeros(S), 10).to_event(1))
 
     # Model logits as optionally overdispersed.
+    if not torch._C._get_tracing_state() and T * P * S > max_numel:
+        return
     with place_plate, time_plate:
         logits = init + rate * local_time[:, :, None]
     if "overdispersed" in model_type:
@@ -324,6 +326,8 @@ def model(dataset, *, places=True, times=True, model_type=""):
 
     # Finally observe counts.
     with place_plate, time_plate:
+        if not torch._C._get_tracing_state() and T * P * S <= max_numel:
+            pyro.deterministic("probs", logits.softmax(-1))
         pyro.sample(
             "obs",
             dist.Multinomial(logits=logits, validate_args=False),
@@ -445,19 +449,19 @@ class Guide(AutoStructured):
         # Compute median point estimate.
         result = {"median": self.median(dataset)}
         trace = poutine.trace(poutine.condition(model, result["median"])).get_trace(
-            dataset, times=False
+            dataset, max_numel=1e5
         )
         for name, site in trace.nodes.items():
             if site["type"] == "sample" and not site_is_subsample(site):
-                if name != "obs":
+                if site["value"].numel() < 1e4:
                     result["median"][name] = site["value"]
 
         # Compute moments.
-        save_params = ["noise_scale", "feature_scale", "rate_coef"]
+        save_params = [k for k, v in self.median(dataset).items() if v.numel() < 1e4]
         with pyro.plate("particles", num_samples, dim=-3):
             samples = {k: v.v for k, v in self.get_deltas(save_params).items()}
             trace = poutine.trace(poutine.condition(model, samples)).get_trace(
-                dataset, places=False
+                dataset, max_numel=1e4
             )
         samples = {
             name: site["value"]
@@ -487,7 +491,7 @@ class FullGuide(AutoLowRankMultivariateNormal):
         # FIXME this silently fails for map inference.
         result = {"median": self.median(dataset)}
         trace = poutine.trace(poutine.condition(model, result["median"])).get_trace(
-            dataset, times=False
+            dataset, max_numel=1e5
         )
         for name, site in trace.nodes.items():
             if site["type"] == "sample" and not site_is_subsample(site):
@@ -496,7 +500,10 @@ class FullGuide(AutoLowRankMultivariateNormal):
         # Compute moments.
         with pyro.plate("particles", num_samples, dim=-3):
             trace = poutine.trace(self).get_trace(dataset)
-            trace = poutine.trace(poutine.replay(model, trace)).get_trace(dataset)
+            trace = poutine.trace(poutine.replay(model, trace)).get_trace(
+                dataset, max_numel=1e4
+            )
+            assert "probs" in trace.nodes
         samples = {
             name: site["value"]
             for name, site in trace.nodes.items()
@@ -533,7 +540,6 @@ def fit_svi(
     learning_rate=0.05,
     learning_rate_decay=0.1,
     num_steps=3001,
-    num_particles=1,
     num_samples=1000,
     clip_norm=10.0,
     jit=True,
@@ -551,7 +557,6 @@ def fit_svi(
             learning_rate=0.05,
             learning_rate_decay=1.0,
             num_steps=1001,
-            num_particles=1,
             log_every=log_every,
             seed=seed,
         )["median"]
@@ -600,9 +605,7 @@ def fit_svi(
 
     optim = ClippedAdam(optim_config)
     Elbo = JitTrace_ELBO if jit else Trace_ELBO
-    elbo = Elbo(
-        max_plate_nesting=2, num_particles=num_particles, vectorize_particles=True
-    )
+    elbo = Elbo(max_plate_nesting=2)
     svi = SVI(model_, guide, optim, elbo)
     losses = []
     num_obs = dataset["weekly_strains"].count_nonzero()

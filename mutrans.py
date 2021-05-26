@@ -75,7 +75,6 @@ def fit_svi(
     model_type="",
     guide_type="mvn_dependent",
     n=1001,
-    p=1,
     lr=0.01,
     lrd=0.1,
     cn=10.0,
@@ -86,7 +85,6 @@ def fit_svi(
         model_type=model_type,
         guide_type=guide_type,
         num_steps=n,
-        num_particles=p,
         learning_rate=lr,
         learning_rate_decay=lrd,
         clip_norm=cn,
@@ -147,7 +145,6 @@ def main(args):
                     args.model_type,
                     args.guide_type,
                     num_steps,
-                    args.num_particles,
                     args.learning_rate,
                     args.learning_rate_decay,
                     args.clip_norm,
@@ -162,7 +159,6 @@ def main(args):
                     model_type,
                     args.guide_type,
                     args.num_steps,
-                    args.num_particles,
                     args.learning_rate,
                     args.learning_rate_decay,
                     args.clip_norm,
@@ -186,7 +182,6 @@ def main(args):
                     args.model_type,
                     guide_type,
                     args.num_steps,
-                    args.num_particles,
                     args.learning_rate,
                     args.learning_rate_decay,
                     args.clip_norm,
@@ -216,7 +211,6 @@ def main(args):
                     args.model_type,
                     args.guide_type,
                     args.num_steps,
-                    args.num_particles,
                     args.learning_rate,
                     args.learning_rate_decay,
                     args.clip_norm,
@@ -229,7 +223,6 @@ def main(args):
                 args.model_type,
                 args.guide_type,
                 args.num_steps,
-                args.num_particles,
                 args.learning_rate,
                 args.learning_rate_decay,
                 args.clip_norm,
@@ -278,7 +271,6 @@ if __name__ == "__main__":
     parser.add_argument("-m", "--model-type", default="")
     parser.add_argument("-g", "--guide-type", default="mvn_normal_dependent")
     parser.add_argument("-n", "--num-steps", default=10001, type=int)
-    parser.add_argument("-p", "--num-particles", default=1, type=int)
     parser.add_argument("-lr", "--learning-rate", default=0.05, type=float)
     parser.add_argument("-lrd", "--learning-rate-decay", default=0.1, type=float)
     parser.add_argument("-cn", "--clip-norm", default=10.0, type=float)
