@@ -291,7 +291,19 @@ def model(dataset, *, model_type="", max_numel=math.inf):
         "rate_coef",
         dist.SoftLaplace(torch.zeros(F), feature_scale[..., None]).to_event(1),
     )
-    rate = pyro.deterministic("rate", 0.01 * (rate_coef @ features.T))
+    if "bias" in model_type:
+        strain_scale = pyro.sample(
+            "strain_scale", dist.LogNormal(-2 * torch.ones(S), 4).to_event(1)
+        )
+        with place_plate:
+            place_scale = pyro.sample("place_scale", dist.LogNormal(-2, 4))
+            bias_scale = (place_scale[..., None] ** 2 + strain_scale ** 2).sqrt()
+            rate_bias = pyro.sample("rate_bias", dist.Normal(0, bias_scale).to_event(1))
+            rate = pyro.deterministic(
+                "rate", 0.01 * (rate_bias + rate_coef @ features.T)
+            )
+    else:
+        rate = pyro.deterministic("rate", 0.01 * (rate_coef @ features.T))
 
     # Assume initial infections depend on place.
     if not torch._C._get_tracing_state() and P * S > max_numel:
@@ -357,9 +369,45 @@ class InitLocFn:
             return torch.full(shape, 0.001)
         if name == "feature_scale":
             return torch.ones(shape)
-        if name == "rate_coef":
+        if name in ("place_scale", "strain_scale"):
+            return torch.full(shape, 0.1)
+        if name in ("rate_coef", "rate_bias"):
             return torch.rand(shape).sub_(0.5).mul_(0.01)
-        raise ValueError("InitLocFn found unexpected site {}".format(repr(name)))
+        raise ValueError(f"InitLocFn found unexpected site {repr(name)}")
+
+
+class RateBiasRateCoefLinear(torch.nn.Module):
+    def __init__(self, P, S, F, features):
+        super().__init__()
+        self.PSF = P, S, F
+        self.register_buffer("weight", -features.T)
+        self.scale = torch.nn.Parameter(torch.ones(P, S))
+
+    def forward(self, x):
+        P, S, F = self.PSF
+        batch_shape = x.shape[:-1]
+        y = x @ self.weight
+        y = y.reshape(batch_shape + (1, S))
+        y = y.expand(batch_shape + (P, S))
+        y = y * self.scale
+        y = y.reshape(batch_shape + (-1,))
+        return y
+
+
+class InitRateBiasLinear(torch.nn.Module):
+    def __init__(self, P, S):
+        super().__init__()
+        self.PS = P, S
+        self.weight_ps = torch.nn.Parameter(torch.zeros(P, S))
+        self.weight_ss = torch.nn.Parameter(torch.zeros(S, S))
+
+    def forward(self, x):
+        P, S = self.PS
+        batch_shape = x.shape[:-1]
+        x = x.reshape(batch_shape + (P, S))
+        y = x * self.weight_ps + x @ self.weight_ss
+        y = y.reshape(batch_shape + (P * S,))
+        return y
 
 
 class InitRateCoefLinear(torch.nn.Module):
@@ -410,14 +458,24 @@ class Guide(AutoStructured):
         if "overdispersed" in model_type:
             conditionals["noise_scale"] = "delta"
             conditionals["logits"] = conditionals["init"]
+        if "bias" in model_type:
+            conditionals["place_scale"] = "delta"
+            conditionals["strain_scale"] = "delta"
+            conditionals["rate_bias"] = conditionals["init"]
 
         noise_linear = None
         if guide_type.endswith("_dependent"):
             T, P, S = dataset["weekly_strains"].shape
             S, F = dataset["features"].shape
-            dependencies["init"]["rate_coef"] = InitRateCoefLinear(
-                P, dataset["features"]
-            )
+            if "bias" in model_type:
+                dependencies["rate_bias"]["rate_coef"] = RateBiasRateCoefLinear(
+                    P, S, F, dataset["features"]
+                )
+                dependencies["init"]["rate_bias"] = InitRateBiasLinear(P, S)
+            else:
+                dependencies["init"]["rate_coef"] = InitRateCoefLinear(
+                    P, dataset["features"]
+                )
 
         super().__init__(
             model,
@@ -560,7 +618,7 @@ def fit_svi(
         guide = FullGuide(model_, init_loc_fn=init_loc_fn, init_scale=0.01)
     else:
         guide = Guide(model_, dataset, model_type, guide_type, init_loc_fn=init_loc_fn)
-    guide(dataset)
+    numel = {k: v.numel() for k, v in guide(dataset).items()}  # initializes guide
     num_params = sum(p.numel() for p in guide.parameters())
     logger.info(f"Training guide with {num_params} parameters:")
 
@@ -579,7 +637,7 @@ def fit_svi(
             "lrd": learning_rate_decay ** (1 / num_steps),
             "clip_norm": clip_norm,
         }
-        scalars = ["noise_scale", "feature_scale"]
+        scalars = [k for k, v in numel.items() if v == 1]
         if any("locs." + s in name for s in scalars):
             config["lr"] *= 0.2
         elif "scales" in param_name:
