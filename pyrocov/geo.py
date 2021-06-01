@@ -13,6 +13,10 @@ JHU_DIRNAME = os.path.expanduser(
     "~/github/CSSEGISandData/COVID-19/csse_covid_19_data/csse_covid_19_time_series"
 )
 
+GISAID_DEDUP = {
+    "South America / Brazil / São Paulo": "South America / Brazil / Sao Paulo",
+}
+
 # To update see explore-jhu-time-series.ipynb
 GISAID_TO_JHU = {
     "a": ("us",),  # typo?
@@ -122,6 +126,10 @@ def pd_to_torch(df, *, columns):
 def parse_date(string):
     month, day, year_since_2000 = map(int, string.split("/"))
     return datetime.datetime(day=day, month=month, year=2000 + year_since_2000)
+
+
+def gisaid_normalize(gisaid_location):
+    return GISAID_DEDUP.get(gisaid_location, gisaid_location)
 
 
 def gisaid_to_jhu_location(
