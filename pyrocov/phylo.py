@@ -6,7 +6,7 @@ import torch
 
 logger = logging.getLogger(__name__)
 
-_SubClade = namedtuple("SubClade", ("clade", "name"))
+_SubClade = namedtuple("_SubClade", ("clade", "name"))
 
 
 class Phylogeny:

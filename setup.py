@@ -42,6 +42,7 @@ setup(
             "isort>=5.0",
             "flake8",
             "pytest>=5.0",
+            "mypy>=0.812",
         ],
     },
     python_requires=">=3.6",

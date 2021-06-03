@@ -1,5 +1,6 @@
 import functools
 import weakref
+from typing import Dict
 
 import torch
 
@@ -23,7 +24,7 @@ def weak_memoize_by_id(fn):
     return memoized_fn
 
 
-_TENSORS = {}
+_TENSORS: Dict[tuple, torch.Tensor] = {}
 
 
 def deduplicate_tensor(x):
@@ -45,20 +46,20 @@ def _torch_map(x, **kwargs):
 
 
 @_torch_map.register(torch.Tensor)
-def _(x, **kwargs):
+def _torch_map_tensor(x, **kwargs):
     x_ = x.to(**kwargs)
     changed = x_ is not x
     return x_, changed
 
 
 @_torch_map.register(torch.nn.Module)
-def _(x, **kwargs):
+def _torch_map_module(x, **kwargs):
     changed = True  # safe
     return x.to(**kwargs), changed
 
 
 @_torch_map.register(dict)
-def _(x, **kwargs):
+def _torch_map_dict(x, **kwargs):
     result = type(x)()
     changed = False
     for k, v in x.items():
@@ -70,7 +71,7 @@ def _(x, **kwargs):
 
 @_torch_map.register(list)
 @_torch_map.register(tuple)
-def _(x, **kwargs):
+def _torch_map_iterable(x, **kwargs):
     result = []
     changed = False
     for v in x:

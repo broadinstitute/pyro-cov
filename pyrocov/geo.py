@@ -3,6 +3,7 @@ import logging
 import os
 import typing
 from collections import OrderedDict, defaultdict
+from typing import List
 
 import pandas as pd
 import torch
@@ -153,7 +154,7 @@ def gisaid_to_jhu_location(
     logger.info("Joining GISAID and JHU region codes")
 
     # Extract location tuples from JHU data.
-    jhu_locations = []
+    jhu_locations: List[tuple] = []
     for i, row in jhu_us_df[["Country_Region", "Province_State", "Admin2"]].iterrows():
         a, b, c = row
         if isinstance(c, str):

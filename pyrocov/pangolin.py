@@ -3,6 +3,7 @@ import os
 import re
 import warnings
 from collections import Counter
+from typing import Dict
 
 import torch
 
@@ -59,7 +60,7 @@ PANGOLIN_ALIASES = {
 }
 
 DECOMPRESS = PANGOLIN_ALIASES.copy()
-COMPRESS = {}
+COMPRESS: Dict[str, str] = {}
 
 
 def update_aliases():
