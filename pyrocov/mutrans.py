@@ -284,7 +284,7 @@ def load_jhu_data(gisaid_data):
 def pyro_param(name, shape, init):
     terms = []
     for subshape in itertools.product(*({1, int(size)} for size in shape)):
-        subname = name + "_" + "".join(map(str, subshape))
+        subname = "_".join([name] + list(map(str, subshape)))
         subinit = functools.partial(torch.zeros, subshape)
         if subshape == shape:
             subinit = init
@@ -396,7 +396,7 @@ class InitLocFn:
             assert result.shape == shape
             return result
         if name == "logits_scale":
-            return torch.full(shape, 0.01)
+            return torch.full(shape, 0.001)
         if name == "feature_scale":
             return torch.ones(shape)
         if name in (
