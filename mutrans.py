@@ -251,7 +251,6 @@ def main(args):
         else:
             result = fit_svi(args, dataset, *config)
         mutrans.log_stats(dataset, result)
-        result.pop("guide", None)  # to save space
         result["mutations"] = dataset["mutations"]
         result = torch_map(result, device="cpu", dtype=torch.float)  # to save space
         results[config] = result
@@ -276,7 +275,7 @@ if __name__ == "__main__":
     parser.add_argument("--vary-holdout", action="store_true")
     parser.add_argument("--bootstrap", type=int)
     parser.add_argument("-m", "--model-type", default="")
-    parser.add_argument("-g", "--guide-type", default="mvn_normal_dependent")
+    parser.add_argument("-g", "--guide-type", default="custom")
     parser.add_argument("-n", "--num-steps", default=10001, type=int)
     parser.add_argument("-lr", "--learning-rate", default=0.05, type=float)
     parser.add_argument("-lrd", "--learning-rate-decay", default=0.1, type=float)

@@ -32,7 +32,7 @@ from pyrocov import pangolin
 logger = logging.getLogger(__name__)
 
 # Reasonable values might be week (7), fortnight (14), or month (28)
-TIMESTEP = 7  # in days
+TIMESTEP = 14  # in days
 GENERATION_TIME = 5.5  # in days
 START_DATE = "2019-12-01"
 
@@ -309,8 +309,8 @@ def model(dataset, *, model_type="", max_numel=math.inf):
     logits_centered = pyro_param(
         "logits_centered", (T, P, S), lambda: torch.full((T, P, S), 0.5)
     )
-    rate_centered.data.clamp_(min=0.001, max=0.999)
-    logits_centered.data.clamp_(min=0.001, max=0.999)
+    rate_centered.data.clamp_(min=0.01, max=0.99)
+    logits_centered.data.clamp_(min=0.01, max=0.99)
     local_time = dataset["local_time"][..., None] + pyro_param(
         "local_time", (P, S), lambda: torch.zeros(P, S)
     )
@@ -385,6 +385,7 @@ class InitLocFn:
             weekly_strains = dataset["weekly_strains"]
             self.logits = weekly_strains.add(1 / weekly_strains.size(-1)).log()
             self.logits -= self.logits.mean(-1, True)
+            self.logits += torch.rand(self.logits.shape).sub_(0.5).mul_(0.001)
             self.logits_decentered = self.logits
 
     def __call__(self, site):
@@ -395,7 +396,7 @@ class InitLocFn:
             assert result.shape == shape
             return result
         if name == "logits_scale":
-            return torch.full(shape, 0.001)
+            return torch.full(shape, 0.01)
         if name == "feature_scale":
             return torch.ones(shape)
         if name in (
@@ -426,6 +427,10 @@ def site_is_global(site):
 
 
 class Guide(AutoGuideList):
+    """
+    Blockwise guide for training on full data.
+    """
+
     def __init__(self, model, init_loc_fn, init_scale):
         super().__init__(model)
         # Point estimate global random variables.
@@ -464,8 +469,8 @@ class Guide(AutoGuideList):
 
         # Compute moments.
         save_params = [k for k, v in self.median(dataset).items() if v.numel() < 1e5]
-        with poutine.block(expose=save_params):
-            with pyro.plate("particles", num_samples, dim=-3):
+        with pyro.plate("particles", num_samples, dim=-3):
+            with poutine.block(expose=save_params):
                 samples = self()
                 trace = poutine.trace(poutine.condition(model, samples)).get_trace(
                     dataset, max_numel=1e5
@@ -589,7 +594,7 @@ def fit_svi(
     logger.info(
         "\n".join(
             ["Fitting model with latent variables of shapes:"]
-            + [f"  {k: <15} {tuple(v)}" for k, v in shapes.items()]
+            + [f"          {k: <20} {tuple(v)}" for k, v in shapes.items()]
         )
     )
     num_params = sum(p.numel() for p in guide.parameters())
@@ -662,7 +667,6 @@ def fit_svi(
     result["params"] = {
         k: v.detach().float().clone() for k, v in param_store.items() if v.numel() < 1e7
     }
-    result["guide"] = guide.float()
     result["walltime"] = default_timer() - start_time
     return result
 
