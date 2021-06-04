@@ -317,11 +317,33 @@ def model(dataset, *, model_type="", max_numel=math.inf):
     with place_plate, time_plate:
         logits = init + rate * local_time[:, :, None]
     if "overdispersed" in model_type:
-        noise_scale = pyro.sample("noise_scale", dist.LogNormal(-2, 2))
-        with place_plate, time_plate:
-            logits = pyro.sample(
-                "logits", dist.Normal(logits, noise_scale[..., None]).to_event(1)
+        if "locally" in model_type:
+            v_time_loc = pyro.sample("v_time_loc", dist.Normal(-2, 2))
+            v_place_loc = pyro.sample("v_place_loc", dist.Normal(-2, 2))
+            v_strain_loc = pyro.sample("v_strain_loc", dist.Normal(-2, 2))
+            v_time_scale = pyro.sample("v_time_scale", dist.LogNormal(0, 1))
+            v_place_scale = pyro.sample("v_place_scale", dist.LogNormal(0, 1))
+            v_strain_scale = pyro.sample("v_strain_scale", dist.LogNormal(0, 1))
+            with time_plate:
+                v_time = pyro.sample("v_time", dist.LogNormal(v_time_loc, v_time_scale))
+            with place_plate:
+                v_place = pyro.sample(
+                    "v_place", dist.LogNormal(v_place_loc, v_place_scale)
+                )
+            v_strain = pyro.sample(
+                "v_strain",
+                dist.LogNormal(
+                    torch.zeros(S) + v_strain_loc[..., None], v_strain_scale[..., None]
+                ).to_event(1),
             )
+            noise_scale = pyro.deterministic(
+                "noise_scale",
+                (v_time[..., None] + v_place[..., None] + v_strain).sqrt(),
+            )
+        else:
+            noise_scale = pyro.sample("noise_scale", dist.LogNormal(-2, 2))[..., None]
+        with place_plate, time_plate:
+            logits = pyro.sample("logits", dist.Normal(logits, noise_scale).to_event(1))
 
     # Finally observe counts.
     with place_plate, time_plate:
@@ -369,11 +391,21 @@ class InitLocFn:
             return torch.full(shape, 0.001)
         if name == "feature_scale":
             return torch.ones(shape)
-        if name in ("place_scale", "strain_scale"):
+        if name in (
+            "place_scale",
+            "strain_scale",
+            "v_time_scale",
+            "v_place_scale",
+            "v_strain_scale",
+        ):
             return torch.full(shape, 0.1)
+        if name in ("v_time_loc", "v_place_loc", "v_strain_loc"):
+            return torch.full(shape, math.log(0.01))
         if name in ("rate_coef", "rate_bias"):
             return torch.rand(shape).sub_(0.5).mul_(0.01)
-        raise ValueError(f"InitLocFn found unexpected site {repr(name)}")
+        if name in ("v_time", "v_place", "v_strain"):
+            return torch.rand(shape).add_(0.5).mul_(0.01)
+        raise ValueError(f"InitLocFn found unhandled site {repr(name)}; please update.")
 
 
 class RateBiasRateCoefLinear(torch.nn.Module):
@@ -435,7 +467,15 @@ class Guide(AutoStructured):
         self.guide_type = guide_type
         conditionals = {}
         dependencies = defaultdict(dict)
-        conditionals["feature_scale"] = "delta"
+        latents = {
+            name
+            for name, site in poutine.trace(model).get_trace(dataset).nodes.items()
+            if site["type"] == "sample" and not site_is_subsample(site)
+            if not site["is_observed"]
+        }
+        if "feature_scale" in latents:
+            conditionals["feature_scale"] = "delta"
+
         if guide_type == "map":
             conditionals["rate_coef"] = "delta"
             conditionals["init"] = "delta"
@@ -456,7 +496,18 @@ class Guide(AutoStructured):
             raise ValueError(f"Unsupported guide type: {guide_type}")
 
         if "overdispersed" in model_type:
-            conditionals["noise_scale"] = "delta"
+            if "locally" in model_type:
+                conditionals["v_time_loc"] = "delta"
+                conditionals["v_place_loc"] = "delta"
+                conditionals["v_strain_loc"] = "delta"
+                conditionals["v_time_scale"] = "delta"
+                conditionals["v_place_scale"] = "delta"
+                conditionals["v_strain_scale"] = "delta"
+                conditionals["v_time"] = conditionals["init"]
+                conditionals["v_place"] = conditionals["init"]
+                conditionals["v_strain"] = conditionals["init"]
+            elif "noise_scale" in latents:
+                conditionals["noise_scale"] = "delta"
             conditionals["logits"] = conditionals["init"]
         if "bias" in model_type:
             conditionals["place_scale"] = "delta"
@@ -581,6 +632,7 @@ def fit_svi(
     model_type,
     guide_type,
     init_data={},
+    cond_data={},
     learning_rate=0.05,
     learning_rate_decay=0.1,
     num_steps=3001,
@@ -598,6 +650,7 @@ def fit_svi(
         init_data = fit_svi(
             dataset,
             model_type=init_data,
+            cond_data=cond_data,
             guide_type="map",
             learning_rate=0.05,
             learning_rate_decay=1.0,
@@ -612,15 +665,24 @@ def fit_svi(
     param_store = pyro.get_param_store()
 
     # Initialize guide so we can count parameters and register hooks.
-    model_ = functools.partial(model, model_type=model_type)
+    cond_data = {k: torch.as_tensor(v) for k, v in cond_data.items()}
+    model_ = poutine.condition(model, cond_data)
+    model_ = functools.partial(model_, model_type=model_type)
     init_loc_fn = InitLocFn(dataset, init_data)
     if guide_type == "full":
         guide = FullGuide(model_, init_loc_fn=init_loc_fn, init_scale=0.01)
     else:
         guide = Guide(model_, dataset, model_type, guide_type, init_loc_fn=init_loc_fn)
-    numel = {k: v.numel() for k, v in guide(dataset).items()}  # initializes guide
+    shapes = {k: v.shape for k, v in guide(dataset).items()}  # initializes guide
+    numel = {k: v.numel() for k, v in shapes.items()}
+    logger.info(
+        "\n".join(
+            ["Fitting model with latent variables of shapes:"]
+            + [f"  {k: <15} {tuple(v)}" for k, v in shapes.items()]
+        )
+    )
     num_params = sum(p.numel() for p in guide.parameters())
-    logger.info(f"Training guide with {num_params} parameters:")
+    logger.info(f"Training guide with {num_params} parameters. Latent variables:")
 
     # Log gradient norms during inference.
     series = defaultdict(list)
@@ -663,12 +725,13 @@ def fit_svi(
             if value.numel() == 1:
                 series[name].append(float(value))
         if log_every and step % log_every == 0:
-            assert median["feature_scale"] > 0.02, "implausibly small feature_scale"
             logger.info(
-                "\t".join(
+                " ".join(
                     [f"step {step: >4d} L={loss / num_obs:0.6g}"]
                     + [
-                        "{}={:0.3g}".format(k[:1].upper(), v)
+                        "{}={:0.3g}".format(
+                            "".join(p[0] for p in k.split("_")).upper(), v
+                        )
                         for k, v in median.items()
                         if v.numel() == 1
                     ]

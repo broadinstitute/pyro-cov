@@ -73,6 +73,7 @@ def fit_svi(
     args,
     dataset,
     model_type="",
+    cond_data="",
     guide_type="mvn_dependent",
     n=1001,
     lr=0.01,
@@ -81,9 +82,15 @@ def fit_svi(
     r=10,
     holdout=(),
 ):
+    for kv in cond_data.split(","):
+        if kv:
+            k, v = kv.split("=")
+            cond_data[k] = float(v)
+
     result = mutrans.fit_svi(
         dataset,
         model_type=model_type,
+        cond_data={},
         guide_type=guide_type,
         num_steps=n,
         learning_rate=lr,
@@ -229,6 +236,7 @@ def main(args):
         configs.append(
             (
                 args.model_type,
+                args.cond_data,
                 args.guide_type,
                 args.num_steps,
                 args.learning_rate,
@@ -272,6 +280,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Fit mutation-transmissibility models")
     parser.add_argument("--obs-max", default=math.inf, type=float)
     parser.add_argument("--round-method", help="one of: floor, ceil, random")
+    parser.add_argument("--cond-data", default="")
     parser.add_argument("--vary-model-type", action="store_true")
     parser.add_argument("--vary-guide-type", action="store_true")
     parser.add_argument("--vary-num-steps", help="comma delimited list of num_steps")
