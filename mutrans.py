@@ -164,8 +164,7 @@ def main(args):
                 )
             )
     elif args.vary_model_type:
-        grid = ["", "overdispersed"]
-        for model_type in grid:
+        for model_type in args.vary_model_type.split(","):
             configs.append(
                 (
                     model_type,
@@ -179,17 +178,7 @@ def main(args):
                 )
             )
     elif args.vary_guide_type:
-        grid = [
-            "normal_delta",
-            "normal",
-            "mvn_delta",
-            "mvn_normal",
-            "normal_delta_dependent",
-            "mvn_delta_dependent",
-            "normal_dependent",
-            "mvn_normal_dependent",
-        ]
-        for guide_type in grid:
+        for guide_type in args.vary_guide_type.split(","):
             configs.append(
                 (
                     args.model_type,
@@ -281,8 +270,8 @@ if __name__ == "__main__":
     parser.add_argument("--obs-max", default=math.inf, type=float)
     parser.add_argument("--round-method", help="one of: floor, ceil, random")
     parser.add_argument("--cond-data", default="")
-    parser.add_argument("--vary-model-type", action="store_true")
-    parser.add_argument("--vary-guide-type", action="store_true")
+    parser.add_argument("--vary-model-type", help="comma delimited list of model types")
+    parser.add_argument("--vary-guide-type", help="comma delimited list of guide types")
     parser.add_argument("--vary-num-steps", help="comma delimited list of num_steps")
     parser.add_argument("--vary-holdout", action="store_true")
     parser.add_argument("--bootstrap", type=int)
