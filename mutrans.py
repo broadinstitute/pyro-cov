@@ -4,7 +4,6 @@ import argparse
 import functools
 import gc
 import logging
-import math
 import os
 import re
 
@@ -242,10 +241,6 @@ def main(args):
         logger.info(f"Config: {config}")
         holdout = {k: dict(v) for k, v in config[-1]}
         dataset = load_data(args, **holdout)
-        if args.obs_max != math.inf:
-            dataset = mutrans.subset_gisaid_data(
-                dataset, obs_max=args.obs_max, round_method=args.round_method
-            )
         if args.bootstrap:
             result = fit_bootstrap(args, dataset, args.bootstrap, *config)
         else:
@@ -266,8 +261,6 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Fit mutation-transmissibility models")
-    parser.add_argument("--obs-max", default=math.inf, type=float)
-    parser.add_argument("--round-method", help="one of: floor, ceil, random")
     parser.add_argument("--cond-data", default="")
     parser.add_argument("--vary-model-type", help="comma delimited list of model types")
     parser.add_argument("--vary-guide-type", help="comma delimited list of guide types")

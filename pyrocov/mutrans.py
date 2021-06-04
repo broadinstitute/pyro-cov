@@ -22,6 +22,7 @@ from pyro.infer.autoguide import (
     AutoNormal,
 )
 from pyro.infer.reparam import LocScaleReparam
+from pyro.ops.streaming import CountMeanVarianceStats, StatsOfDict
 from pyro.ops.welford import WelfordCovariance
 from pyro.optim import ClippedAdam
 from pyro.poutine.util import site_is_subsample
@@ -154,9 +155,6 @@ def subset_gisaid_data(
     gisaid_dataset,
     location_queries=None,
     max_strains=math.inf,
-    obs_scale=1.0,
-    obs_max=math.inf,
-    round_method=None,
 ):
     old = gisaid_dataset
     new = old.copy()
@@ -194,18 +192,6 @@ def subset_gisaid_data(
     new["mutations"] = [new["mutations"][i] for i in ids.tolist()]
     new["features"] = new["features"].index_select(-1, ids)
 
-    # Downsample highly-observed (time,place) bins for numerical stability. It
-    # is unclear why this is needed, but e.g. England predictions are very bad
-    # without downsampling, and @sfs believes this is a numerical issue.
-    old_obs_sum = new["weekly_strains"].sum()
-    if obs_scale != 1:
-        new["weekly_strains"] = new["weekly_strains"] * obs_scale
-    if obs_max not in (None, math.inf):
-        new["weekly_strains"] = new["weekly_strains"] * (
-            obs_max / new["weekly_strains"].sum(-1, True).clamp_(min=obs_max)
-        )
-    new["weekly_strains"] = round_counts(new["weekly_strains"], round_method)
-
     logger.info(
         "Selected {}/{} places, {}/{} strains, {}/{} mutations, {}/{} samples".format(
             len(new["location_id"]),
@@ -215,25 +201,11 @@ def subset_gisaid_data(
             len(new["mutations"]),
             len(old["mutations"]),
             int(new["weekly_strains"].sum()),
-            int(old_obs_sum),
+            int(old["weekly_strains"].sum()),
         )
     )
 
     return new
-
-
-def round_counts(counts, method):
-    if method is None:
-        return counts
-    if method == "floor":
-        return counts.floor()
-    if method == "ceil":
-        return counts.ceil()
-    if method == "random":
-        result = counts.floor()
-        result += torch.bernoulli(counts - result)
-        return result
-    raise ValueError(f"Unknown round_counts method: {repr(method)}")
 
 
 def load_jhu_data(gisaid_data):
@@ -292,7 +264,7 @@ def pyro_param(name, shape, init):
     return functools.reduce(operator.add, terms)
 
 
-def model(dataset, *, model_type="", max_numel=math.inf):
+def model(dataset, *, model_type=""):
     weekly_strains = dataset["weekly_strains"]
     features = dataset["features"]
     if not torch._C._get_tracing_state():
@@ -333,8 +305,6 @@ def model(dataset, *, model_type="", max_numel=math.inf):
         strain_scale = pyro.sample(
             "strain_scale", dist.LogNormal(-4 * torch.ones(S), 2).to_event(1)
         )
-        if not torch._C._get_tracing_state() and P * S > max_numel:
-            return
         with place_plate:
             place_scale = pyro.sample("place_scale", dist.LogNormal(-4, 2))
             rate_scale = (place_scale[..., None] ** 2 + strain_scale ** 2).sqrt()
@@ -344,8 +314,6 @@ def model(dataset, *, model_type="", max_numel=math.inf):
             init = pyro.sample("init", dist.SoftLaplace(torch.zeros(S), 10).to_event(1))
 
             # Model overdispersion.
-            if not torch._C._get_tracing_state() and T * P * S > max_numel:
-                return
             with time_plate:
                 logits_loc = init + rate * local_time
                 if not torch._C._get_tracing_state():
@@ -427,10 +395,6 @@ def site_is_global(site):
 
 
 class Guide(AutoGuideList):
-    """
-    Blockwise guide for training on full data.
-    """
-
     def __init__(self, model, init_loc_fn, init_scale):
         super().__init__(model)
         # Point estimate global random variables.
@@ -454,81 +418,49 @@ class Guide(AutoGuideList):
         # Mean-field estimate all remaining sites.
         self.append(AutoNormal(model, init_loc_fn=init_loc_fn, init_scale=init_scale))
 
-    @torch.no_grad()
-    @poutine.mask(mask=False)
-    def stats(self, dataset, *, num_samples=1000):
-        # Compute median point estimate.
-        result = {"median": self.median(dataset)}
-        trace = poutine.trace(poutine.condition(model, result["median"])).get_trace(
-            dataset, max_numel=1e5
-        )
-        for name, site in trace.nodes.items():
-            if site["type"] == "sample" and not site_is_subsample(site):
-                if site["value"].numel() < 1e5:
-                    result["median"][name] = site["value"]
 
-        # Compute moments.
-        save_params = [k for k, v in self.median(dataset).items() if v.numel() < 1e5]
-        with pyro.plate("particles", num_samples, dim=-3):
-            with poutine.block(expose=save_params):
-                samples = self()
-                trace = poutine.trace(poutine.condition(model, samples)).get_trace(
-                    dataset, max_numel=1e5
-                )
-        samples = {
-            name: site["value"]
+@torch.no_grad()
+@poutine.mask(mask=False)
+def get_stats(guide, dataset, num_samples=1000, vectorize=None):
+    def get_conditionals(data):
+        trace = poutine.trace(poutine.condition(model, data)).get_trace(dataset)
+        return {
+            name: site["value"].detach()
             for name, site in trace.nodes.items()
-            if site["type"] == "sample"
-            if not site_is_subsample(site)
+            if site["type"] == "sample" and not site_is_subsample(site)
             if name != "obs"
         }
-        result["mean"] = {k: v.mean(0).squeeze() for k, v in samples.items()}
-        result["std"] = {k: v.std(0).squeeze() for k, v in samples.items()}
-        return result
 
-    def loss(self, dataset):
-        elbo = Trace_ELBO(max_plate_nesting=2)
-        return elbo.loss(self.model, self, dataset)
+    # Compute median point estimate.
+    result = defaultdict(dict)
+    for name, value in get_conditionals(guide.median(dataset)).items():
+        if value.numel() < 1e5 or name == "probs":
+            result["median"][name] = value
 
-
-class FullGuide(AutoLowRankMultivariateNormal):
-    """
-    Full guide for testing on small subsets of data.
-    """
-
-    @torch.no_grad()
-    @poutine.mask(mask=False)
-    def stats(self, dataset, *, num_samples=1000):
-        # Compute median point estimate.
-        # FIXME this silently fails for map inference.
-        result = {"median": self.median(dataset)}
-        trace = poutine.trace(poutine.condition(model, result["median"])).get_trace(
-            dataset, max_numel=1e5
-        )
-        for name, site in trace.nodes.items():
-            if site["type"] == "sample" and not site_is_subsample(site):
-                result["median"][name] = site["value"]
-
-        # Compute moments.
+    # Compute moments.
+    save_params = {
+        k for k, v in result["median"].items() if v.numel() < 1e5 or k == "probs"
+    }
+    if vectorize is None:
+        vectorize = result["median"]["probs"].numel() < 1e5
+    if vectorize:
         with pyro.plate("particles", num_samples, dim=-3):
-            trace = poutine.trace(self).get_trace(dataset)
-            trace = poutine.trace(poutine.replay(model, trace)).get_trace(
-                dataset, max_numel=1e5
-            )
-        samples = {
-            name: site["value"]
-            for name, site in trace.nodes.items()
-            if site["type"] == "sample"
-            if not site_is_subsample(site)
-            if name != "obs"
-        }
-        result["mean"] = {k: v.mean(0).squeeze() for k, v in samples.items()}
-        result["std"] = {k: v.std(0).squeeze() for k, v in samples.items()}
-        return result
-
-    def loss(self, dataset):
-        elbo = Trace_ELBO(max_plate_nesting=2)
-        return elbo.loss(self.model, self, dataset)
+            samples = get_conditionals(guide())
+        for k, v in samples.items():
+            if k in save_params:
+                result["mean"][k] = v.mean(0).squeeze()
+                result["std"][k] = v.std(0).squeeze()
+    else:
+        stats = StatsOfDict({k: CountMeanVarianceStats for k in save_params})
+        for _ in range(num_samples):
+            stats.update(get_conditionals(guide()))
+            print(".", end="", flush=True)
+        for name, stats_ in stats.get().items():
+            if "mean" in stats_:
+                result["mean"][name] = stats_["mean"]
+            if "variance" in stats_:
+                result["std"][name] = stats_["variance"].sqrt()
+    return dict(result)
 
 
 # Copied from https://github.com/pytorch/pytorch/blob/v1.8.0/torch/distributions/multivariate_normal.py#L69
@@ -586,7 +518,9 @@ def fit_svi(
     model_ = functools.partial(model_, model_type=model_type)
     init_loc_fn = InitLocFn(dataset, init_data)
     if guide_type == "full":
-        guide = FullGuide(model_, init_loc_fn=init_loc_fn, init_scale=0.01)
+        guide = AutoLowRankMultivariateNormal(
+            model_, init_loc_fn=init_loc_fn, init_scale=0.01
+        )
     else:
         guide = Guide(model_, init_loc_fn=init_loc_fn, init_scale=0.01)
     shapes = {k: v.shape for k, v in guide(dataset).items()}  # initializes guide
@@ -661,7 +595,7 @@ def fit_svi(
             assert (curr - prev) < num_obs, "loss is increasing"
 
     series["loss"] = losses
-    result = guide.stats(dataset, num_samples=num_samples)
+    result = get_stats(guide, dataset, num_samples=num_samples)
     result["losses"] = losses
     result["series"] = dict(series)
     result["params"] = {
