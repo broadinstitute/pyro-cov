@@ -109,6 +109,7 @@ def fit_bootstrap(
     dataset,
     num_samples,
     model_type="",
+    cond_data="",
     guide_type="mvn_dependent",
     n=1001,
     p=1,
@@ -122,6 +123,7 @@ def fit_bootstrap(
         dataset,
         num_samples=num_samples,
         model_type=model_type,
+        cond_data=cond_data,
         guide_type=guide_type,
         num_steps=n,
         learning_rate=lr,
@@ -153,6 +155,7 @@ def main(args):
             configs.append(
                 (
                     args.model_type,
+                    args.cond_data,
                     args.guide_type,
                     num_steps,
                     args.learning_rate,
@@ -167,6 +170,7 @@ def main(args):
             configs.append(
                 (
                     model_type,
+                    args.cond_data,
                     args.guide_type,
                     args.num_steps,
                     args.learning_rate,
@@ -181,6 +185,7 @@ def main(args):
             configs.append(
                 (
                     args.model_type,
+                    args.cond_data,
                     guide_type,
                     args.num_steps,
                     args.learning_rate,
@@ -211,6 +216,7 @@ def main(args):
             configs.append(
                 (
                     args.model_type,
+                    args.cond_data,
                     args.guide_type,
                     args.num_steps,
                     args.learning_rate,
