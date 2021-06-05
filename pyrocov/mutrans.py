@@ -293,8 +293,8 @@ def model(dataset, *, model_type=""):
         }
     ):
         # Sample global random variables.
-        feature_scale = pyro.sample("feature_scale", dist.LogNormal(0, 1))
-        logits_scale = pyro.sample("logits_scale", dist.LogNormal(-4, 2))[..., None]
+        feature_scale = pyro.sample("feature_scale", dist.LogNormal(math.log(0.1), 1))
+        logits_scale = pyro.sample("logits_scale", dist.Uniform(1e-3, 1e-1))[..., None]
 
         # Assume relative growth rate depends strongly on mutations and weakly on place.
         rate_coef = pyro.sample(
@@ -363,24 +363,14 @@ class InitLocFn:
             result = getattr(self, name)
             assert result.shape == shape
             return result
-        if name == "logits_scale":
-            return torch.full(shape, 0.001)
         if name == "feature_scale":
             return torch.ones(shape)
-        if name in (
-            "place_scale",
-            "strain_scale",
-            "v_time_scale",
-            "v_place_scale",
-            "v_strain_scale",
-        ):
+        if name == "logits_scale":
+            return torch.full(shape, 0.002)
+        if name in ("place_scale", "strain_scale"):
             return torch.full(shape, 0.1)
-        if name in ("v_time_loc", "v_place_loc", "v_strain_loc"):
-            return torch.full(shape, math.log(0.01))
-        if name in ("rate_coef", "rate_bias"):
+        if name == "rate_coef":
             return torch.rand(shape).sub_(0.5).mul_(0.01)
-        if name in ("v_time", "v_place", "v_strain"):
-            return torch.rand(shape).add_(0.5).mul_(0.01)
         if name == "rate_decentered":
             return site["fn"].mean
         raise ValueError(f"InitLocFn found unhandled site {repr(name)}; please update.")
@@ -421,7 +411,7 @@ class Guide(AutoGuideList):
 
 @torch.no_grad()
 @poutine.mask(mask=False)
-def get_stats(guide, dataset, num_samples=1000, vectorize=None):
+def predict(guide, dataset, num_samples=1000, vectorize=None):
     def get_conditionals(data):
         trace = poutine.trace(poutine.condition(model, data)).get_trace(dataset)
         return {
@@ -523,16 +513,23 @@ def fit_svi(
         )
     else:
         guide = Guide(model_, init_loc_fn=init_loc_fn, init_scale=0.01)
-    shapes = {k: v.shape for k, v in guide(dataset).items()}  # initializes guide
-    numel = {k: v.numel() for k, v in shapes.items()}
+    # This initializes the guide:
+    latent_shapes = {k: v.shape for k, v in guide(dataset).items()}
+    latent_numel = {k: v.numel() for k, v in latent_shapes.items()}
     logger.info(
         "\n".join(
-            ["Fitting model with latent variables of shapes:"]
-            + [f"          {k: <20} {tuple(v)}" for k, v in shapes.items()]
+            [f"Model has {sum(latent_numel.values())} latent variables of shapes:"]
+            + [f" {k} {tuple(v)}" for k, v in latent_shapes.items()]
         )
     )
-    num_params = sum(p.numel() for p in guide.parameters())
-    logger.info(f"Training guide with {num_params} parameters. Latent variables:")
+    param_shapes = {k: v.shape for k, v in pyro.get_param_store().named_parameters()}
+    param_numel = {k: v.numel() for k, v in param_shapes.items()}
+    logger.info(
+        "\n".join(
+            [f"Guide has {sum(param_numel.values())} parameters of shapes:"]
+            + [f" {k} {tuple(v)}" for k, v in param_shapes.items()]
+        )
+    )
 
     # Log gradient norms during inference.
     series = defaultdict(list)
@@ -549,7 +546,7 @@ def fit_svi(
             "lrd": learning_rate_decay ** (1 / num_steps),
             "clip_norm": clip_norm,
         }
-        scalars = [k for k, v in numel.items() if v == 1]
+        scalars = [k for k, v in latent_numel.items() if v == 1]
         if any("locs." + s in name for s in scalars):
             config["lr"] *= 0.2
         elif "scales" in param_name:
@@ -594,12 +591,14 @@ def fit_svi(
             curr = torch.tensor(losses[-25:], device="cpu").median().item()
             assert (curr - prev) < num_obs, "loss is increasing"
 
-    series["loss"] = losses
-    result = get_stats(guide, dataset, num_samples=num_samples)
+    result = predict(guide, dataset, num_samples=num_samples)
     result["losses"] = losses
+    series["loss"] = losses
     result["series"] = dict(series)
     result["params"] = {
-        k: v.detach().float().clone() for k, v in param_store.items() if v.numel() < 1e7
+        k: v.detach().float().cpu().clone()
+        for k, v in param_store.items()
+        if v.numel() < 1e7
     }
     result["walltime"] = default_timer() - start_time
     return result
