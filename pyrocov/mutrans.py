@@ -411,7 +411,14 @@ class Guide(AutoGuideList):
 
 @torch.no_grad()
 @poutine.mask(mask=False)
-def predict(guide, dataset, num_samples=1000, vectorize=None):
+def predict(
+    guide,
+    dataset,
+    *,
+    num_samples=1000,
+    vectorize=None,
+    save_params=("rate", "probs"),
+):
     def get_conditionals(data):
         trace = poutine.trace(poutine.condition(model, data)).get_trace(dataset)
         return {
@@ -424,12 +431,12 @@ def predict(guide, dataset, num_samples=1000, vectorize=None):
     # Compute median point estimate.
     result = defaultdict(dict)
     for name, value in get_conditionals(guide.median(dataset)).items():
-        if value.numel() < 1e5 or name == "probs":
+        if value.numel() < 1e5 or name in save_params:
             result["median"][name] = value
 
     # Compute moments.
     save_params = {
-        k for k, v in result["median"].items() if v.numel() < 1e5 or k == "probs"
+        k for k, v in result["median"].items() if v.numel() < 1e5 or k in save_params
     }
     if vectorize is None:
         vectorize = result["median"]["probs"].numel() < 1e5
