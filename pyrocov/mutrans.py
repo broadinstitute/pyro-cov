@@ -392,6 +392,7 @@ class Guide(AutoGuideList):
                 poutine.block(model, expose=mvn),
                 init_loc_fn=init_loc_fn,
                 init_scale=init_scale,
+                rank=200,
             )
         )
         model = poutine.block(model, hide=mvn)
