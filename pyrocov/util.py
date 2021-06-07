@@ -1,8 +1,23 @@
 import functools
+import itertools
+import operator
 import weakref
 from typing import Dict
 
+import pyro
 import torch
+from torch.distributions import constraints, transform_to
+
+
+def pyro_param(name, shape, constraint=constraints.real):
+    transform = transform_to(constraint)
+    terms = []
+    for subshape in itertools.product(*({1, int(size)} for size in shape)):
+        subname = "_".join([name] + list(map(str, subshape)))
+        subinit = functools.partial(torch.zeros, subshape)
+        terms.append(pyro.param(subname, subinit))
+    unconstrained = functools.reduce(operator.add, terms)
+    return transform(unconstrained)
 
 
 def weak_memoize_by_id(fn):

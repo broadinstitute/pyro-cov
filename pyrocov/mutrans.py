@@ -1,10 +1,8 @@
 import datetime
 import functools
 import gc
-import itertools
 import logging
 import math
-import operator
 import pickle
 import re
 from collections import Counter, OrderedDict, defaultdict
@@ -253,20 +251,10 @@ def load_jhu_data(gisaid_data):
     }
 
 
-def pyro_param(name, shape, init):
-    terms = []
-    for subshape in itertools.product(*({1, int(size)} for size in shape)):
-        subname = "_".join([name] + list(map(str, subshape)))
-        subinit = functools.partial(torch.zeros, subshape)
-        if subshape == shape:
-            subinit = init
-        terms.append(pyro.param(subname, subinit))
-    return functools.reduce(operator.add, terms)
-
-
 def model(dataset, *, model_type=""):
     weekly_strains = dataset["weekly_strains"]
     features = dataset["features"]
+    local_time = dataset["local_time"][..., None]
     if not torch._C._get_tracing_state():
         assert weekly_strains.shape[-1] == features.shape[0]
         assert dataset["local_time"].shape == weekly_strains.shape[:2]
@@ -276,22 +264,15 @@ def model(dataset, *, model_type=""):
     time_plate = pyro.plate("time", T, dim=-2)
 
     # Configure reparametrization (which does not affect model density).
-    # This could alternatively be done outside the model.
-    rate_centered = pyro_param("rate_centered", (P, S), lambda: torch.full((P, S), 0.5))
-    logits_centered = pyro_param(
-        "logits_centered", (T, P, S), lambda: torch.full((T, P, S), 0.5)
-    )
-    rate_centered.data.clamp_(min=0.01, max=0.99)
-    logits_centered.data.clamp_(min=0.01, max=0.99)
-    local_time = dataset["local_time"][..., None] + pyro_param(
-        "local_time", (P, S), lambda: torch.zeros(P, S)
-    )
-    with poutine.reparam(
-        config={
-            "rate": LocScaleReparam(rate_centered),
-            "logits": LocScaleReparam(logits_centered),
-        }
-    ):
+    reparam = {}
+    if "reparam" in model_type:
+        local_time = local_time + pyro.param("local_time", lambda: torch.zeros(P, S))
+        reparam["rate_coef"] = LocScaleReparam()
+        if "biased" in model_type:
+            reparam["rate"] = LocScaleReparam()
+        if "overdispersed" in model_type:
+            reparam["logits"] = LocScaleReparam()
+    with poutine.reparam(config=reparam):
         # Sample global random variables.
         feature_scale = pyro.sample("feature_scale", dist.LogNormal(math.log(0.1), 1))
         logits_scale = pyro.sample("logits_scale", dist.Uniform(1e-3, 1e-1))[..., None]
@@ -302,13 +283,25 @@ def model(dataset, *, model_type=""):
             dist.SoftLaplace(torch.zeros(F), feature_scale[..., None]).to_event(1),
         )
         rate_loc = 0.01 * rate_coef @ features.T
-        strain_scale = pyro.sample(
-            "strain_scale", dist.LogNormal(-4 * torch.ones(S), 2).to_event(1)
-        )
+        if "biased" in model_type:
+            if "locally" in model_type:
+                strain_scale = pyro.sample(
+                    "strain_scale", dist.LogNormal(-4 * torch.ones(S), 2).to_event(1)
+                )
+            else:
+                rate_scale = pyro.sample("rate_scale", dist.LogNormal(-4, 2))[..., None]
         with place_plate:
-            place_scale = pyro.sample("place_scale", dist.LogNormal(-4, 2))
-            rate_scale = (place_scale[..., None] ** 2 + strain_scale ** 2).sqrt()
-            rate = pyro.sample("rate", dist.Normal(rate_loc, rate_scale).to_event(1))
+            if "biased" in model_type:
+                if "locally" in model_type:
+                    place_scale = pyro.sample("place_scale", dist.LogNormal(-4, 2))
+                    rate_scale = (
+                        place_scale[..., None] ** 2 + strain_scale ** 2
+                    ).sqrt()
+                rate = pyro.sample(
+                    "rate", dist.Normal(rate_loc, rate_scale).to_event(1)
+                )
+            else:
+                rate = pyro.deterministic("rate", rate_loc, event_dim=1)
 
             # Assume initial infections depend on place.
             init = pyro.sample("init", dist.SoftLaplace(torch.zeros(S), 10).to_event(1))
@@ -316,11 +309,14 @@ def model(dataset, *, model_type=""):
             # Model overdispersion.
             with time_plate:
                 logits_loc = init + rate * local_time
-                if not torch._C._get_tracing_state():
+                if not torch._C._get_tracing_state():  # Save during prediction.
                     pyro.deterministic("probs", logits_loc.detach().softmax(-1))
-                logits = pyro.sample(
-                    "logits", dist.Normal(logits_loc, logits_scale).to_event(1)
-                )
+                if "overdispersed" in model_type:
+                    logits = pyro.sample(
+                        "logits", dist.Normal(logits_loc, logits_scale).to_event(1)
+                    )
+                else:
+                    logits = pyro.deterministic("logits", logits_loc, event_dim=1)
 
                 # Finally observe counts.
                 pyro.sample(
@@ -347,8 +343,8 @@ class InitLocFn:
         if "logits" in init_data:
             pass
         elif "rate_coef" in init_data and "init" in init_data:
-            rate = 0.01 * (self.rate_coef @ dataset["features"].T)
-            self.logits = self.init + rate * dataset["local_time"][:, :, None]
+            self.rate = 0.01 * (self.rate_coef @ dataset["features"].T)
+            self.logits = self.init + self.rate * dataset["local_time"][:, :, None]
         else:
             weekly_strains = dataset["weekly_strains"]
             self.logits = weekly_strains.add(1 / weekly_strains.size(-1)).log()
@@ -367,12 +363,10 @@ class InitLocFn:
             return torch.ones(shape)
         if name == "logits_scale":
             return torch.full(shape, 0.002)
-        if name in ("place_scale", "strain_scale"):
-            return torch.full(shape, 0.1)
-        if name == "rate_coef":
+        if name in ("rate_scale", "place_scale", "strain_scale"):
+            return torch.full(shape, 0.01)
+        if name in ("rate_coef", "rate_coef_decentered", "rate", "rate_decentered"):
             return torch.rand(shape).sub_(0.5).mul_(0.01)
-        if name == "rate_decentered":
-            return site["fn"].mean
         raise ValueError(f"InitLocFn found unhandled site {repr(name)}; please update.")
 
 
@@ -387,23 +381,17 @@ def site_is_global(site):
 class Guide(AutoGuideList):
     def __init__(self, model, init_loc_fn, init_scale):
         super().__init__(model)
-        # Point estimate global random variables.
-        self.append(
-            AutoDelta(
-                poutine.block(model, expose_fn=site_is_global), init_loc_fn=init_loc_fn
-            )
-        )
-        model = poutine.block(model, hide_fn=site_is_global)
 
-        # Jointly estimate mutation coefficients.
+        # Jointly estimate mutation coefficients and shrinkage.
+        mvn = ["feature_scale", "rate_coef", "rate_coef_decentered"]
         self.append(
             AutoLowRankMultivariateNormal(
-                poutine.block(model, expose=["rate_coef"]),
+                poutine.block(model, expose=mvn),
                 init_loc_fn=init_loc_fn,
                 init_scale=init_scale,
             )
         )
-        model = poutine.block(model, hide=["rate_coef"])
+        model = poutine.block(model, hide=mvn)
 
         # Mean-field estimate all remaining sites.
         self.append(AutoNormal(model, init_loc_fn=init_loc_fn, init_scale=init_scale))
@@ -419,6 +407,8 @@ def predict(
     vectorize=None,
     save_params=("rate", "probs"),
 ):
+    model = guide.model
+
     def get_conditionals(data):
         trace = poutine.trace(poutine.condition(model, data)).get_trace(dataset)
         return {
@@ -458,17 +448,6 @@ def predict(
             if "variance" in stats_:
                 result["std"][name] = stats_["variance"].sqrt()
     return dict(result)
-
-
-# Copied from https://github.com/pytorch/pytorch/blob/v1.8.0/torch/distributions/multivariate_normal.py#L69
-def _precision_to_scale_tril(P):
-    # Ref: https://nbviewer.jupyter.org/gist/fehiepsi/5ef8e09e61604f10607380467eb82006#Precision-to-scale_tril
-    Lf = torch.cholesky(torch.flip(P, (-2, -1)))
-    L_inv = torch.transpose(torch.flip(Lf, (-2, -1)), -2, -1)
-    L = torch.triangular_solve(
-        torch.eye(P.shape[-1], dtype=P.dtype, device=P.device), L_inv, upper=False
-    )[0]
-    return L
 
 
 def fit_svi(
@@ -514,7 +493,11 @@ def fit_svi(
     model_ = poutine.condition(model, cond_data)
     model_ = functools.partial(model_, model_type=model_type)
     init_loc_fn = InitLocFn(dataset, init_data)
-    if guide_type == "full":
+    if guide_type == "map":
+        guide = AutoDelta(model_, init_loc_fn=init_loc_fn)
+    elif guide_type == "normal":
+        guide = AutoNormal(model_, init_loc_fn=init_loc_fn, init_scale=0.01)
+    elif guide_type == "full":
         guide = AutoLowRankMultivariateNormal(
             model_, init_loc_fn=init_loc_fn, init_scale=0.01
         )
@@ -562,7 +545,7 @@ def fit_svi(
             config["lr"] *= 0.05
         elif "weight" in param_name:
             config["lr"] *= 0.05
-        elif "centered" in param_name:
+        elif "_centered" in param_name:
             config["lr"] *= 0.1
         return config
 
