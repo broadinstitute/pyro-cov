@@ -275,7 +275,10 @@ def model(dataset, *, model_type=""):
     with poutine.reparam(config=reparam):
         # Sample global random variables.
         feature_scale = pyro.sample("feature_scale", dist.LogNormal(math.log(0.1), 1))
-        logits_scale = pyro.sample("logits_scale", dist.Uniform(1e-3, 1e-1))[..., None]
+        if "overdispersed" in model_type:
+            logits_scale = pyro.sample("logits_scale", dist.Uniform(1e-3, 1e-1))[
+                ..., None
+            ]
 
         # Assume relative growth rate depends strongly on mutations and weakly on place.
         rate_coef = pyro.sample(
