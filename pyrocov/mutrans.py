@@ -320,8 +320,7 @@ def model(dataset, *, model_type=""):
                         "logits", dist.Normal(logits_loc, logits_scale).to_event(1)
                     )
                 elif "dirichlet" in model_type:
-                    concentration = logits_loc.softmax(-1) / logits_scale
-                    concentration.data.add_(1e-20)
+                    concentration = logits_loc.softmax(-1) / logits_scale + 1e-20
                 else:
                     logits = pyro.deterministic("logits", logits_loc, event_dim=1)
 
@@ -699,6 +698,8 @@ def log_stats(dataset, result):
     }
     for place, strains in queries.items():
         matches = [p for name, p in dataset["location_id"].items() if place in name]
+        if not matches:
+            continue
         assert len(matches) == 1, matches
         p = matches[0]
         logger.info(
