@@ -81,15 +81,13 @@ def fit_svi(
     r=10,
     holdout=(),
 ):
-    for kv in cond_data.split(","):
-        if kv:
-            k, v = kv.split("=")
-            cond_data[k] = float(v)
+    cond_data = [kv.split("=") for kv in cond_data.split(",") if kv]
+    cond_data = {k: float(v) for k, v in cond_data}
 
     result = mutrans.fit_svi(
         dataset,
         model_type=model_type,
-        cond_data={},
+        cond_data=cond_data,
         guide_type=guide_type,
         num_steps=n,
         learning_rate=lr,
@@ -270,13 +268,13 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Fit mutation-transmissibility models")
-    parser.add_argument("--cond-data", default="")
     parser.add_argument("--vary-model-type", help="comma delimited list of model types")
     parser.add_argument("--vary-guide-type", help="comma delimited list of guide types")
     parser.add_argument("--vary-num-steps", help="comma delimited list of num_steps")
     parser.add_argument("--vary-holdout", action="store_true")
     parser.add_argument("--bootstrap", type=int)
     parser.add_argument("-m", "--model-type", default="")
+    parser.add_argument("-cd", "--cond-data", default="")
     parser.add_argument("-g", "--guide-type", default="custom")
     parser.add_argument("-n", "--num-steps", default=10001, type=int)
     parser.add_argument("-lr", "--learning-rate", default=0.05, type=float)
