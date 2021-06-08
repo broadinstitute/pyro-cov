@@ -684,6 +684,36 @@ def log_stats(dataset, result):
         i = mutations.index(m)
         logger.info("ΔlogR({}) = {:0.3g} ± {:0.2f}".format(m, mean[i], std[i]))
 
+    # Compute posterior predictive error.
+    true = dataset["weekly_strains"] + 1 / dataset["weekly_strains"].shape[-1]
+    true /= true.sum(-1, True)
+    pred = result["median"]["probs"]
+    error = (true - pred).abs()
+    mae = error.mean(0)
+    mse = error.square().mean(0)
+    logger.info("MAE = {:0.4g}, RMSE = {:0.4g}".format(mae.mean(), mse.mean().sqrt()))
+    queries = {
+        "England": ["B.1.1.7"],
+        # "England": ["B.1.1.7", "B.1.177", "B.1.1", "B.1"],
+        # "USA / California": ["B.1.1.7", "B.1.429", "B.1.427", "B.1.2", "B.1", "P.1"],
+    }
+    for place, strains in queries.items():
+        matches = [p for name, p in dataset["location_id"].items() if place in name]
+        assert len(matches) == 1, matches
+        p = matches[0]
+        logger.info(
+            "{}\tMAE = {:0.3g}, RMSE = {:0.3g}".format(
+                place, mae[p].mean(), mse[p].mean().sqrt()
+            )
+        )
+        for strain in strains:
+            s = dataset["lineage_id"][strain]
+            logger.info(
+                "{} {}\tMAE = {:0.3g}, RMSE = {:0.3g}".format(
+                    place, strain, mae[p, s], mse[p, s].sqrt()
+                )
+            )
+
 
 def log_holdout_stats(fits):
     assert len(fits) > 1
