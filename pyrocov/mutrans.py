@@ -276,7 +276,7 @@ def model(dataset, *, model_type=""):
     with poutine.reparam(config=reparam):
         # Sample global random variables.
         feature_scale = pyro.sample("feature_scale", dist.LogNormal(math.log(0.1), 1))
-        if "overdispersed" in model_type:
+        if "overdispersed" in model_type or "dirichlet" in model_type:
             logits_scale = pyro.sample("logits_scale", dist.Uniform(1e-3, 1e-1))[
                 ..., None
             ]
@@ -319,15 +319,29 @@ def model(dataset, *, model_type=""):
                     logits = pyro.sample(
                         "logits", dist.Normal(logits_loc, logits_scale).to_event(1)
                     )
+                elif "dirichlet" in model_type:
+                    concentration = logits_loc.softmax(-1) / logits_scale
+                    concentration.data.add_(1e-20)
                 else:
                     logits = pyro.deterministic("logits", logits_loc, event_dim=1)
 
                 # Finally observe counts.
-                pyro.sample(
-                    "obs",
-                    dist.Multinomial(logits=logits, validate_args=False),
-                    obs=weekly_strains,
-                )
+                if "dirichlet" in model_type:
+                    pyro.sample(
+                        "obs",
+                        dist.DirichletMultinomial(
+                            concentration=concentration,
+                            is_sparse=True,
+                            validate_args=False,
+                        ),
+                        obs=weekly_strains,
+                    )
+                else:
+                    pyro.sample(
+                        "obs",
+                        dist.Multinomial(logits=logits, validate_args=False),
+                        obs=weekly_strains,
+                    )
 
 
 class InitLocFn:
