@@ -680,15 +680,18 @@ def log_holdout_stats(fits):
             mutations = sorted(set(fit1["mutations"]) & set(fit2["mutations"]))
             means = []
             for fit in (fit1, fit2):
-                m_to_i = {m: i for i, m in enumerate(fit["mutations"])}
-                idx = torch.tensor([m_to_i[m] for m in mutations])
+                mutation_id = {m: i for i, m in enumerate(fit["mutations"])}
+                idx = torch.tensor([mutation_id[m] for m in mutations])
                 means.append(fit["median"]["rate_coef"][idx])
             mutation_correlation = pearson_correlation(means[0], means[1]).item()
 
             # Compute lineage correlation.
             means = []
             for fit in (fit1, fit2):
-                means.append(fit["median"]["rate"])
+                rate = fit["median"]["rate"]
+                if rate.dim() == 2:
+                    rate = rate.median(0).values
+                means.append(rate)
             lineage_correlation = pearson_correlation(means[0], means[1]).item()
             logger.info(
                 f"ρ_mutation = {mutation_correlation:0.3g}, "
