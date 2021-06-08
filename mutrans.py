@@ -260,6 +260,9 @@ def main(args):
         pyro.clear_param_store()
         gc.collect()
 
+    if args.vary_holdout:
+        mutrans.log_holdout_stats({k[-1]: v for k, v in results.items()})
+
     if not args.test:
         logger.info("saving results/mutrans.pt")
         torch.save(results, "results/mutrans.pt")

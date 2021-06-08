@@ -9,6 +9,12 @@ import torch
 from torch.distributions import constraints, transform_to
 
 
+def pearson_correlation(x: torch.Tensor, y: torch.Tensor):
+    x = (x - x.mean()) / x.std()
+    y = (y - x.mean()) / y.std()
+    return (x * y).mean()
+
+
 def pyro_param(name, shape, constraint=constraints.real):
     transform = transform_to(constraint)
     terms = []

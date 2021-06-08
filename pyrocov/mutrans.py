@@ -27,6 +27,7 @@ from pyro.poutine.util import site_is_subsample
 
 import pyrocov.geo
 from pyrocov import pangolin
+from pyrocov.util import pearson_correlation
 
 logger = logging.getLogger(__name__)
 
@@ -668,3 +669,29 @@ def log_stats(dataset, result):
     for m in ["S:D614G", "S:N501Y", "S:E484K", "S:L452R"]:
         i = mutations.index(m)
         logger.info("ΔlogR({}) = {:0.3g} ± {:0.2f}".format(m, mean[i], std[i]))
+
+
+def log_holdout_stats(fits):
+    assert len(fits) > 1
+    fits = list(fits.items())
+    for i, (name1, fit1) in enumerate(fits[:-1]):
+        for name2, fit2 in fits[i + 1 :]:
+            # Compute mutation correlation.
+            mutations = sorted(set(fit1["mutations"]) & set(fit2["mutations"]))
+            means = []
+            for fit in (fit1, fit2):
+                m_to_i = {m: i for i, m in enumerate(fit["mutations"])}
+                idx = torch.tensor([m_to_i[m] for m in mutations])
+                means.append(fit["median"]["rate_coef"][idx])
+            mutation_correlation = pearson_correlation(means[0], means[1]).item()
+
+            # Compute lineage correlation.
+            means = []
+            for fit in (fit1, fit2):
+                means.append(fit["median"]["rate"])
+            lineage_correlation = pearson_correlation(means[0], means[1]).item()
+            logger.info(
+                f"ρ_mutation = {mutation_correlation:0.3g}, "
+                f"ρ_lineage = {lineage_correlation:0.3g} "
+                f"for {name1} vs {name2}"
+            )
