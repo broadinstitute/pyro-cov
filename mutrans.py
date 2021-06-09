@@ -3,6 +3,7 @@
 import argparse
 import functools
 import gc
+import itertools
 import logging
 import os
 import re
@@ -135,6 +136,67 @@ def fit_bootstrap(
     return result
 
 
+def grid_search(args):
+    model_type_grid = [
+        "-".join(r + b + o)
+        for r in [[], ["reparam"]]
+        for b in [[], ["biased"], ["locally-biased"]]
+        for o in [[], ["overdispersed"], ["dirichlet"]]
+    ]
+    cond_data_grid = ["", "feature_scale=0.1"]
+    holdout_grid = [
+        {},
+        {"include": {"location": "^Europe"}},
+        {"exclude": {"location": "^Europe"}},
+    ]
+    grid = list(itertools.product(model_type_grid, cond_data_grid))
+    logger.info(f"Searching over grid of {len(grid)} configurations")
+    with open(args.grid_search, "wt") as tsv:
+        header = None
+        for model_type, cond_data in grid:
+            results = {}
+            for holdout in holdout_grid:
+                holdout_ = tuple(
+                    (k, tuple(sorted(v.items()))) for k, v in sorted(holdout.items())
+                )
+                config = (
+                    model_type,
+                    cond_data,
+                    args.guide_type,
+                    args.num_steps,
+                    args.learning_rate,
+                    args.learning_rate_decay,
+                    args.clip_norm,
+                    args.rank,
+                    holdout_,
+                )
+                logger.info(f"Config: {config}")
+                dataset = load_data(args, **holdout)
+                result = fit_svi(args, dataset, *config)
+                result["mutations"] = dataset["mutations"]
+                result = torch_map(result, device="cpu", dtype=torch.float)
+                results[holdout] = result
+                if not holdout:
+                    stats = mutrans.log_stats(dataset, result)
+
+                del dataset
+                pyro.clear_param_store()
+                gc.collect()
+
+            stats.update(
+                mutrans.log_holdout_stats({k[-1]: v for k, v in results.items()})
+            )
+            if header is None:
+                header = ["model_type", "cond_data"] + sorted(stats)
+                tsv.write("\t".join(header) + "\n")
+            tsv.write(
+                "\t".join(
+                    [model_type, cond_data] + [str(v) for k, v in sorted(stats.items())]
+                )
+                + "\n"
+            )
+
+
 def main(args):
     torch.set_default_dtype(torch.double if args.double else torch.float)
     if args.cuda:
@@ -143,6 +205,8 @@ def main(args):
         )
     if args.debug:
         torch.autograd.set_detect_anomaly(True)
+    if args.grid_search:
+        return grid_search(args)
 
     # Configure fits.
     configs = []
@@ -272,6 +336,7 @@ if __name__ == "__main__":
     parser.add_argument("--vary-guide-type", help="comma delimited list of guide types")
     parser.add_argument("--vary-num-steps", help="comma delimited list of num_steps")
     parser.add_argument("--vary-holdout", action="store_true")
+    parser.add_argument("--grid-search", help="name of results tsv file")
     parser.add_argument("--bootstrap", type=int)
     parser.add_argument("-m", "--model-type", default="")
     parser.add_argument("-cd", "--cond-data", default="")

@@ -671,19 +671,29 @@ def fit_bootstrap(
     return result
 
 
+@torch.no_grad()
 def log_stats(dataset, result):
+    stats = {}
     mutations = dataset["mutations"]
     mean = result["mean"]["rate_coef"].cpu()
     if not mean.shape:
-        return  # Work around error in map estimation.
+        return stats  # Work around error in map estimation.
+
+    # Statistical significance.
     std = result["std"]["rate_coef"].cpu()
     sig = mean.abs() / std
     logger.info(f"|μ|/σ [median,max] = [{sig.median():0.3g},{sig.max():0.3g}]")
+    stats["|μ|/σ median"] = sig.median()
+    stats["|μ|/σ max"] = sig.max()
+
+    # Effects of individual mutations.
     for m in ["S:D614G", "S:N501Y", "S:E484K", "S:L452R"]:
         i = mutations.index(m)
         logger.info("ΔlogR({}) = {:0.3g} ± {:0.2f}".format(m, mean[i], std[i]))
+        stats[f"ΔlogR({m}) mean"] = mean[i]
+        stats[f"ΔlogR({m}) std"] = std[i]
 
-    # Compute posterior predictive error.
+    # Posterior predictive error.
     true = dataset["weekly_strains"] + 1 / dataset["weekly_strains"].shape[-1]
     true /= true.sum(-1, True)
     pred = result["median"]["probs"]
@@ -691,11 +701,14 @@ def log_stats(dataset, result):
     mae = error.mean(0)
     mse = error.square().mean(0)
     logger.info("MAE = {:0.4g}, RMSE = {:0.4g}".format(mae.mean(), mse.mean().sqrt()))
+    stats["MAE"] = mae.mean()
+    stats["RMSE"] = mse.mean().sqrt()
     queries = {
         "England": ["B.1.1.7"],
         # "England": ["B.1.1.7", "B.1.177", "B.1.1", "B.1"],
         # "USA / California": ["B.1.1.7", "B.1.429", "B.1.427", "B.1.2", "B.1", "P.1"],
     }
+
     for place, strains in queries.items():
         matches = [p for name, p in dataset["location_id"].items() if place in name]
         if not matches:
@@ -707,6 +720,9 @@ def log_stats(dataset, result):
                 place, mae[p].mean(), mse[p].mean().sqrt()
             )
         )
+        stats[f"{place} MAE"] = mae[p].mean()
+        stats[f"{place} RMSE"] = mse[p].mean().sqrt()
+
         for strain in strains:
             s = dataset["lineage_id"][strain]
             logger.info(
@@ -714,11 +730,17 @@ def log_stats(dataset, result):
                     place, strain, mae[p, s], mse[p, s].sqrt()
                 )
             )
+            stats[f"{place} {strain} MAE"] = mae[p, s]
+            stats[f"{place} {strain} RMSE"] = mse[p, s].sqrt()
+
+    return {k: float(v) for k, v in stats.items()}
 
 
+@torch.no_grad()
 def log_holdout_stats(fits):
     assert len(fits) > 1
     fits = list(fits.items())
+    stats = {}
     for i, (name1, fit1) in enumerate(fits[:-1]):
         for name2, fit2 in fits[i + 1 :]:
             # Compute mutation correlation.
@@ -743,3 +765,7 @@ def log_holdout_stats(fits):
                 f"ρ_lineage = {lineage_correlation:0.3g} "
                 f"for {name1} vs {name2}"
             )
+            stats["ρ_mutation"] = mutation_correlation
+            stats["ρ_lineage"] = lineage_correlation
+
+    return {k: float(v) for k, v in stats.items()}
