@@ -151,7 +151,7 @@ def grid_search(args):
     ]
     grid = list(itertools.product(model_type_grid, cond_data_grid))
     logger.info(f"Searching over grid of {len(grid)} configurations")
-    with open(args.grid_search, "wt") as tsv:
+    with open("results/grid_search.tsv", "wt") as tsv:
         header = None
         for model_type, cond_data in grid:
             results = {}
@@ -174,8 +174,7 @@ def grid_search(args):
                 dataset = load_data(args, **holdout)
                 result = fit_svi(args, dataset, *config)
                 result["mutations"] = dataset["mutations"]
-                result = torch_map(result, device="cpu", dtype=torch.float)
-                results[holdout] = result
+                results[holdout_] = result
                 if not holdout:
                     stats = mutrans.log_stats(dataset, result)
 
@@ -183,9 +182,7 @@ def grid_search(args):
                 pyro.clear_param_store()
                 gc.collect()
 
-            stats.update(
-                mutrans.log_holdout_stats({k[-1]: v for k, v in results.items()})
-            )
+            stats.update(mutrans.log_holdout_stats(results))
             if header is None:
                 header = ["model_type", "cond_data"] + sorted(stats)
                 tsv.write("\t".join(header) + "\n")
@@ -195,6 +192,7 @@ def grid_search(args):
                 )
                 + "\n"
             )
+            tsv.flush()
 
 
 def main(args):
@@ -336,7 +334,7 @@ if __name__ == "__main__":
     parser.add_argument("--vary-guide-type", help="comma delimited list of guide types")
     parser.add_argument("--vary-num-steps", help="comma delimited list of num_steps")
     parser.add_argument("--vary-holdout", action="store_true")
-    parser.add_argument("--grid-search", help="name of results tsv file")
+    parser.add_argument("--grid-search", action="store_true")
     parser.add_argument("--bootstrap", type=int)
     parser.add_argument("-m", "--model-type", default="")
     parser.add_argument("-cd", "--cond-data", default="")

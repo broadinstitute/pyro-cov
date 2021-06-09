@@ -8,6 +8,7 @@ import re
 from collections import Counter, OrderedDict, defaultdict
 from timeit import default_timer
 
+import numpy as np
 import pyro
 import pyro.distributions as dist
 import torch
@@ -674,6 +675,7 @@ def fit_bootstrap(
 @torch.no_grad()
 def log_stats(dataset, result):
     stats = {}
+    stats["loss"] = float(np.median(result["losses"][-100:]))
     mutations = dataset["mutations"]
     mean = result["mean"]["rate_coef"].cpu()
     if not mean.shape:
