@@ -23,14 +23,15 @@ def cached(filename):
         @functools.wraps(fn)
         def cached_fn(*args, **kwargs):
             f = filename(*args, **kwargs) if callable(filename) else filename
-            if not os.path.exists(f):
-                result = fn(*args, **kwargs)
-                if not args[0].test:
-                    logger.info(f"saving {f}")
-                    torch.save(result, f)
-            else:
+            if os.path.exists(f):
                 logger.info(f"loading cached {f}")
-                result = torch.load(f, map_location=torch.empty(()).device)
+                return torch.load(f, map_location=torch.empty(()).device)
+            if args[0].no_new:
+                raise ValueError(f"Missing {f}")
+            result = fn(*args, **kwargs)
+            if not args[0].test:
+                logger.info(f"saving {f}")
+                torch.save(result, f)
             return result
 
         return cached_fn
@@ -139,11 +140,18 @@ def fit_bootstrap(
 def grid_search(args):
     model_type_grid = [
         "-".join(r + b + o)
-        for r in [[], ["reparam"]]
+        for r in [["reparam"], []]
         for b in [[], ["biased"], ["locally-biased"]]
         for o in [[], ["overdispersed"], ["dirichlet"]]
     ]
-    cond_data_grid = ["", "feature_scale=0.1"]
+    cond_data_grid = [
+        "",
+        "feature_scale=0.2",
+        "feature_scale=0.1",
+        "feature_scale=0.05",
+        "feature_scale=0.02",
+        "feature_scale=0.01",
+    ]
     holdout_grid = [
         {},
         {"include": {"location": "^Europe"}},
@@ -172,16 +180,23 @@ def grid_search(args):
                 )
                 logger.info(f"Config: {config}")
                 dataset = load_data(args, **holdout)
-                result = fit_svi(args, dataset, *config)
-                result["mutations"] = dataset["mutations"]
-                results[holdout_] = result
-                if not holdout:
-                    stats = mutrans.log_stats(dataset, result)
-
-                del dataset
-                pyro.clear_param_store()
-                gc.collect()
-
+                try:
+                    result = fit_svi(args, dataset, *config)
+                except ValueError:
+                    logger.info("Skipping config")
+                    results.clear()
+                    break
+                else:
+                    result["mutations"] = dataset["mutations"]
+                    results[holdout_] = result
+                    if not holdout:
+                        stats = mutrans.log_stats(dataset, result)
+                finally:
+                    del dataset
+                    pyro.clear_param_store()
+                    gc.collect()
+            if not results:
+                continue
             stats.update(mutrans.log_holdout_stats(results))
             if header is None:
                 header = ["model_type", "cond_data"] + sorted(stats)
@@ -352,6 +367,7 @@ if __name__ == "__main__":
     parser.add_argument("--cpu", dest="cuda", action="store_false")
     parser.add_argument("--seed", default=20210319, type=int)
     parser.add_argument("-l", "--log-every", default=50, type=int)
+    parser.add_argument("--no-new", action="store_true")
     parser.add_argument("--test", action="store_true")
     parser.add_argument("--debug", action="store_true")
     args = parser.parse_args()
