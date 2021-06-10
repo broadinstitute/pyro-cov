@@ -3,7 +3,6 @@
 import argparse
 import functools
 import gc
-import itertools
 import logging
 import os
 import re
@@ -155,9 +154,10 @@ def grid_search(args):
     #     "feature_scale=0.02",
     #     "feature_scale=0.01",
     # ]
-    # grid += list(itertools.product(model_type_grid, cond_data_grid))
+    # grid += [(m, c) for m in model_type_grid for c in cond_data_grid]
 
     # Experiment 3.
+    # TODO retry after https://github.com/pyro-ppl/pyro/issues/2868
     grid += [
         ("reparam-biased", ""),
         ("reparam-biased", "feature_scale=0.02"),
