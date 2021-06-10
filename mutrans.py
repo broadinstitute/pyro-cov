@@ -138,6 +138,8 @@ def fit_bootstrap(
 
 
 def grid_search(args):
+    grid = []
+
     # Experiments 1 and 2.
     # model_type_grid = [
     #     "-".join(r + b + o)
@@ -153,9 +155,10 @@ def grid_search(args):
     #     "feature_scale=0.02",
     #     "feature_scale=0.01",
     # ]
-    # grid = list(itertools.product(model_type_grid, cond_data_grid))
+    # grid += list(itertools.product(model_type_grid, cond_data_grid))
+
     # Experiment 3.
-    grid = [
+    grid += [
         ("reparam-biased", ""),
         ("reparam-biased", "feature_scale=0.02"),
         ("reparam-biased", "feature_scale=0.05"),
@@ -165,6 +168,9 @@ def grid_search(args):
         ("reparam-asymmetric-biased", "feature_scale=0.1"),
         ("reparam-asymmetric-biased", "feature_scale=0.2"),
     ]
+
+    grid = list(set(grid))
+
     holdout_grid = [
         {},
         {"include": {"location": "^Europe"}},
