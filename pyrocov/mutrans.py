@@ -281,7 +281,7 @@ def model(dataset, *, model_type=""):
         ]
         if "asymmetric" in model_type:
             feature_asymmetry = pyro.sample(
-                "feature_asymmetry", dist.LogNormal(math.log(0.1) / 2, 1)
+                "feature_asymmetry", dist.LogNormal(math.log(0.1) / 2, 0.5)
             )[..., None]
         if "overdispersed" in model_type or "dirichlet" in model_type:
             logits_scale = pyro.sample("logits_scale", dist.Uniform(1e-3, 1e-1))[
@@ -387,10 +387,8 @@ class InitLocFn:
             result = getattr(self, name)
             assert result.shape == shape
             return result
-        if name in "feature_scale":
+        if name in ("feature_scale", "feature_asymmetry"):
             return torch.ones(shape)
-        if name in "feature_asymmetry":
-            return torch.full(shape, 0.1 ** 0.5)
         if name == "logits_scale":
             return torch.full(shape, 0.002)
         if name in ("rate_scale", "place_scale", "strain_scale"):
