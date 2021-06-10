@@ -38,6 +38,12 @@ GENERATION_TIME = 5.5  # in days
 START_DATE = "2019-12-01"
 
 
+def date_range(stop):
+    start = datetime.datetime.strptime(START_DATE, "%Y-%m-%d")
+    step = datetime.timedelta(days=TIMESTEP)
+    return np.array([start + step * t for t in range(stop)])
+
+
 def get_fine_regions(columns, min_samples=50):
     """
     Select regions that have at least ``min_samples`` samples.
