@@ -269,24 +269,19 @@ def model(dataset, *, model_type=""):
     reparam = {}
     if "reparam" in model_type:
         local_time = local_time + pyro.param("local_time", lambda: torch.zeros(P, S))
-        if "asymmetric" not in model_type:
-            reparam["rate_coef"] = LocScaleReparam()
+        reparam["rate_coef"] = LocScaleReparam()
         if "biased" in model_type:
             reparam["rate"] = LocScaleReparam()
         if "overdispersed" in model_type:
             reparam["logits"] = LocScaleReparam()
     with poutine.reparam(config=reparam):
         # Sample global random variables.
+        feature_scale = pyro.sample("feature_scale", dist.LogNormal(math.log(0.1), 1))[
+            ..., None
+        ]
         if "asymmetric" in model_type:
-            left_scale = pyro.sample("left_scale", dist.LogNormal(math.log(0.01), 1))[
-                ..., None
-            ]
-            right_scale = pyro.sample("right_scale", dist.LogNormal(math.log(0.1), 1))[
-                ..., None
-            ]
-        else:
-            feature_scale = pyro.sample(
-                "feature_scale", dist.LogNormal(math.log(0.1), 1)
+            feature_asymmetry = pyro.sample(
+                "feature_asymmetry", dist.LogNormal(math.log(0.1) / 2, 1)
             )[..., None]
         if "overdispersed" in model_type or "dirichlet" in model_type:
             logits_scale = pyro.sample("logits_scale", dist.Uniform(1e-3, 1e-1))[
@@ -296,7 +291,9 @@ def model(dataset, *, model_type=""):
         # Assume relative growth rate depends strongly on mutations and weakly on place.
         rate_coef = pyro.sample(
             "rate_coef",
-            dist.AsymmetricLaplace(torch.zeros(F), left_scale, right_scale).to_event(1)
+            dist.AsymmetricLaplace(
+                torch.zeros(F), feature_scale, feature_asymmetry
+            ).to_event(1)
             if "asymmetric" in model_type
             else dist.SoftLaplace(torch.zeros(F), feature_scale).to_event(1),
         )
@@ -390,8 +387,10 @@ class InitLocFn:
             result = getattr(self, name)
             assert result.shape == shape
             return result
-        if name in ("feature_scale", "left_scale", "right_scale"):
+        if name in "feature_scale":
             return torch.ones(shape)
+        if name in "feature_asymmetry":
+            return torch.full(shape, 0.1 ** 0.5)
         if name == "logits_scale":
             return torch.full(shape, 0.002)
         if name in ("rate_scale", "place_scale", "strain_scale"):
@@ -416,8 +415,7 @@ class Guide(AutoGuideList):
         # Jointly estimate mutation coefficients and shrinkage.
         mvn = [
             "feature_scale",
-            "left_scale",
-            "right_scale",
+            "feature_asymmetry",
             "rate_coef",
             "rate_coef_decentered",
         ]
