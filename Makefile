@@ -19,7 +19,7 @@ test: lint data FORCE
 	python mutrans.py --mcmc -n 2 -w 2 -s 4 -t 2 -c 1 -l 1 -f
 
 update: FORCE
-	python git_pull.py cov-lineages/lineages-website
+	python git_pull.py cov-lineages/pango-designation
 	python git_pull.py CSSEGISandData/COVID-19
 	#python git_pull.py owid/covid-19-data
 	(cd ~/data/gisaid ; ./pull)

@@ -1,4 +1,4 @@
-import glob
+import json
 import os
 import re
 import warnings
@@ -8,13 +8,11 @@ from typing import Dict
 import torch
 
 PANGOLIN_REPO = os.environ.get(
-    "PANGOLIN_REPO", "~/github/cov-lineages/lineages-website"
+    "PANGOLIN_REPO", "~/github/cov-lineages/pango-designation"
 )
 
-# TODO replace this with
-# https://github.com/cov-lineages/pango-designation/blob/master/alias_key.json
 # See https://cov-lineages.org/lineages.html or
-# https://github.com/cov-lineages/lineages-website/lineages/*.md
+# https://github.com/cov-lineages/pango-designation/blob/master/alias_key.json
 # This list can be updated via update_aliases() below.
 PANGOLIN_ALIASES = {
     "AA": "B.1.177.15",
@@ -36,6 +34,8 @@ PANGOLIN_ALIASES = {
     "AT": "B.1.1.370",
     "AU": "B.1.466.2",
     "AV": "B.1.1.482",
+    "AW": "B.1.1.464",
+    "AY": "B.1.617.2",
     "C": "B.1.1.1",
     "D": "B.1.1.25",
     "E": "B.1.416",
@@ -59,35 +59,26 @@ PANGOLIN_ALIASES = {
     "Z": "B.1.177.50",
 }
 
-DECOMPRESS = PANGOLIN_ALIASES.copy()
-COMPRESS: Dict[str, str] = {}
-
 
 def update_aliases():
     repo = os.path.expanduser(PANGOLIN_REPO)
-    for filename in glob.glob(f"{repo}/lineages/lineage_*.md"):
-        with open(filename) as f:
-            lineage = None
-            parent = None
-            for line in f:
-                line = line.strip()
-                if line.startswith("lineage: "):
-                    lineage = line.split()[-1]
-                elif line.startswith("parent: "):
-                    parent = line.split()[-1]
-            if lineage and "." in lineage and parent:
-                alias = lineage.rsplit(".", 1)[0]
-                if parent != alias:
-                    PANGOLIN_ALIASES[alias] = parent
+    with open(f"{repo}/alias_key.json") as f:
+        for k, v in json.load(f).items():
+            if isinstance(v, str) and v:
+                PANGOLIN_ALIASES[k] = v
     return PANGOLIN_ALIASES
 
 
 try:
     update_aliases()
-except Exception:
+except Exception as e:
     warnings.warn(
-        f"Failed to find {PANGOLIN_REPO}, pangolin aliases may be stale", RuntimeWarning
+        f"Failed to find {PANGOLIN_REPO}, pangolin aliases may be stale.\n{e}",
+        RuntimeWarning,
     )
+
+DECOMPRESS = PANGOLIN_ALIASES.copy()
+COMPRESS: Dict[str, str] = {}
 
 
 def decompress(name):
@@ -104,6 +95,7 @@ def decompress(name):
     for key, value in PANGOLIN_ALIASES.items():
         if name == key or name.startswith(key + "."):
             result = value + name[len(key) :]
+            assert result
             DECOMPRESS[name] = result
             return result
     raise ValueError(f"Unknown alias: {repr(name)}")
@@ -113,21 +105,25 @@ def compress(name):
     """
     Compress a full lineage like B.1.1.1.10 to an alias like C.10.
     """
-    result = COMPRESS.get(name)
-    if result is None:
+    try:
+        return COMPRESS[name]
+    except KeyError:
+        pass
+    if name.count(".") <= 3:
         result = name
-        if name.count(".") <= 3:
-            COMPRESS[name] = result
-        else:
-            for key, value in PANGOLIN_ALIASES.items():
-                if key == "I":
-                    continue  # obsolete
-                if name == value or name.startswith(value + "."):
-                    result = key + name[len(value) :]
-                    COMPRESS[name] = result
-                    break
+    else:
+        for key, value in PANGOLIN_ALIASES.items():
+            if key == "I":
+                continue  # obsolete
+            if name == value or name.startswith(value + "."):
+                result = key + name[len(value) :]
+                break
     assert re.match(r"^[A-Z]+(\.[0-9]+)*$", result), result
+    COMPRESS[name] = result
     return result
+
+
+assert compress("B.1.1.7") == "B.1.1.7"
 
 
 def get_parent(name):
