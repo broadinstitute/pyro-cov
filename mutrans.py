@@ -138,26 +138,38 @@ def fit_bootstrap(
 
 
 def grid_search(args):
-    model_type_grid = [
-        "-".join(r + b + o)
-        for r in [["reparam"], []]
-        for b in [[], ["biased"], ["locally-biased"]]
-        for o in [[], ["overdispersed"], ["dirichlet"]]
-    ]
-    cond_data_grid = [
-        "",
-        "feature_scale=0.2",
-        "feature_scale=0.1",
-        "feature_scale=0.05",
-        "feature_scale=0.02",
-        "feature_scale=0.01",
+    # Experiments 1 and 2.
+    # model_type_grid = [
+    #     "-".join(r + b + o)
+    #     for r in [["reparam"], []]
+    #     for b in [[], ["biased"], ["locally-biased"]]
+    #     for o in [[], ["overdispersed"], ["dirichlet"]]
+    # ]
+    # cond_data_grid = [
+    #     "",
+    #     "feature_scale=0.2",
+    #     "feature_scale=0.1",
+    #     "feature_scale=0.05",
+    #     "feature_scale=0.02",
+    #     "feature_scale=0.01",
+    # ]
+    # grid = list(itertools.product(model_type_grid, cond_data_grid))
+    # Experiment 3.
+    grid = [
+        ("reparam-biased", ""),
+        ("reparam-biased", "feature_scale=0.02"),
+        ("reparam-biased", "feature_scale=0.05"),
+        ("reparam-biased", "feature_scale=0.1"),
+        ("reparam-asymmetric-biased", ""),
+        ("reparam-asymmetric-biased", "feature_scale=0.05"),
+        ("reparam-asymmetric-biased", "feature_scale=0.1"),
+        ("reparam-asymmetric-biased", "feature_scale=0.2"),
     ]
     holdout_grid = [
         {},
         {"include": {"location": "^Europe"}},
         {"exclude": {"location": "^Europe"}},
     ]
-    grid = list(itertools.product(model_type_grid, cond_data_grid))
     logger.info(f"Searching over grid of {len(grid)} configurations")
     with open("results/grid_search.tsv", "wt") as tsv:
         header = None
