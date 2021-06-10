@@ -276,7 +276,13 @@ def model(dataset, *, model_type=""):
             reparam["logits"] = LocScaleReparam()
     with poutine.reparam(config=reparam):
         # Sample global random variables.
-        feature_scale = pyro.sample("feature_scale", dist.LogNormal(math.log(0.1), 1))
+        feature_scale = pyro.sample("feature_scale", dist.LogNormal(math.log(0.1), 1))[
+            ..., None
+        ]
+        if "asymmetric" in model_type:
+            feature_asymmetry = pyro.sample(
+                "feature_asymmetry", dist.LogNormal(math.log(0.1) / 2, 0.5)
+            )[..., None]
         if "overdispersed" in model_type or "dirichlet" in model_type:
             logits_scale = pyro.sample("logits_scale", dist.Uniform(1e-3, 1e-1))[
                 ..., None
@@ -285,7 +291,11 @@ def model(dataset, *, model_type=""):
         # Assume relative growth rate depends strongly on mutations and weakly on place.
         rate_coef = pyro.sample(
             "rate_coef",
-            dist.SoftLaplace(torch.zeros(F), feature_scale[..., None]).to_event(1),
+            dist.AsymmetricLaplace(
+                torch.zeros(F), feature_scale, feature_asymmetry
+            ).to_event(1)
+            if "asymmetric" in model_type
+            else dist.SoftLaplace(torch.zeros(F), feature_scale).to_event(1),
         )
         rate_loc = 0.01 * rate_coef @ features.T
         if "biased" in model_type:
@@ -377,7 +387,7 @@ class InitLocFn:
             result = getattr(self, name)
             assert result.shape == shape
             return result
-        if name == "feature_scale":
+        if name in ("feature_scale", "feature_asymmetry"):
             return torch.ones(shape)
         if name == "logits_scale":
             return torch.full(shape, 0.002)
@@ -401,7 +411,12 @@ class Guide(AutoGuideList):
         super().__init__(model)
 
         # Jointly estimate mutation coefficients and shrinkage.
-        mvn = ["feature_scale", "rate_coef", "rate_coef_decentered"]
+        mvn = [
+            "feature_scale",
+            "feature_asymmetry",
+            "rate_coef",
+            "rate_coef_decentered",
+        ]
         self.append(
             AutoLowRankMultivariateNormal(
                 poutine.block(model, expose=mvn),
