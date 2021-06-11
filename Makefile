@@ -1,8 +1,14 @@
 data:
 	ln -sf ~/Google\ Drive\ File\ Stream/Shared\ drives/Pyro\ CoV data
 
-install: FORCE
+install: install-nextalign FORCE
 	pip install -e .[test]
+
+install-nextalign:
+	curl -fsSL "https://github.com/nextstrain/nextclade/releases/latest/download/nextalign-MacOS-x86_64" -o "nextalign" && chmod +x nextalign
+
+install-nextclade:
+	curl -fsSL "https://github.com/nextstrain/nextclade/releases/latest/download/nextclade-MacOS-x86_64" -o "nextclade" && chmod +x nextclade
 
 lint: FORCE
 	flake8
@@ -21,6 +27,7 @@ test: lint data FORCE
 update: FORCE
 	python git_pull.py cov-lineages/pango-designation
 	python git_pull.py CSSEGISandData/COVID-19
+	python git_pull.py nextstrain/nextclade
 	#python git_pull.py owid/covid-19-data
 	(cd ~/data/gisaid ; ./pull)
 	time nice python preprocess_gisaid.py

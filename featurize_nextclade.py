@@ -13,19 +13,23 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(format="%(relativeCreated) 9d %(message)s", level=logging.INFO)
 
 
-def count_mutations(counts, row):
+def count_mutations(mutation_counts, status_counts, row):
     # Check whether row is valid
     status = row["qc.overallStatus"]
-    if status != "good":
-        counts["error"] += 1  # hack to count errors
-        return
-    counts[None] += 1  # hack to count number of lineages
+    status_counts[status] += 1
+    if status == "good":
+        weight = 1.0
+    elif status == "mediocre":
+        weight = 0.01
+    else:
+        return  # weight = 0
+    mutation_counts[None] += weight  # hack to count number of lineages
     for col in ["aaSubstitutions", "aaDeletions"]:
         ms = row[col]
         if not ms:
             continue
         ms = ms.split(",")
-        counts.update(ms)
+        mutation_counts.update(ms)
         # Add within-gene pairs of mutations.
         by_gene = defaultdict(list)
         for m in ms:
@@ -36,7 +40,7 @@ def count_mutations(counts, row):
             ms.sort(key=lambda m: (int(re.search(r"\d+", m).group(0)), m))
             for i, m1 in enumerate(ms):
                 for m2 in ms[i + 1 :]:
-                    counts[f"{g}:{m1},{m2}"] += 1
+                    mutation_counts[f"{g}:{m1},{m2}"] += weight
 
 
 def main(args):
@@ -50,19 +54,32 @@ def main(args):
 
     # Count mutations via nextclade.
     lineage_mutation_counts = defaultdict(Counter)
+    lineage_status_counts = defaultdict(Counter)
     db = NextcladeDB()
     for lineage, sequences in subsamples.items():
-        mutations = lineage_mutation_counts[lineage]
+        mutation_counts = lineage_mutation_counts[lineage]
+        status_counts = lineage_status_counts[lineage]
         for seq in sequences.values():
-            db.schedule(seq, count_mutations, mutations)
+            db.schedule(seq, count_mutations, mutation_counts, status_counts)
     db.wait()
-    num_errors = sum(v.pop("error", 0) for v in lineage_mutation_counts.values())
-    logger.info(f"Found {num_errors} sequencing errors")
+
+    message = ["Total quality:"]
+    status_counts = Counter()
+    for c in lineage_status_counts.values():
+        status_counts.update(c)
+    for s, c in status_counts.most_common():
+        message.append(f"{s}: {c}")
+    logger.info("\n\t".join(message))
+
+    message = ["Lineages with fewest good samples:"]
+    for c, l in sorted((c["good"], l) for l, c in lineage_status_counts.items())[:20]:
+        message.append(f"{l}: {c}")
+    logger.info("\n\t".join(message))
+
+    # Filter to features that occur in the majority of at least one lineage.
     lineage_counts = {
         k: v.pop(None) for k, v in lineage_mutation_counts.items() if None in v
     }
-
-    # Filter to features that occur in the majority of at least one lineage.
     total = len(set().union(*lineage_mutation_counts.values()))
     mutations = set()
     for lineage, mutation_counts in list(lineage_mutation_counts.items()):

@@ -6,6 +6,7 @@ from collections import defaultdict
 from subprocess import check_call
 
 logger = logging.getLogger(__name__)
+NEXTSTRAIN_DATA = os.path.expanduser("~/github/nextstrain/nextclade/data/sars-cov-2")
 
 
 def hash_sequence(seq):
@@ -77,11 +78,16 @@ class NextcladeDB:
             return
         self._fasta_file.close()
         cmd = [
-            "nextclade",
-            "--input-fasta",
-            self.fasta_filename,
-            "--output-tsv",
-            self.tsv_filename,
+            "./nextclade",
+            f"--input-root-seq={NEXTSTRAIN_DATA}/reference.fasta",
+            "--genes=E,M,N,ORF1a,ORF1b,ORF3a,ORF6,ORF7a,ORF7b,ORF8,ORF9b,S",
+            f"--input-gene-map={NEXTSTRAIN_DATA}/genemap.gff",
+            f"--input-tree={NEXTSTRAIN_DATA}/tree.json",
+            f"--input-qc-config={NEXTSTRAIN_DATA}/qc.json",
+            f"--input-pcr-primers={NEXTSTRAIN_DATA}/primers.csv",
+            f"--input-fasta={self.fasta_filename}",
+            f"--output-tsv={self.tsv_filename}",
+            "--output-dir=results",
         ]
         logger.info(" ".join(cmd))
         check_call(cmd)

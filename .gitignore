@@ -1,5 +1,7 @@
 build/
-nextclade/
+nextalign
+nextclade
+nextclade_results/
 /data
 /results
 /results.*
