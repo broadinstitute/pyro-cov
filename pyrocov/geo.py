@@ -21,6 +21,8 @@ GISAID_DEDUP = {
 # To update see explore-jhu-time-series.ipynb
 GISAID_TO_JHU = {
     "a": ("us",),  # typo?
+    "anguilla": ("united kingdom", "anguilla"),
+    "antigua": ("antigua and barbuda",),
     "aruba": ("netherlands", "aruba"),
     "belgique": ("belgium",),
     "bermuda": ("united kingdom", "bermuda"),
@@ -60,6 +62,7 @@ GISAID_TO_JHU = {
     "méxico": ("mexico",),
     "myanmar": ("burma",),
     "netherlans": ("netherlands",),
+    "niogeria": ("nigeria",),
     "northern mariana islands": ("us", "northern mariana islands"),
     "palestine": ("israel",),  # ?
     "polynesia": ("france", "french polynesia"),
@@ -83,8 +86,10 @@ GISAID_TO_JHU = {
     "trinidad": ("trinidad and tobago",),
     "united states": ("us",),
     "usa": ("us",),
+    "usa? ohio": ("us", "ohio"),
     "union of the comoros": ("comoros",),
     "viet nam": ("vietnam",),
+    "wallis and futuna": ("france", "wallis and futuna"),
 }
 
 # To update see explore-jhu-time-series.ipynb
