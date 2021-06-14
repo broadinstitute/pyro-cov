@@ -510,6 +510,10 @@ def fit_svi(
 ):
     start_time = default_timer()
 
+    if "quantized" in model_type:
+        dataset = dataset.copy()
+        dataset["features"] = dataset["features"].round()
+
     if isinstance(init_data, str):
         init_data = fit_svi(
             dataset,
