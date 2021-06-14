@@ -163,10 +163,10 @@ def grid_search(args):
         ("reparam-biased", "feature_scale=0.02"),
         ("reparam-biased", "feature_scale=0.05"),
         ("reparam-biased", "feature_scale=0.1"),
-        ("reparam-asymmetric-biased", ""),
-        ("reparam-asymmetric-biased", "feature_scale=0.05"),
-        ("reparam-asymmetric-biased", "feature_scale=0.1"),
-        ("reparam-asymmetric-biased", "feature_scale=0.2"),
+        ("quantized-reparam-biased", ""),
+        ("quantized-reparam-biased", "feature_scale=0.02"),
+        ("quantized-reparam-biased", "feature_scale=0.05"),
+        ("quantized-reparam-biased", "feature_scale=0.1"),
     ]
 
     grid = list(set(grid))

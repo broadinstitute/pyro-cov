@@ -7,8 +7,8 @@ from typing import Dict
 
 import torch
 
-PANGOLIN_REPO = os.environ.get(
-    "PANGOLIN_REPO", "~/github/cov-lineages/pango-designation"
+PANGOLIN_REPO = os.path.expanduser(
+    os.environ.get("PANGOLIN_REPO", "~/github/cov-lineages/pango-designation")
 )
 
 # See https://cov-lineages.org/lineages.html or
@@ -62,7 +62,7 @@ PANGOLIN_ALIASES = {
 
 def update_aliases():
     repo = os.path.expanduser(PANGOLIN_REPO)
-    with open(f"{repo}/alias_key.json") as f:
+    with open(f"{repo}/pango_designation/alias_key.json") as f:
         for k, v in json.load(f).items():
             if isinstance(v, str) and v:
                 PANGOLIN_ALIASES[k] = v
