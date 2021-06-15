@@ -259,15 +259,20 @@ def load_jhu_data(gisaid_data):
     }
 
 
-def model(dataset, *, model_type=""):
-    weekly_strains = dataset["weekly_strains"]
+def model(dataset, *, model_type="", forecast_steps=None):
     features = dataset["features"]
     local_time = dataset["local_time"][..., None]
-    if not torch._C._get_tracing_state():
-        assert weekly_strains.shape[-1] == features.shape[0]
-        assert dataset["local_time"].shape == weekly_strains.shape[:2]
-    T, P, S = weekly_strains.shape
+    T, P, _ = local_time.shape
     S, F = features.shape
+    if forecast_steps is None:
+        weekly_strains = dataset["weekly_strains"]
+        assert weekly_strains.shape == (T, P, S)
+    else:
+        T = T + forecast_steps
+        t0 = local_time[0]
+        dt = local_time[1] - local_time[0]
+        local_time = t0 + dt * torch.arange(float(T))[:, None, None]
+        assert local_time.shape == (T, P, 1)
     place_plate = pyro.plate("place", P, dim=-1)
     time_plate = pyro.plate("time", T, dim=-2)
 
@@ -278,8 +283,6 @@ def model(dataset, *, model_type=""):
         reparam["rate_coef"] = LocScaleReparam()
         if "biased" in model_type:
             reparam["rate"] = LocScaleReparam()
-        if "overdispersed" in model_type:
-            reparam["logits"] = LocScaleReparam()
     with poutine.reparam(config=reparam):
         # Sample global random variables.
         feature_scale = pyro.sample("feature_scale", dist.LogNormal(math.log(0.1), 1))[
@@ -289,10 +292,6 @@ def model(dataset, *, model_type=""):
             feature_asymmetry = pyro.sample(
                 "feature_asymmetry", dist.LogNormal(math.log(0.1) / 2, 0.5)
             )[..., None]
-        if "overdispersed" in model_type or "dirichlet" in model_type:
-            logits_scale = pyro.sample("logits_scale", dist.Uniform(1e-3, 1e-1))[
-                ..., None
-            ]
 
         # Assume relative growth rate depends strongly on mutations and weakly on place.
         rate_coef = pyro.sample(
@@ -305,19 +304,9 @@ def model(dataset, *, model_type=""):
         )
         rate_loc = 0.01 * rate_coef @ features.T
         if "biased" in model_type:
-            if "locally" in model_type:
-                strain_scale = pyro.sample(
-                    "strain_scale", dist.LogNormal(-4 * torch.ones(S), 2).to_event(1)
-                )
-            else:
-                rate_scale = pyro.sample("rate_scale", dist.LogNormal(-4, 2))[..., None]
+            rate_scale = pyro.sample("rate_scale", dist.LogNormal(-4, 2))[..., None]
         with place_plate:
             if "biased" in model_type:
-                if "locally" in model_type:
-                    place_scale = pyro.sample("place_scale", dist.LogNormal(-4, 2))
-                    rate_scale = (
-                        place_scale[..., None] ** 2 + strain_scale ** 2
-                    ).sqrt()
                 rate = pyro.sample(
                     "rate", dist.Normal(rate_loc, rate_scale).to_event(1)
                 )
@@ -327,64 +316,28 @@ def model(dataset, *, model_type=""):
             # Assume initial infections depend on place.
             init = pyro.sample("init", dist.SoftLaplace(torch.zeros(S), 10).to_event(1))
 
-            # Model overdispersion.
+            # Finally observe counts.
             with time_plate:
-                logits_loc = init + rate * local_time
-                if not torch._C._get_tracing_state():  # Save during prediction.
-                    pyro.deterministic("probs", logits_loc.detach().softmax(-1))
-                if "overdispersed" in model_type:
-                    logits = pyro.sample(
-                        "logits", dist.Normal(logits_loc, logits_scale).to_event(1)
-                    )
-                elif "dirichlet" in model_type:
-                    concentration = logits_loc.softmax(-1) / logits_scale + 1e-20
-                else:
-                    logits = pyro.deterministic("logits", logits_loc, event_dim=1)
-
-                # Finally observe counts.
-                if "dirichlet" in model_type:
-                    pyro.sample(
-                        "obs",
-                        dist.DirichletMultinomial(
-                            concentration=concentration,
-                            is_sparse=True,
-                            validate_args=False,
-                        ),
-                        obs=weekly_strains,
-                    )
-                else:
+                logits = init + rate * local_time
+                if forecast_steps is None:
                     pyro.sample(
                         "obs",
                         dist.Multinomial(logits=logits, validate_args=False),
                         obs=weekly_strains,
                     )
+                else:
+                    pyro.deterministic("probs", logits.softmax(-1), event_dim=1)
 
 
 class InitLocFn:
-    def __init__(self, dataset, init_data={}):
-        self.__dict__.update(init_data)
-
+    def __init__(self, dataset):
         # Initialize init.
-        if "init" not in init_data:
-            init = dataset["weekly_strains"].sum(0)
-            init.add_(1 / init.size(-1)).div_(init.sum(-1, True))
-            init.log_().sub_(init.median(-1, True).values)
-            self.init = init
+        init = dataset["weekly_strains"].sum(0)
+        init.add_(1 / init.size(-1)).div_(init.sum(-1, True))
+        init.log_().sub_(init.median(-1, True).values)
+        self.init = init
         assert not torch.isnan(self.init).any()
         logger.info(f"init stddev = {self.init.std():0.3g}")
-
-        # Initialize logits.
-        if "logits" in init_data:
-            pass
-        elif "rate_coef" in init_data and "init" in init_data:
-            self.rate = 0.01 * (self.rate_coef @ dataset["features"].T)
-            self.logits = self.init + self.rate * dataset["local_time"][:, :, None]
-        else:
-            weekly_strains = dataset["weekly_strains"]
-            self.logits = weekly_strains.add(1 / weekly_strains.size(-1)).log()
-            self.logits -= self.logits.mean(-1, True)
-            self.logits += torch.rand(self.logits.shape).sub_(0.5).mul_(0.001)
-            self.logits_decentered = self.logits
 
     def __call__(self, site):
         name = site["name"]
@@ -413,7 +366,7 @@ def site_is_global(site):
 
 
 class Guide(AutoGuideList):
-    def __init__(self, model, init_loc_fn, init_scale):
+    def __init__(self, model, init_loc_fn, init_scale, rank):
         super().__init__(model)
 
         # Jointly estimate mutation coefficients and shrinkage.
@@ -428,7 +381,7 @@ class Guide(AutoGuideList):
                 poutine.block(model, expose=mvn),
                 init_loc_fn=init_loc_fn,
                 init_scale=init_scale,
-                rank=200,
+                rank=rank,
             )
         )
         model = poutine.block(model, hide=mvn)
@@ -446,11 +399,14 @@ def predict(
     num_samples=1000,
     vectorize=None,
     save_params=("rate", "probs"),
+    forecast_steps=0,
 ):
     model = guide.model
 
     def get_conditionals(data):
-        trace = poutine.trace(poutine.condition(model, data)).get_trace(dataset)
+        trace = poutine.trace(poutine.condition(model, data)).get_trace(
+            dataset, forecast_steps=forecast_steps
+        )
         return {
             name: site["value"].detach()
             for name, site in trace.nodes.items()
@@ -495,14 +451,14 @@ def fit_svi(
     *,
     model_type,
     guide_type,
-    init_data={},
     cond_data={},
+    forecast_steps=0,
     learning_rate=0.05,
     learning_rate_decay=0.1,
     num_steps=3001,
     num_samples=1000,
     clip_norm=10.0,
-    rank=10,
+    rank=200,
     jit=True,
     log_every=50,
     seed=20210319,
@@ -514,19 +470,6 @@ def fit_svi(
         dataset = dataset.copy()
         dataset["features"] = dataset["features"].round()
 
-    if isinstance(init_data, str):
-        init_data = fit_svi(
-            dataset,
-            model_type=init_data,
-            cond_data=cond_data,
-            guide_type="map",
-            learning_rate=0.05,
-            learning_rate_decay=1.0,
-            num_steps=1001,
-            log_every=log_every,
-            seed=seed,
-        )["median"]
-
     logger.info(f"Fitting {guide_type} guide via SVI")
     pyro.set_rng_seed(seed)
     pyro.clear_param_store()
@@ -536,17 +479,17 @@ def fit_svi(
     cond_data = {k: torch.as_tensor(v) for k, v in cond_data.items()}
     model_ = poutine.condition(model, cond_data)
     model_ = functools.partial(model_, model_type=model_type)
-    init_loc_fn = InitLocFn(dataset, init_data)
+    init_loc_fn = InitLocFn(dataset)
     if guide_type == "map":
         guide = AutoDelta(model_, init_loc_fn=init_loc_fn)
     elif guide_type == "normal":
         guide = AutoNormal(model_, init_loc_fn=init_loc_fn, init_scale=0.01)
     elif guide_type == "full":
         guide = AutoLowRankMultivariateNormal(
-            model_, init_loc_fn=init_loc_fn, init_scale=0.01
+            model_, init_loc_fn=init_loc_fn, init_scale=0.01, rank=rank
         )
     else:
-        guide = Guide(model_, init_loc_fn=init_loc_fn, init_scale=0.01)
+        guide = Guide(model_, init_loc_fn=init_loc_fn, init_scale=0.01, rank=rank)
     # This initializes the guide:
     latent_shapes = {k: v.shape for k, v in guide(dataset).items()}
     latent_numel = {k: v.numel() for k, v in latent_shapes.items()}
@@ -625,7 +568,9 @@ def fit_svi(
             curr = torch.tensor(losses[-25:], device="cpu").median().item()
             assert (curr - prev) < num_obs, "loss is increasing"
 
-    result = predict(guide, dataset, num_samples=num_samples)
+    result = predict(
+        guide, dataset, num_samples=num_samples, forecast_steps=forecast_steps
+    )
     result["losses"] = losses
     series["loss"] = losses
     result["series"] = dict(series)
@@ -648,7 +593,7 @@ def fit_bootstrap(
     num_steps=3001,
     num_samples=100,
     clip_norm=10.0,
-    rank=10,
+    rank=200,
     jit=True,
     log_every=None,
     seed=20210319,
@@ -723,7 +668,7 @@ def log_stats(dataset, result):
     # Posterior predictive error.
     true = dataset["weekly_strains"] + 1 / dataset["weekly_strains"].shape[-1]
     true /= true.sum(-1, True)
-    pred = result["median"]["probs"]
+    pred = result["median"]["probs"][: len(true)]
     error = (true - pred).abs()
     mae = error.mean(0)
     mse = error.square().mean(0)

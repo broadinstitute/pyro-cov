@@ -79,7 +79,8 @@ def fit_svi(
     lr=0.01,
     lrd=0.1,
     cn=10.0,
-    r=10,
+    r=200,
+    f=6,
     holdout=(),
 ):
     cond_data = [kv.split("=") for kv in cond_data.split(",") if kv]
@@ -95,6 +96,7 @@ def fit_svi(
         learning_rate_decay=lrd,
         clip_norm=cn,
         rank=r,
+        forecast_steps=f,
         log_every=args.log_every,
         seed=args.seed,
     )
@@ -141,10 +143,9 @@ def grid_search(args):
 
     # Experiments 1 and 2.
     # model_type_grid = [
-    #     "-".join(r + b + o)
+    #     "-".join(r + b)
     #     for r in [["reparam"], []]
-    #     for b in [[], ["biased"], ["locally-biased"]]
-    #     for o in [[], ["overdispersed"], ["dirichlet"]]
+    #     for b in [[], ["biased"]]
     # ]
     # cond_data_grid = [
     #     "",
@@ -194,6 +195,7 @@ def grid_search(args):
                     args.learning_rate_decay,
                     args.clip_norm,
                     args.rank,
+                    args.forecast_steps,
                     holdout_,
                 )
                 logger.info(f"Config: {config}")
@@ -255,6 +257,7 @@ def main(args):
                     args.learning_rate_decay,
                     args.clip_norm,
                     args.rank,
+                    args.forecast_steps,
                     empty_holdout,
                 )
             )
@@ -270,6 +273,7 @@ def main(args):
                     args.learning_rate_decay,
                     args.clip_norm,
                     args.rank,
+                    args.forecast_steps,
                     empty_holdout,
                 )
             )
@@ -285,6 +289,7 @@ def main(args):
                     args.learning_rate_decay,
                     args.clip_norm,
                     args.rank,
+                    args.forecast_steps,
                     empty_holdout,
                 )
             )
@@ -316,6 +321,7 @@ def main(args):
                     args.learning_rate_decay,
                     args.clip_norm,
                     args.rank,
+                    args.forecast_steps,
                     holdout,
                 )
             )
@@ -330,6 +336,7 @@ def main(args):
                 args.learning_rate_decay,
                 args.clip_norm,
                 args.rank,
+                args.forecast_steps,
                 empty_holdout,
             )
         )
@@ -376,7 +383,8 @@ if __name__ == "__main__":
     parser.add_argument("-lr", "--learning-rate", default=0.05, type=float)
     parser.add_argument("-lrd", "--learning-rate-decay", default=0.1, type=float)
     parser.add_argument("-cn", "--clip-norm", default=10.0, type=float)
-    parser.add_argument("-r", "--rank", default=10, type=int)
+    parser.add_argument("-r", "--rank", default=200, type=int)
+    parser.add_argument("-f", "--forecast-steps", default=6, type=int)
     parser.add_argument("-fp64", "--double", action="store_true")
     parser.add_argument("-fp32", "--float", action="store_false", dest="double")
     parser.add_argument(
