@@ -259,9 +259,29 @@ def load_jhu_data(gisaid_data):
     }
 
 
+# TODO carefully experiment with different sources of "slop".
+# Slop in rate_coef.
+# [F]      # done, equivalent to rate_coef
+# [P,F]    # plausible place-dependence on growth rate
+# [T,F]    # plausible strain-dependence on seasonality
+# [T,P,F]  # plausible (place,strain) dependence on seasonality
+#
+# Slop in rate.
+# [S]    # done, subsumed by rate_coef
+# [P,S]  # done, equivalent to biased rate
+#
+# Slop in time or growth (ie add step functions).
+# [T,S]    # implausible coupling of strains across region
+# [T,P,S]  # plausible to account for noise in epidemiological dynamics
+#
+# Slop in logits (only makes sense over S).
+# [S]      # done, subsumed by init
+# [P,S]    # done, equivalent to init
+# [T,S]    # implausible coupling of strains across region
+# [T,P,S]  # tried both LogNormal (ok) and Dirichlet (bad)
 def model(dataset, *, model_type="", forecast_steps=None):
     features = dataset["features"]
-    local_time = dataset["local_time"][..., None]
+    local_time = dataset["local_time"][..., None]  # [T, P, 1]
     T, P, _ = local_time.shape
     S, F = features.shape
     if forecast_steps is None:
@@ -273,17 +293,18 @@ def model(dataset, *, model_type="", forecast_steps=None):
         dt = local_time[1] - local_time[0]
         local_time = t0 + dt * torch.arange(float(T))[:, None, None]
         assert local_time.shape == (T, P, 1)
-    place_plate = pyro.plate("place", P, dim=-1)
-    time_plate = pyro.plate("time", T, dim=-2)
 
     # Configure reparametrization (which does not affect model density).
     reparam = {}
     if "reparam" in model_type:
-        local_time = local_time + pyro.param("local_time", lambda: torch.zeros(P, S))
+        local_time = local_time + pyro.param(
+            "local_time", lambda: torch.zeros(P, S)
+        )  # [T, P, S]
         reparam["rate_coef"] = LocScaleReparam()
         if "biased" in model_type:
             reparam["rate"] = LocScaleReparam()
     with poutine.reparam(config=reparam):
+
         # Sample global random variables.
         feature_scale = pyro.sample("feature_scale", dist.LogNormal(math.log(0.1), 1))[
             ..., None
@@ -301,24 +322,29 @@ def model(dataset, *, model_type="", forecast_steps=None):
             ).to_event(1)
             if "asymmetric" in model_type
             else dist.SoftLaplace(torch.zeros(F), feature_scale).to_event(1),
-        )
-        rate_loc = 0.01 * rate_coef @ features.T
+        )  # [F]
+        rate_loc = pyro.deterministic(
+            "rate_loc", 0.01 * rate_coef @ features.T, event_dim=1
+        )  # [S]
         if "biased" in model_type:
             rate_scale = pyro.sample("rate_scale", dist.LogNormal(-4, 2))[..., None]
-        with place_plate:
+        with pyro.plate("place", P, dim=-1):
             if "biased" in model_type:
                 rate = pyro.sample(
                     "rate", dist.Normal(rate_loc, rate_scale).to_event(1)
-                )
+                )  # [P, S]
             else:
-                rate = pyro.deterministic("rate", rate_loc, event_dim=1)
+                rate = pyro.deterministic("rate", rate_loc, event_dim=1)  # [S]
 
             # Assume initial infections depend on place.
-            init = pyro.sample("init", dist.SoftLaplace(torch.zeros(S), 10).to_event(1))
+            init = pyro.sample(
+                "init", dist.SoftLaplace(torch.zeros(S), 10).to_event(1)
+            )  # [P, S]
 
             # Finally observe counts.
-            with time_plate:
-                logits = init + rate * local_time
+            with pyro.plate("time", T, dim=-2):
+                logits = init + rate * local_time  # [T, P, S]
+
                 if forecast_steps is None:
                     pyro.sample(
                         "obs",
