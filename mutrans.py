@@ -159,16 +159,37 @@ def grid_search(args):
 
     # Experiment 3.
     # TODO retry after https://github.com/pyro-ppl/pyro/issues/2868
-    grid += [
-        ("reparam-biased", ""),
-        ("reparam-biased", "feature_scale=0.02"),
-        ("reparam-biased", "feature_scale=0.05"),
-        ("reparam-biased", "feature_scale=0.1"),
-        ("quantized-reparam-biased", ""),
-        ("quantized-reparam-biased", "feature_scale=0.02"),
-        ("quantized-reparam-biased", "feature_scale=0.05"),
-        ("quantized-reparam-biased", "feature_scale=0.1"),
+    # grid += [
+    #     ("reparam-biased", ""),
+    #     ("reparam-biased", "feature_scale=0.02"),
+    #     ("reparam-biased", "feature_scale=0.05"),
+    #     ("reparam-biased", "feature_scale=0.1"),
+    #     ("quantized-reparam-biased", ""),
+    #     ("quantized-reparam-biased", "feature_scale=0.02"),
+    #     ("quantized-reparam-biased", "feature_scale=0.05"),
+    #     ("quantized-reparam-biased", "feature_scale=0.1"),
+    # ]
+
+    # Experiment 4.
+    model_type_grid = [
+        "reparam",
+        "reparam-biased",
     ]
+    fs_grid = [
+        "",
+        "feature_scale=0.1",
+        "feature_scale=0.03",
+        "feature_scale=0.01",
+        "feature_scale=0.003",
+        "feature_scale=0.001",
+    ]
+    rs_grid = [
+        "",
+        "rate_scale=0.1",
+        "rate_scale=0.03",
+        "rate_scale=0.01",
+    ]
+    grid += [(m, f + r) for m in model_type_grid for f in fs_grid for r in rs_grid]
 
     grid = list(set(grid))
 
