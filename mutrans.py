@@ -226,12 +226,12 @@ def grid_search(args):
     ]
 
     grid = sorted(set(grid))
+    logger.info(f"Searching over grid of {len(grid)} configurations")
     holdout_grid = [
         {},
         {"include": {"location": "^Europe"}},
         {"exclude": {"location": "^Europe"}},
     ]
-    logger.info(f"Searching over grid of {len(grid)} configurations")
     with open("results/grid_search.tsv", "wt") as tsv:
         header = None
         for model_type, cond_data in grid:

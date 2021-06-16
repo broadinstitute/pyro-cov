@@ -301,7 +301,8 @@ def model(dataset, *, model_type="", forecast_steps=None):
             "local_time", lambda: torch.zeros(P, S)
         )  # [T, P, S]
         reparam["coef"] = LocScaleReparam()
-        reparam["rate"] = LocScaleReparam()
+        if "biased" in model_type:
+            reparam["rate"] = LocScaleReparam()
         reparam["init_loc"] = LocScaleReparam()
         reparam["init"] = LocScaleReparam()
     with poutine.reparam(config=reparam):
@@ -704,11 +705,13 @@ def log_stats(dataset, result):
     stats["|μ|/σ max"] = sig.max()
 
     # Effects of individual mutations.
-    for m in ["S:D614G", "S:N501Y", "S:E484K", "S:L452R"]:
-        i = mutations.index(m)
-        logger.info("ΔlogR({}) = {:0.3g} ± {:0.2f}".format(m, mean[i], std[i]))
-        stats[f"ΔlogR({m}) mean"] = mean[i]
-        stats[f"ΔlogR({m}) std"] = std[i]
+    for name in ["S:D614G", "S:N501Y", "S:E484K", "S:L452R"]:
+        i = mutations.index(name)
+        m = mean[i] * 0.01
+        s = std[i] * 0.01
+        logger.info(f"ΔlogR({name}) = {m:0.3g} ± {s:0.2f}")
+        stats[f"ΔlogR({name}) mean"] = m
+        stats[f"ΔlogR({name}) std"] = s
 
     # Growth rates of individual lineages.
     try:
