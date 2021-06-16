@@ -176,22 +176,27 @@ def grid_search(args):
         "reparam-biased",
     ]
     fs_grid = [
-        "",
-        "feature_scale=0.1",
-        "feature_scale=0.03",
-        "feature_scale=0.01",
-        "feature_scale=0.003",
-        "feature_scale=0.001",
+        (),
+        ("feature_scale=0.1",),
+        ("feature_scale=0.03",),
+        ("feature_scale=0.01",),
+        ("feature_scale=0.003",),
+        ("feature_scale=0.001",),
     ]
     rs_grid = [
-        "",
-        "rate_scale=0.1",
-        "rate_scale=0.03",
-        "rate_scale=0.01",
+        (),
+        ("rate_scale=0.1",),
+        ("rate_scale=0.03",),
+        ("rate_scale=0.01",),
     ]
-    grid += [(m, f + r) for m in model_type_grid for f in fs_grid for r in rs_grid]
+    grid += [
+        (m, ",".join(f + r))
+        for m in model_type_grid
+        for r in (rs_grid if "biased" in m else [()])
+        for f in fs_grid
+    ]
 
-    grid = list(set(grid))
+    grid = sorted(set(grid))
 
     holdout_grid = [
         {},

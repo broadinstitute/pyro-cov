@@ -691,6 +691,16 @@ def log_stats(dataset, result):
         stats[f"ΔlogR({m}) mean"] = mean[i]
         stats[f"ΔlogR({m}) std"] = std[i]
 
+    # Growth rates of individual lineages.
+    i = dataset["lineage_id"]["A"]
+    rate_A = result["mean"]["rate"][..., i].mean(0)
+    for s in ["B.1.1.7", "B.1.617.2"]:
+        i = dataset["lineage_id"][s]
+        rate = result["median"]["rate"][..., i].mean()
+        R_RA = (rate - rate_A).exp()
+        logger.info(f"R({s})/R(A) = {R_RA:0.3g}")
+        stats[f"R({s})/R(A)"] = R_RA
+
     # Posterior predictive error.
     true = dataset["weekly_strains"] + 1 / dataset["weekly_strains"].shape[-1]
     true /= true.sum(-1, True)
