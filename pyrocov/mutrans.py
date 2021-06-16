@@ -301,6 +301,7 @@ def model(dataset, *, model_type="", forecast_steps=None):
             "local_time", lambda: torch.zeros(P, S)
         )  # [T, P, S]
         reparam["rate_coef"] = LocScaleReparam()
+        reparam["init"] = LocScaleReparam()
         if "biased" in model_type:
             reparam["rate"] = LocScaleReparam()
     with poutine.reparam(config=reparam):
@@ -310,14 +311,18 @@ def model(dataset, *, model_type="", forecast_steps=None):
             ..., None
         ]
         if "asymmetric" in model_type:
-            feature_asymmetry = pyro.sample(
-                "feature_asymmetry", dist.LogNormal(math.log(0.1) / 2, 0.5)
-            )[..., None]
+            feature_asymmetry = pyro.sample("feature_asymmetry", dist.LogNormal(0, 1))[
+                ..., None
+            ]
+        if "biased" in model_type:
+            rate_scale = pyro.sample("rate_scale", dist.LogNormal(-4, 2))[..., None]
+        init_loc_scale = pyro.sample("init_loc_scale", dist.LogNormal(0, 2))[..., None]
+        init_scale = pyro.sample("init_scale", dist.LogNormal(0, 2))[..., None]
 
         # Assume relative growth rate depends strongly on mutations and weakly on place.
         rate_coef = pyro.sample(
             "rate_coef",
-            dist.AsymmetricLaplace(
+            dist.SkewLogistic(
                 torch.zeros(F), feature_scale, feature_asymmetry
             ).to_event(1)
             if "asymmetric" in model_type
@@ -326,8 +331,10 @@ def model(dataset, *, model_type="", forecast_steps=None):
         rate_loc = pyro.deterministic(
             "rate_loc", 0.01 * rate_coef @ features.T, event_dim=1
         )  # [S]
-        if "biased" in model_type:
-            rate_scale = pyro.sample("rate_scale", dist.LogNormal(-4, 2))[..., None]
+        init_loc = pyro.sample(
+            "init_loc",
+            dist.Normal(torch.zeros(S), init_loc_scale).to_event(1),
+        )  # [S]
         with pyro.plate("place", P, dim=-1):
             if "biased" in model_type:
                 rate = pyro.sample(
@@ -338,7 +345,7 @@ def model(dataset, *, model_type="", forecast_steps=None):
 
             # Assume initial infections depend on place.
             init = pyro.sample(
-                "init", dist.SoftLaplace(torch.zeros(S), 10).to_event(1)
+                "init", dist.Normal(init_loc, init_scale).to_event(1)
             )  # [P, S]
 
             # Finally observe counts.
@@ -361,7 +368,9 @@ class InitLocFn:
         init = dataset["weekly_strains"].sum(0)
         init.add_(1 / init.size(-1)).div_(init.sum(-1, True))
         init.log_().sub_(init.median(-1, True).values)
-        self.init = init
+        self.init = init  # [P, S]
+        self.init_decentered = init / 2
+        self.init_loc = init.mean(0)  # [S]
         assert not torch.isnan(self.init).any()
         logger.info(f"init stddev = {self.init.std():0.3g}")
 
@@ -372,7 +381,12 @@ class InitLocFn:
             result = getattr(self, name)
             assert result.shape == shape
             return result
-        if name in ("feature_scale", "feature_asymmetry"):
+        if name in (
+            "feature_scale",
+            "feature_asymmetry",
+            "init_scale",
+            "init_loc_scale"
+        ):
             return torch.ones(shape)
         if name == "logits_scale":
             return torch.full(shape, 0.002)
