@@ -321,16 +321,12 @@ def model(dataset, *, model_type="", forecast_steps=None):
         init_scale = pyro.sample("init_scale", dist.LogNormal(0, 2))[..., None]
 
         # Assume relative growth rate depends strongly on mutations and weakly on place.
-        if "asymmetric" in model_type:
-            # Manually reparametrize.
-            coef_loc = pyro.sample(
-                "coef_loc",
-                dist.Exponential(torch.ones(F) / coef_asymmetry).to_event(1),
-            )  # [F]
-        else:
-            coef_loc = torch.zeros(F)
+        coef_loc = torch.zeros(F)
         coef = pyro.sample(
-            "coef", dist.Normal(coef_loc * coef_scale, coef_scale).to_event(1)
+            "coef",
+            dist.AsymmetricLaplace(coef_loc, coef_scale, coef_asymmetry).to_event(1)
+            if "asymmetric" in model_type
+            else dist.SoftLaplace(coef_loc, coef_scale).to_event(1),
         )  # [F]
         rate_loc = pyro.deterministic(
             "rate_loc", 0.01 * coef @ features.T, event_dim=1
@@ -386,13 +382,7 @@ class InitLocFn:
             result = getattr(self, name)
             assert result.shape == shape
             return result
-        if name in (
-            "coef_scale",
-            "coef_loc",
-            "coef_asymmetry",
-            "init_scale",
-            "init_loc_scale",
-        ):
+        if name in ("coef_scale", "coef_asymmetry", "init_scale", "init_loc_scale"):
             return torch.ones(shape)
         if name == "logits_scale":
             return torch.full(shape, 0.002)
@@ -400,6 +390,8 @@ class InitLocFn:
             return torch.full(shape, 0.01)
         if name in ("coef", "coef_decentered", "rate", "rate_decentered"):
             return torch.rand(shape).sub_(0.5).mul_(0.01)
+        if name == "coef_loc":
+            return torch.rand(shape).sub_(0.5).mul_(0.01).add_(1.0)
         raise ValueError(f"InitLocFn found unhandled site {repr(name)}; please update.")
 
 
