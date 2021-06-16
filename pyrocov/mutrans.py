@@ -385,7 +385,7 @@ class InitLocFn:
             "feature_scale",
             "feature_asymmetry",
             "init_scale",
-            "init_loc_scale"
+            "init_loc_scale",
         ):
             return torch.ones(shape)
         if name == "logits_scale":

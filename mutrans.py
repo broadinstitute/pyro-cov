@@ -171,22 +171,51 @@ def grid_search(args):
     # ]
 
     # Experiment 4.
+    # model_type_grid = [
+    #     "reparam",
+    #     "reparam-biased",
+    #     "reparam-asymmetric",
+    #     "reparam-asymmetric-biased",
+    # ]
+    # fs_grid = [
+    #     (),
+    #     ("feature_scale=0.1",),
+    #     ("feature_scale=0.03",),
+    #     ("feature_scale=0.01",),
+    #     ("feature_scale=0.003",),
+    #     ("feature_scale=0.001",),
+    # ]
+    # rs_grid = [
+    #     (),
+    #     ("rate_scale=0.1",),
+    #     ("rate_scale=0.03",),
+    #     ("rate_scale=0.01",),
+    # ]
+    # grid += [
+    #     (m, ",".join(f + r))
+    #     for m in model_type_grid
+    #     for r in (rs_grid if "biased" in m else [()])
+    #     for f in fs_grid
+    # ]
+    # grid.append(("reparam-asymmetric", "feature_scale=0.0003"))
+    # grid.append(("reparam-asymmetric", "feature_scale=0.0001"))
+
+    # Experiment 5.
     model_type_grid = [
         "reparam",
         "reparam-biased",
+        "reparam-asymmetric",
+        "reparam-asymmetric-biased",
     ]
     fs_grid = [
         (),
         ("feature_scale=0.1",),
-        ("feature_scale=0.03",),
         ("feature_scale=0.01",),
-        ("feature_scale=0.003",),
         ("feature_scale=0.001",),
     ]
     rs_grid = [
         (),
         ("rate_scale=0.1",),
-        ("rate_scale=0.03",),
         ("rate_scale=0.01",),
     ]
     grid += [
@@ -197,7 +226,6 @@ def grid_search(args):
     ]
 
     grid = sorted(set(grid))
-
     holdout_grid = [
         {},
         {"include": {"location": "^Europe"}},
