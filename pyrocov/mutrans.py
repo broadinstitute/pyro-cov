@@ -260,14 +260,14 @@ def load_jhu_data(gisaid_data):
 
 
 # TODO carefully experiment with different sources of "slop".
-# Slop in rate_coef.
-# [F]      # done, equivalent to rate_coef
+# Slop in coef.
+# [F]      # done, equivalent to coef
 # [P,F]    # plausible place-dependence on growth rate
 # [T,F]    # plausible strain-dependence on seasonality
 # [T,P,F]  # plausible (place,strain) dependence on seasonality
 #
 # Slop in rate.
-# [S]    # done, subsumed by rate_coef
+# [S]    # done, subsumed by coef
 # [P,S]  # done, equivalent to biased rate
 #
 # Slop in time or growth (ie add step functions).
@@ -300,18 +300,18 @@ def model(dataset, *, model_type="", forecast_steps=None):
         local_time = local_time + pyro.param(
             "local_time", lambda: torch.zeros(P, S)
         )  # [T, P, S]
-        reparam["rate_coef"] = LocScaleReparam()
+        reparam["coef"] = LocScaleReparam()
+        reparam["rate"] = LocScaleReparam()
+        reparam["init_loc"] = LocScaleReparam()
         reparam["init"] = LocScaleReparam()
-        if "biased" in model_type:
-            reparam["rate"] = LocScaleReparam()
     with poutine.reparam(config=reparam):
 
         # Sample global random variables.
-        feature_scale = pyro.sample("feature_scale", dist.LogNormal(math.log(0.1), 1))[
+        coef_scale = pyro.sample("coef_scale", dist.LogNormal(math.log(0.1), 1))[
             ..., None
         ]
         if "asymmetric" in model_type:
-            feature_asymmetry = pyro.sample("feature_asymmetry", dist.LogNormal(0, 1))[
+            coef_asymmetry = pyro.sample("coef_asymmetry", dist.LogNormal(0, 1))[
                 ..., None
             ]
         if "biased" in model_type:
@@ -320,17 +320,22 @@ def model(dataset, *, model_type="", forecast_steps=None):
         init_scale = pyro.sample("init_scale", dist.LogNormal(0, 2))[..., None]
 
         # Assume relative growth rate depends strongly on mutations and weakly on place.
-        rate_coef = pyro.sample(
-            "rate_coef",
-            dist.SkewLogistic(
-                torch.zeros(F), feature_scale, feature_asymmetry
-            ).to_event(1)
-            if "asymmetric" in model_type
-            else dist.SoftLaplace(torch.zeros(F), feature_scale).to_event(1),
+        if "asymmetric" in model_type:
+            # Manually reparametrize.
+            coef_loc = pyro.sample(
+                "coef_loc",
+                dist.Exponential(torch.ones(F) / coef_asymmetry).to_event(1),
+            )  # [F]
+        else:
+            coef_loc = torch.zeros(F)
+        coef = pyro.sample(
+            "coef", dist.Normal(coef_loc * coef_scale, coef_scale).to_event(1)
         )  # [F]
         rate_loc = pyro.deterministic(
-            "rate_loc", 0.01 * rate_coef @ features.T, event_dim=1
+            "rate_loc", 0.01 * coef @ features.T, event_dim=1
         )  # [S]
+
+        # Assume initial infections depend strongly on strain and place.
         init_loc = pyro.sample(
             "init_loc",
             dist.Normal(torch.zeros(S), init_loc_scale).to_event(1),
@@ -342,8 +347,6 @@ def model(dataset, *, model_type="", forecast_steps=None):
                 )  # [P, S]
             else:
                 rate = pyro.deterministic("rate", rate_loc, event_dim=1)  # [S]
-
-            # Assume initial infections depend on place.
             init = pyro.sample(
                 "init", dist.Normal(init_loc, init_scale).to_event(1)
             )  # [P, S]
@@ -371,6 +374,7 @@ class InitLocFn:
         self.init = init  # [P, S]
         self.init_decentered = init / 2
         self.init_loc = init.mean(0)  # [S]
+        self.init_loc_decentered = self.init_loc / 2
         assert not torch.isnan(self.init).any()
         logger.info(f"init stddev = {self.init.std():0.3g}")
 
@@ -382,8 +386,9 @@ class InitLocFn:
             assert result.shape == shape
             return result
         if name in (
-            "feature_scale",
-            "feature_asymmetry",
+            "coef_scale",
+            "coef_loc",
+            "coef_asymmetry",
             "init_scale",
             "init_loc_scale",
         ):
@@ -392,7 +397,7 @@ class InitLocFn:
             return torch.full(shape, 0.002)
         if name in ("rate_scale", "place_scale", "strain_scale"):
             return torch.full(shape, 0.01)
-        if name in ("rate_coef", "rate_coef_decentered", "rate", "rate_decentered"):
+        if name in ("coef", "coef_decentered", "rate", "rate_decentered"):
             return torch.rand(shape).sub_(0.5).mul_(0.01)
         raise ValueError(f"InitLocFn found unhandled site {repr(name)}; please update.")
 
@@ -411,10 +416,10 @@ class Guide(AutoGuideList):
 
         # Jointly estimate mutation coefficients and shrinkage.
         mvn = [
-            "feature_scale",
-            "feature_asymmetry",
-            "rate_coef",
-            "rate_coef_decentered",
+            "coef_scale",
+            "coef_asymmetry",
+            "coef",
+            "coef_decentered",
         ]
         self.append(
             AutoLowRankMultivariateNormal(
@@ -465,7 +470,7 @@ def predict(
         k for k, v in result["median"].items() if v.numel() < 1e5 or k in save_params
     }
     if vectorize is None:
-        vectorize = result["median"]["probs"].numel() < 1e5
+        vectorize = result["median"]["probs"].numel() < 1e6
     if vectorize:
         with pyro.plate("particles", num_samples, dim=-3):
             samples = get_conditionals(guide())
@@ -687,12 +692,12 @@ def log_stats(dataset, result):
     stats = {}
     stats["loss"] = float(np.median(result["losses"][-100:]))
     mutations = dataset["mutations"]
-    mean = result["mean"]["rate_coef"].cpu()
+    mean = result["mean"]["coef"].cpu()
     if not mean.shape:
         return stats  # Work around error in map estimation.
 
     # Statistical significance.
-    std = result["std"]["rate_coef"].cpu()
+    std = result["std"]["coef"].cpu()
     sig = mean.abs() / std
     logger.info(f"|μ|/σ [median,max] = [{sig.median():0.3g},{sig.max():0.3g}]")
     stats["|μ|/σ median"] = sig.median()
@@ -706,8 +711,11 @@ def log_stats(dataset, result):
         stats[f"ΔlogR({m}) std"] = std[i]
 
     # Growth rates of individual lineages.
-    i = dataset["lineage_id"]["A"]
-    rate_A = result["mean"]["rate"][..., i].mean(0)
+    try:
+        i = dataset["lineage_id"]["A"]
+        rate_A = result["mean"]["rate"][..., i].mean(0)
+    except KeyError:
+        rate_A = result["mean"]["rate"].median()
     for s in ["B.1.1.7", "B.1.617.2"]:
         i = dataset["lineage_id"][s]
         rate = result["median"]["rate"][..., i].mean()
@@ -771,7 +779,7 @@ def log_holdout_stats(fits):
             for fit in (fit1, fit2):
                 mutation_id = {m: i for i, m in enumerate(fit["mutations"])}
                 idx = torch.tensor([mutation_id[m] for m in mutations])
-                means.append(fit["median"]["rate_coef"][idx])
+                means.append(fit["median"]["coef"][idx])
             mutation_correlation = pearson_correlation(means[0], means[1]).item()
 
             # Compute lineage correlation.

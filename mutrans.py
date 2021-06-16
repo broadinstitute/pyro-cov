@@ -149,11 +149,11 @@ def grid_search(args):
     # ]
     # cond_data_grid = [
     #     "",
-    #     "feature_scale=0.2",
-    #     "feature_scale=0.1",
-    #     "feature_scale=0.05",
-    #     "feature_scale=0.02",
-    #     "feature_scale=0.01",
+    #     "coef_scale=0.2",
+    #     "coef_scale=0.1",
+    #     "coef_scale=0.05",
+    #     "coef_scale=0.02",
+    #     "coef_scale=0.01",
     # ]
     # grid += [(m, c) for m in model_type_grid for c in cond_data_grid]
 
@@ -161,13 +161,13 @@ def grid_search(args):
     # TODO retry after https://github.com/pyro-ppl/pyro/issues/2868
     # grid += [
     #     ("reparam-biased", ""),
-    #     ("reparam-biased", "feature_scale=0.02"),
-    #     ("reparam-biased", "feature_scale=0.05"),
-    #     ("reparam-biased", "feature_scale=0.1"),
+    #     ("reparam-biased", "coef_scale=0.02"),
+    #     ("reparam-biased", "coef_scale=0.05"),
+    #     ("reparam-biased", "coef_scale=0.1"),
     #     ("quantized-reparam-biased", ""),
-    #     ("quantized-reparam-biased", "feature_scale=0.02"),
-    #     ("quantized-reparam-biased", "feature_scale=0.05"),
-    #     ("quantized-reparam-biased", "feature_scale=0.1"),
+    #     ("quantized-reparam-biased", "coef_scale=0.02"),
+    #     ("quantized-reparam-biased", "coef_scale=0.05"),
+    #     ("quantized-reparam-biased", "coef_scale=0.1"),
     # ]
 
     # Experiment 4.
@@ -179,11 +179,11 @@ def grid_search(args):
     # ]
     # fs_grid = [
     #     (),
-    #     ("feature_scale=0.1",),
-    #     ("feature_scale=0.03",),
-    #     ("feature_scale=0.01",),
-    #     ("feature_scale=0.003",),
-    #     ("feature_scale=0.001",),
+    #     ("coef_scale=0.1",),
+    #     ("coef_scale=0.03",),
+    #     ("coef_scale=0.01",),
+    #     ("coef_scale=0.003",),
+    #     ("coef_scale=0.001",),
     # ]
     # rs_grid = [
     #     (),
@@ -197,8 +197,8 @@ def grid_search(args):
     #     for r in (rs_grid if "biased" in m else [()])
     #     for f in fs_grid
     # ]
-    # grid.append(("reparam-asymmetric", "feature_scale=0.0003"))
-    # grid.append(("reparam-asymmetric", "feature_scale=0.0001"))
+    # grid.append(("reparam-asymmetric", "coef_scale=0.0003"))
+    # grid.append(("reparam-asymmetric", "coef_scale=0.0001"))
 
     # Experiment 5.
     model_type_grid = [
@@ -209,9 +209,9 @@ def grid_search(args):
     ]
     fs_grid = [
         (),
-        ("feature_scale=0.1",),
-        ("feature_scale=0.01",),
-        ("feature_scale=0.001",),
+        ("coef_scale=0.1",),
+        ("coef_scale=0.01",),
+        ("coef_scale=0.001",),
     ]
     rs_grid = [
         (),
