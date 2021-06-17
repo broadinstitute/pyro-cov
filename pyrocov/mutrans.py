@@ -768,29 +768,50 @@ def log_holdout_stats(fits):
     stats = {}
     for i, (name1, fit1) in enumerate(fits[:-1]):
         for name2, fit2 in fits[i + 1 :]:
-            # Compute mutation correlation.
+            # Compute mutation similarity.
             mutations = sorted(set(fit1["mutations"]) & set(fit2["mutations"]))
             means = []
             for fit in (fit1, fit2):
                 mutation_id = {m: i for i, m in enumerate(fit["mutations"])}
                 idx = torch.tensor([mutation_id[m] for m in mutations])
-                means.append(fit["median"]["coef"][idx])
+                means.append(fit["mean"]["coef"][idx] * 0.01)
+            error = means[0] - means[1]
+            mutation_rmse = error.square().mean().sqrt().item()
+            mutation_mae = error.abs().mean().item()
             mutation_correlation = pearson_correlation(means[0], means[1]).item()
 
-            # Compute lineage correlation.
+            # Compute lineage similarity.
             means = []
             for fit in (fit1, fit2):
-                rate = fit["median"]["rate"]
+                rate = fit["mean"]["rate"]
                 if rate.dim() == 2:
-                    rate = rate.median(0).values
+                    rate = rate.mean(0)
                 means.append(rate)
+            error = means[0] - means[1]
+            lineage_rmse = error.square().mean().sqrt().item()
+            lineage_mae = error.abs().mean().item()
             lineage_correlation = pearson_correlation(means[0], means[1]).item()
+
+            # Print stats.
             logger.info(
-                f"ρ_mutation = {mutation_correlation:0.3g}, "
-                f"ρ_lineage = {lineage_correlation:0.3g} "
-                f"for {name1} vs {name2}"
+                f"{name1} vs {name2} mutations: "
+                f"ρ = {mutation_correlation:0.3g}, "
+                f"RMSE = {mutation_rmse:0.3g}, "
+                f"MAE = {mutation_mae:0.3g}"
             )
+            logger.info(
+                f"{name1} vs {name2} lineages: "
+                f"ρ = {lineage_correlation:0.3g}, "
+                f"RMSE = {lineage_rmse:0.3g}, "
+                f"MAE = {lineage_mae:0.3g}"
+            )
+
+            # Save stats.
             stats["ρ_mutation"] = mutation_correlation
+            stats["RMSE_mutation"] = mutation_rmse
+            stats["MAE_mutation"] = mutation_mae
             stats["ρ_lineage"] = lineage_correlation
+            stats["RMSE_lineage"] = lineage_rmse
+            stats["MAE_lineage"] = lineage_mae
 
     return {k: float(v) for k, v in stats.items()}
