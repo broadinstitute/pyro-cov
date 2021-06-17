@@ -49,12 +49,18 @@ push:
 
 pull:
 	gcloud compute scp --project pyro-284215 --zone us-central1-c \
+	  --recurse --compress \
+	  pyro-cov-fritzo-vm:~/pyro-cov/results/mutrans.pt \
+	  results/
+
+pull-grid:
+	gcloud compute scp --project pyro-284215 --zone us-central1-c \
           --recurse --compress \
 	  pyro-cov-fritzo-vm:~/pyro-cov/results/grid_search.tsv \
 	  results/
 	gcloud compute scp --project pyro-284215 --zone us-central1-c \
 	  --recurse --compress \
-	  pyro-cov-fritzo-vm:~/pyro-cov/results/mutrans.pt \
+	  pyro-cov-fritzo-vm:~/pyro-cov/results/mutrans.grid.pt \
 	  results/
 
 FORCE:

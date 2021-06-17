@@ -776,6 +776,7 @@ def log_holdout_stats(fits):
                 idx = torch.tensor([mutation_id[m] for m in mutations])
                 means.append(fit["mean"]["coef"][idx] * 0.01)
             error = means[0] - means[1]
+            mutation_std = torch.cat(means).std().item()
             mutation_rmse = error.square().mean().sqrt().item()
             mutation_mae = error.abs().mean().item()
             mutation_correlation = pearson_correlation(means[0], means[1]).item()
@@ -788,6 +789,7 @@ def log_holdout_stats(fits):
                     rate = rate.mean(0)
                 means.append(rate)
             error = means[0] - means[1]
+            lineage_std = torch.cat(means).std().item()
             lineage_rmse = error.square().mean().sqrt().item()
             lineage_mae = error.abs().mean().item()
             lineage_correlation = pearson_correlation(means[0], means[1]).item()
@@ -807,11 +809,13 @@ def log_holdout_stats(fits):
             )
 
             # Save stats.
-            stats["ρ_mutation"] = mutation_correlation
-            stats["RMSE_mutation"] = mutation_rmse
-            stats["MAE_mutation"] = mutation_mae
-            stats["ρ_lineage"] = lineage_correlation
-            stats["RMSE_lineage"] = lineage_rmse
-            stats["MAE_lineage"] = lineage_mae
+            stats["mutation_corr"] = mutation_correlation
+            stats["mutation_rmse"] = mutation_rmse
+            stats["mutation_mae"] = mutation_mae
+            stats["mutation_stddev"] = mutation_std
+            stats["lineage_corr"] = lineage_correlation
+            stats["lineage_rmse"] = lineage_rmse
+            stats["lineage_mae"] = lineage_mae
+            stats["lineage_stdev"] = lineage_std
 
     return {k: float(v) for k, v in stats.items()}

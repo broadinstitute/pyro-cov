@@ -6,6 +6,7 @@ import gc
 import logging
 import os
 import re
+from collections import defaultdict
 
 import pyro
 import torch
@@ -232,6 +233,7 @@ def grid_search(args):
         {"include": {"location": "^Europe"}},
         {"exclude": {"location": "^Europe"}},
     ]
+    grid_results = defaultdict(dict)
     with open("results/grid_search.tsv", "wt") as tsv:
         header = None
         for model_type, cond_data in grid:
@@ -265,6 +267,10 @@ def grid_search(args):
                     results[holdout_] = result
                     if not holdout:
                         stats = mutrans.log_stats(dataset, result)
+                    grid_results[model_type, cond_data][holdout_] = {
+                        "mutations": dataset["mutations"],
+                        "coef": result["mean"]["coef"].cpu(),
+                    }
                 finally:
                     del dataset
                     pyro.clear_param_store()
@@ -282,6 +288,7 @@ def grid_search(args):
                 + "\n"
             )
             tsv.flush()
+    torch.save(grid_results, "results/mutrans.grid.pt")
 
 
 def main(args):
