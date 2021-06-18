@@ -17,13 +17,9 @@ def count_mutations(mutation_counts, status_counts, row):
     # Check whether row is valid
     status = row["qc.overallStatus"]
     status_counts[status] += 1
-    if status == "good":
-        weight = 1.0
-    elif status == "mediocre":
-        weight = 0.01
-    else:
-        return  # weight = 0
-    mutation_counts[None] += weight  # hack to count number of lineages
+    if status != "good":
+        return
+    mutation_counts[None] += 1  # hack to count number of lineages
     for col in ["aaSubstitutions", "aaDeletions"]:
         ms = row[col]
         if not ms:
@@ -40,7 +36,7 @@ def count_mutations(mutation_counts, status_counts, row):
             ms.sort(key=lambda m: (int(re.search(r"\d+", m).group(0)), m))
             for i, m1 in enumerate(ms):
                 for m2 in ms[i + 1 :]:
-                    mutation_counts[f"{g}:{m1},{m2}"] += weight
+                    mutation_counts[f"{g}:{m1},{m2}"] += 1
 
 
 def main(args):
@@ -76,6 +72,13 @@ def main(args):
         message.append(f"{l}: {c}")
     logger.info("\n\t".join(message))
 
+    # Filter to lineages with at least a few good samples.
+    for lineage, status_counts in list(lineage_status_counts.items()):
+        if status_counts["good"] < args.min_good_samples:
+            logger.info(f"Dropping {lineage} with {status_counts}")
+            del lineage_mutation_counts[lineage]
+            del lineage_status_counts[lineage]
+
     # Filter to features that occur in the majority of at least one lineage.
     lineage_counts = {
         k: v.pop(None) for k, v in lineage_mutation_counts.items() if None in v
@@ -88,7 +91,7 @@ def main(args):
             continue
         denominator = lineage_counts[lineage]
         for m, count in mutation_counts.items():
-            if count / denominator >= args.thresh:
+            if count / denominator >= 0.5:
                 mutations.add(m)
     by_num = Counter(m.count(",") for m in mutations)
     logger.info(
@@ -122,7 +125,7 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Featurize nextclade mutations")
-    parser.add_argument("--thresh", default=0.5, type=float)
+    parser.add_argument("--min-good-samples", default=5, type=float)
     parser.add_argument("--subset-file-in", default="results/gisaid.subset.tsv")
     parser.add_argument("--features-file-out", default="results/nextclade.features.pt")
     args = parser.parse_args()

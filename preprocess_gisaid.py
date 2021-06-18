@@ -64,7 +64,7 @@ def main(args):
                 lineage = pangolin.compress(lineage)
                 lineage = pangolin.decompress(lineage)
                 assert lineage
-            except ValueError as e:
+            except (ValueError, AssertionError) as e:
                 warnings.warn(str(e))
                 continue
 
@@ -132,7 +132,7 @@ if __name__ == "__main__":
     parser.add_argument("--start-date", default=START_DATE)
     parser.add_argument("--min-nchars", default=29000, type=int)
     parser.add_argument("--max-nchars", default=31000, type=int)
-    parser.add_argument("-s", "--samples-per-lineage", default=100, type=int)
+    parser.add_argument("-s", "--samples-per-lineage", default=200, type=int)
     parser.add_argument("-l", "--log-every", default=1000, type=int)
     parser.add_argument("--truncate", default=int(1e10), type=int)
     args = parser.parse_args()

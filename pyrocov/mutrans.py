@@ -436,7 +436,7 @@ def predict(
     *,
     num_samples=1000,
     vectorize=None,
-    save_params=("rate", "probs"),
+    save_params=("rate", "init", "probs"),
     forecast_steps=0,
 ):
     model = guide.model
