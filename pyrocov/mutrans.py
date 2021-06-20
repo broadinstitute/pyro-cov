@@ -308,9 +308,7 @@ def model(dataset, *, model_type="", forecast_steps=None):
     with poutine.reparam(config=reparam):
 
         # Sample global random variables.
-        coef_scale = pyro.sample("coef_scale", dist.LogNormal(math.log(0.1), 1))[
-            ..., None
-        ]
+        coef_scale = pyro.sample("coef_scale", dist.InverseGamma(5e3, 1e2))[..., None]
         if "asymmetric" in model_type:
             coef_asymmetry = pyro.sample("coef_asymmetry", dist.LogNormal(0, 1))[
                 ..., None
