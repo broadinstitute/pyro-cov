@@ -768,16 +768,16 @@ def log_holdout_stats(fits):
         for name2, fit2 in fits[i + 1 :]:
             # Compute mutation similarity.
             mutations = sorted(set(fit1["mutations"]) & set(fit2["mutations"]))
-            means = []
+            medians = []
             for fit in (fit1, fit2):
                 mutation_id = {m: i for i, m in enumerate(fit["mutations"])}
                 idx = torch.tensor([mutation_id[m] for m in mutations])
-                means.append(fit["mean"]["coef"][idx] * 0.01)
-            error = means[0] - means[1]
-            mutation_std = torch.cat(means).std().item()
+                medians.append(fit["median"]["coef"][idx] * 0.01)
+            error = medians[0] - medians[1]
+            mutation_std = torch.cat(medians).std().item()
             mutation_rmse = error.square().mean().sqrt().item()
             mutation_mae = error.abs().mean().item()
-            mutation_correlation = pearson_correlation(means[0], means[1]).item()
+            mutation_correlation = pearson_correlation(medians[0], medians[1]).item()
 
             # Compute lineage similarity.
             means = []
