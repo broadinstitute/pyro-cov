@@ -1,0 +1,28 @@
+# Images and data for publication
+
+## Data tables
+
+- [Mutation table](mutations.tsv) is ranked by statistical significance.
+  The "mean" field denotes the estimated effect on log growth rate of each mutation.
+- [Lineage table](strains.tsv) is ranked by growth rate.
+
+## Manhattan plots
+
+![Manhattan plot of entire genome](manhattan.png)
+![Manhattan plot of N gene](manhattan_N.png)
+![Manhattan plot of S gene](manhattan_S.png)
+![Manhattan plot of ORF1a gene](manhattan_ORF1a.png)
+
+## Strain characterization plots
+
+![Growth rate](strain_prevalence.png)
+![Forecast](forecast.png)
+
+## Cross validation plots
+
+The following plots assess robustness via 2-fold crossvalidation, splitting data into Europe versus (World w/o Europe).
+
+![Lineage correlation](lineage_agreement.png)
+![Mutation correlation](mutation_agreement.png)
+![Lineage box plots](strain_europe_boxplot.png)
+![Mutation box plots](mutation_europe_boxplot.png)
