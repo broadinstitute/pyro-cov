@@ -32,6 +32,7 @@ GISAID_TO_JHU = {
     "burkinafaso": ("burkina faso",),
     "caribbean": ("dominican republic",),  # most populous island
     "cayman islands": ("united kingdom", "cayman islands"),
+    "canary islands": ("spain",),
     "cote divoire": ("cote d'ivoire",),
     "crimea": ("ukraine",),  # or "russia"?
     "curacao": ("netherlands", "curacao"),
@@ -60,6 +61,7 @@ GISAID_TO_JHU = {
     "martinique": ("france", "martinique"),
     "mayotte": ("france", "mayotte"),
     "méxico": ("mexico",),
+    "montserrat": ("united kingdom", "montserrat"),
     "myanmar": ("burma",),
     "netherlans": ("netherlands",),
     "niogeria": ("nigeria",),
@@ -84,6 +86,7 @@ GISAID_TO_JHU = {
     "swizterland": ("switzerland",),
     "taiwan": ("china",),  # ?
     "trinidad": ("trinidad and tobago",),
+    "turks and caicos islands": ("united kingdom", "turks and caicos islands"),
     "united states": ("us",),
     "usa": ("us",),
     "usa? ohio": ("us", "ohio"),
