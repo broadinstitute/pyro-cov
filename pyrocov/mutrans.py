@@ -324,7 +324,7 @@ def model(dataset, *, model_type="", forecast_steps=None):
             "coef",
             dist.AsymmetricLaplace(coef_loc, coef_scale, coef_asymmetry).to_event(1)
             if "asymmetric" in model_type
-            else dist.SoftLaplace(coef_loc, coef_scale).to_event(1),
+            else dist.Logistic(coef_loc, coef_scale).to_event(1),
         )  # [F]
         rate_loc = pyro.deterministic(
             "rate_loc", 0.01 * coef @ features.T, event_dim=1
