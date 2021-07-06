@@ -455,7 +455,7 @@ if __name__ == "__main__":
     parser.add_argument("--vary-holdout", action="store_true")
     parser.add_argument("--grid-search", action="store_true")
     parser.add_argument("--bootstrap", type=int)
-    parser.add_argument("-m", "--model-type", default="")
+    parser.add_argument("-m", "--model-type", default="reparam-biased")
     parser.add_argument("-cd", "--cond-data", default="")
     parser.add_argument("-g", "--guide-type", default="custom")
     parser.add_argument("-n", "--num-steps", default=10001, type=int)
