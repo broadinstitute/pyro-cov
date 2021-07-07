@@ -13,6 +13,7 @@
 
 % Custom packages.
 \usepackage{amsmath}
+\usepackage{amssymb}
 \usepackage{hyperref}
 
 % The preamble here sets up a lot of new/revised commands and
@@ -30,14 +31,15 @@
 \textheight 21cm
 \footskip 1.0cm
 
+% Custom commands.
+
+\newcommand \TODO \fbox
 
 %The next command sets up an environment for the abstract to your paper.
 
 \newenvironment{sciabstract}{%
 \begin{quote} \bf}
 {\end{quote}}
-
-
 
 % Include your paper's title here
 
@@ -118,9 +120,10 @@ PANGO lineage aliases are available at \url{https://cov-lineages.org/} with sour
 
 \paragraph*{Data Preparation}
 
-We used samples from GISAID (12) including labels for time, location, PANGO lineage annotation (7), and genetic sequence.
+We downloaded \TODO{XXX} samples from GISAID \TODO{cite} on 2021-07-06.
+Each record includes labels for time, location, PANGO lineage annotation \TODO{cite}, and genetic sequence.
 We discarded records with missing time, location, or lineage.
-We called mutations using the nextclade tool \cite{aksamentov2020nextclade}.
+We called mutations using the nextclade tool \cite{aksamentov2020nextclade}, discarding sequences whose alignment quality was not reported as ``good''.
 Because PANGO lineages are genetically heterogeneous (with small variation within each strain), we created continuous $[0, 1]$-valued features denoting, for each (strain, mutation) pair, the portion of samples in that strain exhibiting the mutation.
 We discarded mutations that did not occur in the majority of samples in any single strain; 2337 mutations passed this threshold.
 We binned time intervals into 14-day segments, choosing a multiple of 7 to minimize weekly seasonality.
@@ -139,15 +142,15 @@ We dropped regions without samples in at least two time intervals.
 % https://rss.onlinelibrary.wiley.com/doi/full/10.1111/rssa.12378.
 
 We modeled relative strain growth with a hierarchical Bayesian regression model with multinomial likelihood.
-Arrays in the model may index over times $t\in \{1,\dots,42\}$, PANGOlineages (strains) $s\in\{1,\dots,1281\}$, regions $r\in\{1,...,1070\}$, and amino acid mutations (features) $f\in\{1,\dots,2337\}$.
-The model, shown below, regresses strain counts $y_{trs}$ in each time-region-strain bin against amino acid mutation covariates $X_{sf}$.
+Arrays in the model may index over time steps $t\in \{1,\dots,42\}$, PANGO lineages (strains) $s\in\{1,\dots,1281\}$, regions $r\in\{1,...,1070\}$, and amino acid mutations (features) $f\in\{1,\dots,2337\}$.
+The model, shown below and depicted graphically in Figure S1, regresses strain counts $y_{trs}\in\mathbb N$ in each time-region-strain bin against amino acid mutation covariates $X_{sf} \in [0,1]$.
 As this is a Bayesian regression model, variables $y$ and $X$ are observed and all other variables in the model are latent.
-The portion of strains in a single time-region bin is modeled as a Multinomial distribution of a multivariate logistic growth function $\operatorname{softmax}(\alpha_{rs} + t\beta_{r\cdot})$ with intercept $\alpha_{rs}$ and slope $\beta_{rs}$.
+The portion of strains in a single time-region bin is modeled as a Multinomial distribution of a multivariate logistic growth function $\operatorname{softmax}(\alpha_{rs} + t\beta_{r\cdot})$ with intercept $\alpha_{rs}$ and slope $\beta_{rs}$, where
+$
+  \operatorname{softmax}(x)_i = \frac {\exp(x_i)} {\sum_j \exp(x_j)}.
+$
 The intercepts $\alpha_{rs}$ denote relative log prevalence of strain $s$ in region $r$; these are modeled hierarchically around a global relative log prevalence $\alpha_s$ of each strain.
 The slopes $\beta_{rs}$ are modeled hierarchically around a per-strain growth rate $\sum_i \beta_f X_{sf}$ that is linearly regressed against amino acid mutation features $X$.
-We put weak priors on scale parameters $\sigma_1$, $\sigma_2$, and $\sigma_4$.
-We fix the linear regression scale parameter $\sigma_3$ to a small value (relative to the estimated generation time $\tau=5.5$ days), forcing the regression problem towards a sparse solution (meaning most observed mutations have little effect on growth rate).
-This small value was chosen to based on 2-fold cross validation.
 
 \begin{align*}
   \textstyle
@@ -166,9 +169,32 @@ This small value was chosen to based on 2-fold cross validation.
   \Bigr)
 \end{align*}
 
+\begin{figure*}
+TODO
+\caption{\textbf{Figure S1.} Graphical model}
+\end{figure*}
+
+We put weak priors on scale parameters $\sigma_1$, $\sigma_2$, and $\sigma_4$.
+We fix the linear regression scale parameter $\sigma_3$ to a small value (relative to the estimated generation time $\tau=5.5$ days), forcing the regression problem towards a sparse solution (meaning most observed mutations have little effect on growth rate).
+This small value was chosen to based on 2-fold cross validation.
+
+This proportional-growth model is robust to a number of sources of bias, including:
+sampling bias across regions (e.g. one region to samples 1000x more than another);
+sampling bias over time (e.g. changing sampling rate over time); and
+change in absolute growth rate of all strains, in any (region, time) cell (e.g. changes in local policies or weather, as long as those changes affect all strains equally).
+However the model is susceptible to the following sources of bias:
+biased sampling in any (region,time) cell (e.g. sequencing only in case of S-gene target failure); and changes in sampling bias within a single region over time (e.g. a country has a lab in only one city, then spins up a second lab in another distant city with different strain portions).
+
+We considered the possibility of biased submission to the GISAID database, and compared results obtained from the full dataset with results obtained from subsets.
+We chose to partition using 2-fold crossvalidation, splitting the world into Europe and the remaining countries
+This split is motivated by most samples originating from the UK: we widened the region around the UK until the region and its complement both had roughly equivalent statistical strength and narrow posterior estimates.
+Restricting to CDC data or CDC's randomly sampled NS3 dataset appears to result in insufficient diversity and leads to unclear results (Pearson correlation 0.49, 0.28, resp.).
+
 \paragraph*{Probabilistic Inference}
 
 The model was implemented in the Pyro probabilistic programming language \cite{bingham2019pyro}.
+To fit posterior joint distributions over all parameters, we trained a flexible reparametrized variational family using stochastic variational inference.
+Inference was performed for 10000 iterations on a single GPU (NVIDIA Tesla P100 with 16GB of ram), taking about 10 minutes.
 
 \bibliography{main}
 
