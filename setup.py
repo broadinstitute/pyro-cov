@@ -29,7 +29,7 @@ setup(
     author_email="fobermey@broadinstitute.org",
     install_requires=[
         "biopython>=1.54",
-        "pyro-ppl>=1.5",
+        "pyro-ppl>=1.7",
         "geopy",
         "gpytorch",
         "scikit-learn",
