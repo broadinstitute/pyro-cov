@@ -188,7 +188,7 @@ By sharing statistical strength in this way we are also able to make more accura
 Both of these hierarchies $\alpha$ and $\beta$ improved model fit in the presence of heavily skewed observations (e.g.~most samples are from the UK, and there is a long tail of sparsely sampled regions).
 
 We place weak priors on scale parameters $\sigma_1$, $\sigma_2$, and $\sigma_4$ (these denote standard deviation, the square roots of prior variance).
-The $\sigma_4$ prior is centered around the smaller value $e^{-4}\approx 0.18$ because we expect little variation of relative growth rate across geographic regions.
+The $\sigma_4$ prior is centered around the smaller value $e^{-4}\approx 0.018$ because we expect little variation of relative growth rate across geographic regions.
 We fix the linear regression scale parameter $\sigma_3$ to a small value, forcing the regression problem towards a sparse solution (i.e.~we assume a priori that most observed mutations have little effect on growth rate).
 We choose a Logistic prior on regression coefficients because it is heavier-tailed than a Normal prior, but not so heavy-tailed that the regression problem becomes multimodal (as it would for e.g.~a Cauchy or Student's t prior).
 Like the Laplace distribution, the Logistic distribution's exponential tails are maximally heavy while ensuring the conditional log density is concave, leading to a conditionally unimodal posterior and robust inference.
