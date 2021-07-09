@@ -1,6 +1,5 @@
 import datetime
 import functools
-import gc
 import logging
 import math
 import pickle
@@ -22,7 +21,6 @@ from pyro.infer.autoguide import (
 )
 from pyro.infer.reparam import LocScaleReparam
 from pyro.ops.streaming import CountMeanVarianceStats, StatsOfDict
-from pyro.ops.welford import WelfordCovariance
 from pyro.optim import ClippedAdam
 from pyro.poutine.util import site_is_subsample
 
@@ -615,65 +613,6 @@ def fit_svi(
         for k, v in param_store.items()
         if v.numel() < 1e7
     }
-    result["walltime"] = default_timer() - start_time
-    return result
-
-
-def fit_bootstrap(
-    dataset,
-    *,
-    model_type,
-    guide_type,
-    learning_rate=0.05,
-    learning_rate_decay=0.1,
-    num_steps=3001,
-    num_samples=100,
-    clip_norm=10.0,
-    rank=200,
-    jit=True,
-    log_every=None,
-    seed=20210319,
-    check_loss=False,
-):
-    start_time = default_timer()
-    logger.info(f"Fitting {guide_type} guide via bootstrap")
-    if log_every is None:
-        log_every = num_steps - 1
-
-    # Block bootstrap over places.
-    T, P, S = dataset["weekly_strains"].shape
-    weight_dist = dist.Multinomial(total_count=P, probs=torch.full((P,), 1 / P))
-    weighted_dataset = dataset.copy()
-
-    moments = defaultdict(WelfordCovariance)
-    for step in range(num_samples):
-        pyro.set_rng_seed(seed + step)
-        weights = weight_dist.sample()[:, None]
-        weighted_dataset["weekly_strains"] = weights * dataset["weekly_strains"]
-
-        median = fit_svi(
-            weighted_dataset,
-            model_type=model_type,
-            guide_type=guide_type,
-            learning_rate=learning_rate,
-            learning_rate_decay=learning_rate_decay,
-            num_steps=num_steps,
-            num_samples=1,
-            clip_norm=clip_norm,
-            rank=rank,
-            log_every=log_every,
-            seed=seed + step,
-        )["median"]
-        for k, v in median.items():
-            moments[k].update(v.cpu())
-
-        del median
-        pyro.clear_param_store()
-        gc.collect()
-
-    result = {}
-    result["mean"] = {k: v._mean for k, v in moments.items()}
-    result["std"] = {k: v.get_covariance(regularize=False) for k, v in moments.items()}
     result["walltime"] = default_timer() - start_time
     return result
 
