@@ -6,6 +6,7 @@ import gc
 import logging
 import os
 import re
+from typing import Callable, Union
 
 import pyro
 import torch
@@ -17,7 +18,11 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(format="%(relativeCreated) 9d %(message)s", level=logging.INFO)
 
 
-def cached(filename):
+def cached(filename: Union[str, Callable]):
+    """
+    Simple utiltity to cache results based on filename.
+    """
+
     def decorator(fn):
         @functools.wraps(fn)
         def cached_fn(*args, **kwargs):
@@ -55,6 +60,9 @@ def _load_data_filename(args, **kwargs):
 
 @cached(_load_data_filename)
 def load_data(args, **kwargs):
+    """
+    Cached wrapper to load GISAID data.
+    """
     return mutrans.load_gisaid_data(device=args.device, **kwargs)
 
 
@@ -82,6 +90,9 @@ def fit_svi(
     f=6,
     holdout=(),
 ):
+    """
+    Cached wrapper to fit a model via SVI.
+    """
     cond_data = [kv.split("=") for kv in cond_data.split(",") if kv]
     cond_data = {k: float(v) for k, v in cond_data}
 

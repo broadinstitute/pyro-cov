@@ -45,7 +45,7 @@ def date_range(stop):
 def get_fine_regions(columns, min_samples=50):
     """
     Select regions that have at least ``min_samples`` samples.
-    Remaining regions will be coarsely aggregated into country level.
+    Remaining regions will be coarsely aggregated up to country level.
     """
     # Count number of samples in each subregion.
     counts = Counter()
@@ -66,6 +66,14 @@ def load_gisaid_data(
     include={},
     exclude={},
 ):
+    """
+    Loads the two files
+    - ``results/gisaid.columns.pkl`` and
+    - ``results/nextclade.features.pt``
+
+    This converts the input data to PyTorch tensors and truncates according to
+    ``include`` and ``exclude``.
+    """
     logger.info("Loading data")
     include = {k: re.compile(v) for k, v in include.items()}
     exclude = {k: re.compile(v) for k, v in exclude.items()}
@@ -160,6 +168,10 @@ def subset_gisaid_data(
     location_queries=None,
     max_strains=math.inf,
 ):
+    """
+    Selects a small subset of data for exploratory fitting of a small model.
+    This is not used in the final published results.
+    """
     old = gisaid_dataset
     new = old.copy()
 
@@ -213,6 +225,11 @@ def subset_gisaid_data(
 
 
 def load_jhu_data(gisaid_data):
+    """
+    Load case count time series.
+
+    This is used for plotting but is not used for fitting a model.
+    """
     # Load raw JHU case count data.
     us_cases_df = pyrocov.geo.read_csv("time_series_covid19_confirmed_US.csv")
     global_cases_df = pyrocov.geo.read_csv("time_series_covid19_confirmed_global.csv")
@@ -257,35 +274,26 @@ def load_jhu_data(gisaid_data):
     }
 
 
-# TODO carefully experiment with different sources of "slop".
-# Slop in coef.
-# [F]      # done, equivalent to coef
-# [P,F]    # plausible place-dependence on growth rate
-# [T,F]    # plausible strain-dependence on seasonality
-# [T,P,F]  # plausible (place,strain) dependence on seasonality
-#
-# Slop in rate.
-# [S]    # done, subsumed by coef
-# [P,S]  # done, equivalent to biased rate
-#
-# Slop in time or growth (ie add step functions).
-# [T,S]    # implausible coupling of strains across region
-# [T,P,S]  # plausible to account for noise in epidemiological dynamics
-#
-# Slop in logits (only makes sense over S).
-# [S]      # done, subsumed by init
-# [P,S]    # done, equivalent to init
-# [T,S]    # implausible coupling of strains across region
-# [T,P,S]  # tried both LogNormal (ok) and Dirichlet (bad)
 def model(dataset, *, forecast_steps=None):
+    """
+    Bayesian regression model of lineage portions as a function of mutation features.
+
+    This function can be run in two different modes:
+    - During training, ``forecast_steps=None`` and the model is conditioned on
+      observed data.
+    - During prediction (after training), the likelihood statement is omitted
+      and instead a ``probs`` tensor is recorded; this is the predicted lineage
+      portions in each (time, regin) bin.
+    """
+    # Tensor shapes are commented at at the end of some lines.
     features = dataset["features"]
     local_time = dataset["local_time"][..., None]  # [T, P, 1]
     T, P, _ = local_time.shape
     S, F = features.shape
-    if forecast_steps is None:
+    if forecast_steps is None:  # During inference.
         weekly_strains = dataset["weekly_strains"]
         assert weekly_strains.shape == (T, P, S)
-    else:
+    else:  # During prediction.
         T = T + forecast_steps
         t0 = local_time[0]
         dt = local_time[1] - local_time[0]
@@ -320,8 +328,7 @@ def model(dataset, *, forecast_steps=None):
 
         # Assume initial infections depend strongly on strain and place.
         init_loc = pyro.sample(
-            "init_loc",
-            dist.Normal(torch.zeros(S), init_loc_scale).to_event(1),
+            "init_loc", dist.Normal(torch.zeros(S), init_loc_scale).to_event(1)
         )  # [S]
         with pyro.plate("place", P, dim=-1):
             rate = pyro.sample(
@@ -335,17 +342,23 @@ def model(dataset, *, forecast_steps=None):
             with pyro.plate("time", T, dim=-2):
                 logits = init + rate * local_time  # [T, P, S]
 
-                if forecast_steps is None:
+                if forecast_steps is None:  # During inference.
                     pyro.sample(
                         "obs",
                         dist.Multinomial(logits=logits, validate_args=False),
                         obs=weekly_strains,
                     )
-                else:
+                else:  # During prediction.
                     pyro.deterministic("probs", logits.softmax(-1), event_dim=1)
 
 
 class InitLocFn:
+    """
+    Initializer for latent variables.
+
+    This is passed as the ``init_loc_fn`` to guides.
+    """
+
     def __init__(self, dataset):
         # Initialize init.
         init = dataset["weekly_strains"].sum(0)
@@ -365,7 +378,7 @@ class InitLocFn:
             result = getattr(self, name)
             assert result.shape == shape
             return result
-        if name in ("coef_scale", "coef_asymmetry", "init_scale", "init_loc_scale"):
+        if name in ("coef_scale", "init_scale", "init_loc_scale"):
             return torch.ones(shape)
         if name == "logits_scale":
             return torch.full(shape, 0.002)
@@ -378,25 +391,19 @@ class InitLocFn:
         raise ValueError(f"InitLocFn found unhandled site {repr(name)}; please update.")
 
 
-def site_is_global(site):
-    return (
-        site["type"] == "sample"
-        and hasattr(site["fn"], "shape")
-        and site["fn"].shape().numel() == 1
-    )
-
-
 class Guide(AutoGuideList):
+    """
+    Custom guide for large-scale inference.
+
+    This combines a low-rank multivariate normal guide over mutation
+    coefficients with a mean field guide over remaining latent variables.
+    """
+
     def __init__(self, model, init_loc_fn, init_scale, rank):
         super().__init__(model)
 
         # Jointly estimate mutation coefficients and shrinkage.
-        mvn = [
-            "coef_scale",
-            "coef_asymmetry",
-            "coef",
-            "coef_decentered",
-        ]
+        mvn = ["coef_scale", "coef", "coef_decentered"]
         self.append(
             AutoLowRankMultivariateNormal(
                 poutine.block(model, expose=mvn),
@@ -407,7 +414,7 @@ class Guide(AutoGuideList):
         )
         model = poutine.block(model, hide=mvn)
 
-        # Mean-field estimate all remaining sites.
+        # Mean-field estimate all remaining latent variables.
         self.append(AutoNormal(model, init_loc_fn=init_loc_fn, init_scale=init_scale))
 
 
@@ -484,6 +491,9 @@ def fit_svi(
     seed=20210319,
     check_loss=False,
 ):
+    """
+    Fits a variational posterior using stochastic variational inference (SVI).
+    """
     start_time = default_timer()
 
     logger.info(f"Fitting {guide_type} guide via SVI")
@@ -600,6 +610,10 @@ def fit_svi(
 
 @torch.no_grad()
 def log_stats(dataset, result):
+    """
+    Logs statistics of predictions and model fit in the ``result`` of
+    ``fit_svi()``.
+    """
     stats = {}
     stats["loss"] = float(np.median(result["losses"][-100:]))
     mutations = dataset["mutations"]
@@ -680,7 +694,10 @@ def log_stats(dataset, result):
 
 
 @torch.no_grad()
-def log_holdout_stats(fits):
+def log_holdout_stats(fits: dict):
+    """
+    Logs statistics comparing multiple results from ``fit_svi``.
+    """
     assert len(fits) > 1
     fits = list(fits.items())
     stats = {}
