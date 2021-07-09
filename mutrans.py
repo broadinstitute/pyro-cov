@@ -6,7 +6,6 @@ import gc
 import logging
 import os
 import re
-from collections import defaultdict
 
 import pyro
 import torch
@@ -73,7 +72,6 @@ def _fit_filename(name, *args):
 def fit_svi(
     args,
     dataset,
-    model_type="",
     cond_data="",
     guide_type="mvn_dependent",
     n=1001,
@@ -89,7 +87,6 @@ def fit_svi(
 
     result = mutrans.fit_svi(
         dataset,
-        model_type=model_type,
         cond_data=cond_data,
         guide_type=guide_type,
         num_steps=n,
@@ -106,176 +103,6 @@ def fit_svi(
     return result
 
 
-def grid_search(args):
-    grid = []
-
-    # Experiments 1 and 2.
-    # model_type_grid = [
-    #     "-".join(r + b)
-    #     for r in [["reparam"], []]
-    #     for b in [[], ["biased"]]
-    # ]
-    # cond_data_grid = [
-    #     "",
-    #     "coef_scale=0.2",
-    #     "coef_scale=0.1",
-    #     "coef_scale=0.05",
-    #     "coef_scale=0.02",
-    #     "coef_scale=0.01",
-    # ]
-    # grid += [(m, c) for m in model_type_grid for c in cond_data_grid]
-
-    # Experiment 3.
-    # TODO retry after https://github.com/pyro-ppl/pyro/issues/2868
-    # grid += [
-    #     ("reparam-biased", ""),
-    #     ("reparam-biased", "coef_scale=0.02"),
-    #     ("reparam-biased", "coef_scale=0.05"),
-    #     ("reparam-biased", "coef_scale=0.1"),
-    #     ("quantized-reparam-biased", ""),
-    #     ("quantized-reparam-biased", "coef_scale=0.02"),
-    #     ("quantized-reparam-biased", "coef_scale=0.05"),
-    #     ("quantized-reparam-biased", "coef_scale=0.1"),
-    # ]
-
-    # Experiment 4.
-    # model_type_grid = [
-    #     "reparam",
-    #     "reparam-biased",
-    #     "reparam-asymmetric",
-    #     "reparam-asymmetric-biased",
-    # ]
-    # fs_grid = [
-    #     (),
-    #     ("coef_scale=0.1",),
-    #     ("coef_scale=0.03",),
-    #     ("coef_scale=0.01",),
-    #     ("coef_scale=0.003",),
-    #     ("coef_scale=0.001",),
-    # ]
-    # rs_grid = [
-    #     (),
-    #     ("rate_scale=0.1",),
-    #     ("rate_scale=0.03",),
-    #     ("rate_scale=0.01",),
-    # ]
-    # grid += [
-    #     (m, ",".join(f + r))
-    #     for m in model_type_grid
-    #     for r in (rs_grid if "biased" in m else [()])
-    #     for f in fs_grid
-    # ]
-    # grid.append(("reparam-asymmetric", "coef_scale=0.0003"))
-    # grid.append(("reparam-asymmetric", "coef_scale=0.0001"))
-
-    # Experiment 5.
-    # model_type_grid = [
-    #     "reparam",
-    #     "reparam-biased",
-    #     "reparam-asymmetric",
-    #     "reparam-asymmetric-biased",
-    # ]
-    # fs_grid = [
-    #     (),
-    #     ("coef_scale=0.1",),
-    #     ("coef_scale=0.01",),
-    #     ("coef_scale=0.001",),
-    # ]
-    # rs_grid = [
-    #     (),
-    #     ("rate_scale=0.1",),
-    #     ("rate_scale=0.01",),
-    # ]
-    # grid += [
-    #     (m, ",".join(f + r))
-    #     for m in model_type_grid
-    #     for r in (rs_grid if "biased" in m else [()])
-    #     for f in fs_grid
-    # ]
-
-    # Experiment 6.
-    model_type_grid = [
-        "reparam-biased",
-        "reparam-asymmetric-biased",
-    ]
-    fs_grid = [
-        "",
-        "coef_scale=2.0",
-        "coef_scale=1.0",
-        "coef_scale=0.5",
-        "coef_scale=0.2",
-        "coef_scale=0.1",
-        "coef_scale=0.05",
-        "coef_scale=0.02",
-        "coef_scale=0.01",
-    ]
-    grid += [(m, f) for m in model_type_grid for f in fs_grid]
-
-    grid = sorted(set(grid))
-    logger.info(f"Searching over grid of {len(grid)} configurations")
-    holdout_grid = [
-        {},
-        {"include": {"location": "^Europe"}},
-        {"exclude": {"location": "^Europe"}},
-    ]
-    grid_results = defaultdict(dict)
-    with open("results/grid_search.tsv", "wt") as tsv:
-        header = None
-        for model_type, cond_data in grid:
-            results = {}
-            for holdout in holdout_grid:
-                holdout_ = tuple(
-                    (k, tuple(sorted(v.items()))) for k, v in sorted(holdout.items())
-                )
-                config = (
-                    model_type,
-                    cond_data,
-                    args.guide_type,
-                    args.num_steps,
-                    args.learning_rate,
-                    args.learning_rate_decay,
-                    args.clip_norm,
-                    args.rank,
-                    args.forecast_steps,
-                    holdout_,
-                )
-                logger.info(f"Config: {config}")
-                dataset = load_data(args, **holdout)
-                try:
-                    result = fit_svi(args, dataset, *config)
-                except ValueError:
-                    logger.info("Skipping config")
-                    results.clear()
-                    break
-                else:
-                    result["mutations"] = dataset["mutations"]
-                    results[holdout_] = result
-                    if not holdout:
-                        stats = mutrans.log_stats(dataset, result)
-                    grid_results[model_type, cond_data][holdout_] = {
-                        "mutations": dataset["mutations"],
-                        "coef": result["mean"]["coef"].cpu(),
-                    }
-                finally:
-                    del dataset
-                    pyro.clear_param_store()
-                    gc.collect()
-            if not results:
-                continue
-            stats.update(mutrans.log_holdout_stats(results))
-            if header is None:
-                header = ["model_type", "cond_data"] + sorted(stats)
-                tsv.write("\t".join(header) + "\n")
-            tsv.write(
-                "\t".join(
-                    [model_type, cond_data] + [str(v) for k, v in sorted(stats.items())]
-                )
-                + "\n"
-            )
-            tsv.flush()
-    torch.save(grid_results, "results/mutrans.grid.pt")
-
-
 def main(args):
     torch.set_default_dtype(torch.double if args.double else torch.float)
     if args.cuda:
@@ -284,8 +111,6 @@ def main(args):
         )
     if args.debug:
         torch.autograd.set_detect_anomaly(True)
-    if args.grid_search:
-        return grid_search(args)
 
     # Configure fits.
     configs = []
@@ -295,26 +120,9 @@ def main(args):
         for num_steps in grid:
             configs.append(
                 (
-                    args.model_type,
                     args.cond_data,
                     args.guide_type,
                     num_steps,
-                    args.learning_rate,
-                    args.learning_rate_decay,
-                    args.clip_norm,
-                    args.rank,
-                    args.forecast_steps,
-                    empty_holdout,
-                )
-            )
-    elif args.vary_model_type:
-        for model_type in args.vary_model_type.split(","):
-            configs.append(
-                (
-                    model_type,
-                    args.cond_data,
-                    args.guide_type,
-                    args.num_steps,
                     args.learning_rate,
                     args.learning_rate_decay,
                     args.clip_norm,
@@ -327,7 +135,6 @@ def main(args):
         for guide_type in args.vary_guide_type.split(","):
             configs.append(
                 (
-                    args.model_type,
                     args.cond_data,
                     guide_type,
                     args.num_steps,
@@ -359,7 +166,6 @@ def main(args):
             )
             configs.append(
                 (
-                    args.model_type,
                     args.cond_data,
                     args.guide_type,
                     args.num_steps,
@@ -374,7 +180,6 @@ def main(args):
     else:
         configs.append(
             (
-                args.model_type,
                 args.cond_data,
                 args.guide_type,
                 args.num_steps,
@@ -413,12 +218,9 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Fit mutation-transmissibility models")
-    parser.add_argument("--vary-model-type", help="comma delimited list of model types")
     parser.add_argument("--vary-guide-type", help="comma delimited list of guide types")
     parser.add_argument("--vary-num-steps", help="comma delimited list of num_steps")
     parser.add_argument("--vary-holdout", action="store_true")
-    parser.add_argument("--grid-search", action="store_true")
-    parser.add_argument("-m", "--model-type", default="reparam-biased")
     parser.add_argument("-cd", "--cond-data", default="coef_scale=0.5")
     parser.add_argument("-g", "--guide-type", default="custom")
     parser.add_argument("-n", "--num-steps", default=10001, type=int)

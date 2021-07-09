@@ -277,7 +277,7 @@ def load_jhu_data(gisaid_data):
 # [P,S]    # done, equivalent to init
 # [T,S]    # implausible coupling of strains across region
 # [T,P,S]  # tried both LogNormal (ok) and Dirichlet (bad)
-def model(dataset, *, model_type="", forecast_steps=None):
+def model(dataset, *, forecast_steps=None):
     features = dataset["features"]
     local_time = dataset["local_time"][..., None]  # [T, P, 1]
     T, P, _ = local_time.shape
@@ -294,35 +294,25 @@ def model(dataset, *, model_type="", forecast_steps=None):
 
     # Configure reparametrization (which does not affect model density).
     reparam = {}
-    if "reparam" in model_type:
-        local_time = local_time + pyro.param(
-            "local_time", lambda: torch.zeros(P, S)
-        )  # [T, P, S]
-        reparam["coef"] = LocScaleReparam()
-        if "biased" in model_type:
-            reparam["rate"] = LocScaleReparam()
-        reparam["init_loc"] = LocScaleReparam()
-        reparam["init"] = LocScaleReparam()
+    local_time = local_time + pyro.param(
+        "local_time", lambda: torch.zeros(P, S)
+    )  # [T, P, S]
+    reparam["coef"] = LocScaleReparam()
+    reparam["rate"] = LocScaleReparam()
+    reparam["init_loc"] = LocScaleReparam()
+    reparam["init"] = LocScaleReparam()
     with poutine.reparam(config=reparam):
 
         # Sample global random variables.
         coef_scale = pyro.sample("coef_scale", dist.InverseGamma(5e3, 1e2))[..., None]
-        if "asymmetric" in model_type:
-            coef_asymmetry = pyro.sample("coef_asymmetry", dist.LogNormal(0, 1))[
-                ..., None
-            ]
-        if "biased" in model_type:
-            rate_scale = pyro.sample("rate_scale", dist.LogNormal(-4, 2))[..., None]
+        rate_scale = pyro.sample("rate_scale", dist.LogNormal(-4, 2))[..., None]
         init_loc_scale = pyro.sample("init_loc_scale", dist.LogNormal(0, 2))[..., None]
         init_scale = pyro.sample("init_scale", dist.LogNormal(0, 2))[..., None]
 
         # Assume relative growth rate depends strongly on mutations and weakly on place.
         coef_loc = torch.zeros(F)
         coef = pyro.sample(
-            "coef",
-            dist.AsymmetricLaplace(coef_loc, coef_scale, coef_asymmetry).to_event(1)
-            if "asymmetric" in model_type
-            else dist.Logistic(coef_loc, coef_scale).to_event(1),
+            "coef", dist.Logistic(coef_loc, coef_scale).to_event(1)
         )  # [F]
         rate_loc = pyro.deterministic(
             "rate_loc", 0.01 * coef @ features.T, event_dim=1
@@ -334,12 +324,9 @@ def model(dataset, *, model_type="", forecast_steps=None):
             dist.Normal(torch.zeros(S), init_loc_scale).to_event(1),
         )  # [S]
         with pyro.plate("place", P, dim=-1):
-            if "biased" in model_type:
-                rate = pyro.sample(
-                    "rate", dist.Normal(rate_loc, rate_scale).to_event(1)
-                )  # [P, S]
-            else:
-                rate = pyro.deterministic("rate", rate_loc, event_dim=1)  # [S]
+            rate = pyro.sample(
+                "rate", dist.Normal(rate_loc, rate_scale).to_event(1)
+            )  # [P, S]
             init = pyro.sample(
                 "init", dist.Normal(init_loc, init_scale).to_event(1)
             )  # [P, S]
@@ -483,7 +470,6 @@ def predict(
 def fit_svi(
     dataset,
     *,
-    model_type,
     guide_type,
     cond_data={},
     forecast_steps=0,
@@ -500,10 +486,6 @@ def fit_svi(
 ):
     start_time = default_timer()
 
-    if "quantized" in model_type:
-        dataset = dataset.copy()
-        dataset["features"] = dataset["features"].round()
-
     logger.info(f"Fitting {guide_type} guide via SVI")
     pyro.set_rng_seed(seed)
     pyro.clear_param_store()
@@ -512,7 +494,6 @@ def fit_svi(
     # Initialize guide so we can count parameters and register hooks.
     cond_data = {k: torch.as_tensor(v) for k, v in cond_data.items()}
     model_ = poutine.condition(model, cond_data)
-    model_ = functools.partial(model_, model_type=model_type)
     init_loc_fn = InitLocFn(dataset)
     if guide_type == "map":
         guide = AutoDelta(model_, init_loc_fn=init_loc_fn)
