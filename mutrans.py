@@ -100,6 +100,7 @@ def fit_svi(
         forecast_steps=f,
         log_every=args.log_every,
         seed=args.seed,
+        jit=args.jit,
     )
     result["args"] = args
     return result
@@ -470,6 +471,8 @@ if __name__ == "__main__":
         "--cuda", action="store_true", default=torch.cuda.is_available()
     )
     parser.add_argument("--cpu", dest="cuda", action="store_false")
+    parser.add_argument("--jit", action="store_true", default=True)
+    parser.add_argument("--no-jit", dest="jit", action="store_false")
     parser.add_argument("--seed", default=20210319, type=int)
     parser.add_argument("-l", "--log-every", default=50, type=int)
     parser.add_argument("--no-new", action="store_true")
