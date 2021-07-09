@@ -128,9 +128,12 @@ Each sample record includes labels for time, location, PANGO lineage annotation 
 We discarded records with missing time, location, or lineage; 2,161,248 records remained.
 We called mutations using the NextClade tool \cite{aksamentov2020nextclade}, discarding sequences whose alignment quality was not reported as ``good'' (sequences discarded in this step are excluded from the mutation features $X_{sf}$, but are still included in the counts $y_{tps}$), and discarding the seven lineages with fewer than 5 good alignments; 1281 lineages remained.
 Because PANGO lineages are genetically heterogeneous (with small variation within each lineage), we created continuous $[0, 1]$-valued features $X_{sf}$ denoting, for each lineage (``strain'') $s$ and mutation (``feature'') $f$, the portion of samples in that lineage exhibiting the mutation.
-We discarded mutations that did not occur in the majority of samples in any single lineage; 2337 amino acid mutations passed this threshold.
-We binned time intervals into 14-day segments, choosing a multiple of 7 to minimize weekly seasonality, but binning coarser than a week so as to conserve GPU memory; this resulted in 42 time bins.
+We discarded mutations that did not occur in the majority of samples in any single lineage (i.e.~features $f$ with $X_{sf}<\tfrac{1}{2}$ for all $s$); 2337 amino acid mutations passed this threshold.
+We binned time intervals into 14-day segments, choosing a multiple of 7 to minimize weekly seasonality, but binning coarser than a week so as to reduce memory requirements; this resulted in 42 time bins.
 Because sample counts vary widely across GISAID geographic region, we aggregated regions into the following coarse partitions: each country counts as a region, and any first level subregion of a country counts as a region if it has at least 50 samples; otherwise it is aggregated into a whole-country bin.
+%Because sample counts vary widely across GISAID geographic region, we aggregated regions as follows. 
+%By default each country is a region. If, however, any first level subregion of a country has at least 50 samples it is promoted to a region. Conversely
+%subregions with fewer than 50 samples are aggregated into a whole-country bin.
 We dropped regions without samples in at least two different time intervals, resulting in 1070 regions in total.
 
 After preprocessing, the model input data are a $T\times P\times S = 42 \times 1070 \times 1281$ shaped array $y_{tps}\in\mathbb N$ of counts (this array is sparse but it is not sparse along any of its 2-dimensional marginals), and a $S\times F = 1281 \times 2337$ shaped array $X_{sf}\in[0,1]$ of mutation features.
@@ -146,11 +149,12 @@ After preprocessing, the model input data are a $T\times P\times S = 42 \times 1
 % support your modeling choices:
 % https://rss.onlinelibrary.wiley.com/doi/full/10.1111/rssa.12378.
 
-We modeled relative lineage growth with a hierarchical Bayesian regression model with multinomial likelihood.
-Arrays in the model may index over $T{=}42$ time steps $t$, $S{=}1281$ PANGO lineages (``strains'') $s$, $P{=}1070$ regions (``places'') $p$, and $F{=}2337$ amino acid mutations (``features'') $f$.
+We modeled relative lineage growth with a hierarchical Bayesian regression model with a multinomial likelihood.
+Arrays in the model index over one or more indices: $T{=}42$ time steps $t$, $S{=}1281$ PANGO lineages (``strains'') $s$, $P{=}1070$ regions (``places'') $p$, and $F{=}2337$ amino acid mutations (``features'') $f$.
 The model, shown below, regresses lineage counts $y_{tps}\in\mathbb N$ in each time-region-lineage bin against amino acid mutation covariates $X_{sf} \in [0,1]$.
-As this is a Bayesian regression model, variables $y$ and $X$ are observed and all other variables in the model are latent.
-
+The variables $y$ and $X$ are observed and all other variables in the model are latent. Each latent variable is governed by a prior distribution.
+The full model is specified as follows:
+%%%
 \begin{align*}
   \textstyle
   \alpha_s &\sim \operatorname{Normal}(0, \sigma_1) &
@@ -167,35 +171,37 @@ As this is a Bayesian regression model, variables $y$ and $X$ are observed and a
     \sum_s y_{tps},\, \operatorname{softmax}(\alpha_{p\blank} + t\beta_{p\blank}/\tau)_s
   \Bigr)
 \end{align*}
-
+%%%
 The portion of lineages in a single time-region bin is modeled as a Multinomial distribution whose probability parameter is a multivariate logistic growth function $\operatorname{softmax}(\alpha_{p\blank} + t\beta_{p\blank}/\tau)$ with intercept $\alpha_{ps}$ and slope $\beta_{ps}$ in units of generation time $\tau=5.5$ days, where
 $
   \operatorname{softmax}(x)_i = \frac {\exp(x_i)} {\sum_j \exp(x_j)}
 $
 inputs and outputs vectors, and where the dot subscript $\alpha_{p\blank}\in\mathbb R^S$ and $\beta_{p\blank}\in\mathbb R^S$ denote vectors.
-We had originally tried overdispersed likelihoods such as Dirchlet-Multinomial but found that predictions were much more accurate with a Multinomial likelihood and accounting for model misfit by adding hierarchical structure elsewhere in the model.
+Early iterations of the model used overdispersed likelihoods such as Dirichlet-Multinomial to account for additional variability not directly encoded in the generative process.
+However, we found that we can obtain much more accurate model predictions by using a Multinomial likelihood and accounting for model misfit by adding hierarchical structure elsewhere.
 The intercepts $\alpha_{ps}$ denote initial relative log prevalence of lineage $s$ in region $p$; these are modeled hierarchically around global relative log prevalences $\alpha_s$ of each lineage.
 The slopes $\beta_{ps}$ are modeled hierarchically around global per-lineage growth rates $\sum_f \beta_f X_{sf}$ that are linearly regressed against amino acid mutation features $X_{sf}$.
 Note that by regressing against mutations we obviate the need to directly incorporate phylogenetic information into the model: if two lineages are close together in a phylogeny, then their mutation features are likely also similar, so their regressed growth rates will likely be similar.
-Both of these hierarchies $\alpha$ and $\beta$ improved model fit in the presence of heavily skewed observations (e.g. most samples are from the UK, and there is a long tail of sparsely sampled regions).
+By sharing statistical strength in this way we are also able to make more accurate predictions for emergent lineages with few observations.
+Both of these hierarchies $\alpha$ and $\beta$ improved model fit in the presence of heavily skewed observations (e.g.~most samples are from the UK, and there is a long tail of sparsely sampled regions).
 
 We place weak priors on scale parameters $\sigma_1$, $\sigma_2$, and $\sigma_4$.
-We fix the linear regression scale parameter $\sigma_3$ to a small value, forcing the regression problem towards a sparse solution (meaning most observed mutations have little effect on growth rate).
-We chose a Logistic prior on regression coefficients because it is heavier-tailed than a Normal prior, but not so heavy-tailed that the regression problem becomes multimodal (as it would for e.g. a Cauchy or Student's t prior).
+We fix the linear regression scale parameter $\sigma_3$ to a small value, forcing the regression problem towards a sparse solution (i.e.~we assume a priori that most observed mutations have little effect on growth rate).
+We chose a Logistic prior on regression coefficients because it is heavier-tailed than a Normal prior, but not so heavy-tailed that the regression problem becomes multimodal (as it would for e.g.~a Cauchy or Student's t prior).
 Like the Laplace distribution, the Logistic distribution's exponential tails are maximally heavy while ensuring the conditional log density is concave, leading to a conditionally unimodal posterior and robust inference.
 Unlike the Laplace distribution, the Logistic distribution is smooth, with density given by
 $$
-Logistic(x;\mu,s) = \frac {\exp(-\frac{x-\mu}s)}{s(1 + \exp(-\frac{x-\mu}s))^2}.
+\operatorname{Logistic}(x;\mu,s) = \frac {\exp(-\frac{x-\mu}s)}{s(1 + \exp(-\frac{x-\mu}s))^2}.
 $$
 % This small value was chosen to based on 2-fold cross validation.
 
-This proportional-growth model differs from many absolute forecasting models in the literature.
+This proportional-growth model differs from many forecasting models in the literature that are formulated in terms of absolute counts.
 We chose to model relative lineage portion rather than absolute counts because the relative model is robust to a number of sources of bias, including:
-sampling bias across regions (e.g. one region to samples 1000x more than another);
-sampling bias over time (e.g. changing sampling rate over time); and
-change in absolute growth rate of all lineages, in any (time, region) bin (e.g. due to changes in local policies or weather, as long as those changes affect all lineages equally).
+sampling bias across regions (e.g.~one region to samples 1000x more than another);
+sampling bias over time (e.g.~changing sampling rate over time); and
+change in absolute growth rate of all lineages, in any (time, region) bin (e.g.~due to changes in local policies or weather, as long as those changes affect all lineages equally).
 However the model is susceptible to the following sources of bias:
-biased sampling in any (region,time) cell (e.g. sequencing only in case of S-gene target failure); and changes in sampling bias within a single region over time (e.g. a country has a lab in only one city, then spins up a second lab in another distant city with different lineage portions).
+biased sampling in any (region,time) cell (e.g.~sequencing only in case of S-gene target failure); and changes in sampling bias within a single region over time (e.g.~a country has a lab in only one city, then spins up a second lab in another distant city with different lineage portions).
 
 \paragraph*{Probabilistic Inference}
 
@@ -207,12 +213,12 @@ After reparametrizing we model the posterior on the reparametrized linear coeffi
 The low-rank multivariate normal distribution on $\beta_{sf}$ allows inference to capture correlated posterior uncertainty among competing mutations each of which might explain increased growth rate.
 The combined variational distribution has 7,334,172 parameters.
 
-Variational inference was performed for 10,000 iterations with an Adam optimizer with clipped gradients and an exponentially decreasing learning rate schedule and initial learning rates between 0.05 and 0.0025 for different parameter groups.
+Variational inference was performed for 10,000 iterations with the Adam optimizer with clipped gradients and an exponentially decreasing learning rate schedule and initial learning rates between 0.05 and 0.0025 for different parameter groups.
 We initialized model parameters to median prior values with a small amount of noise added to avoid scale parameters collapsing early in training.
 After inference we made predictions by drawing 1000 posterior samples.
 See source code for detailed optimizer and initialization configuration.
 
-Inference and prediction on a single GPU (NVIDIA Tesla P100 with 16GB of ram) took 10 minutes, which was about the same amount of time required to download and preprocess each daily snapshot of data from GISAID.
+Inference and prediction on a single GPU (NVIDIA Tesla P100 with 16GB of RAM) took 10 minutes, which was about the same amount of time required to download and preprocess each daily snapshot of data from GISAID.
 Inference cost is $O((TP+F)S)$ but does not depend directly on the number of genetic samples, since samples are aggregated into counts $y$ of constant shape $T\times P\times S$.
 
 \paragraph*{Validation}
@@ -224,9 +230,9 @@ Restricting to CDC data or CDC's randomly sampled NS3 dataset appears to result 
 
 Our model assumes each single point mutation independently linearly contributes to change in growth rate.
 A natural generalization is to search for groups of mutations that only affect growth rate as a whole.
-To expolore this we fit a similar model of both single and pair mutations, considering only pairs that lie within the same gene.
+To explore this we fit a similar model of both single and pair mutations, considering only pairs that lie within the same gene.
 Fitting this model discovered no pairwise mutations stronger than the top 100 single mutations.
-We suspect the growth rate data is insufficiently strong to discover higher-order interactions between mutations.
+We suspect the growth rate data is underpowered to discover higher-order interactions between mutations.
 
 \bibliography{main}
 
