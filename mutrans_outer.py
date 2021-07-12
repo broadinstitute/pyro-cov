@@ -88,6 +88,7 @@ def fit_svi(
     cn=10.0,
     r=200,
     f=6,
+    end_day=None,
     holdout=(),
 ):
     """
@@ -129,12 +130,11 @@ def main(args):
     # Configure fits.
     configs = []
     empty_holdout = ()
+    empty_end_day = None
     
     if args.vary_num_steps:
         grid = sorted(int(n) for n in args.vary_num_steps.split(","))
         for num_steps in grid:
-            holdout = empty_holdout
-            holdout_rendered = {k: dict(v) for k, v in holdout}
             configs.append(
                 (
                     args.cond_data,
@@ -145,13 +145,12 @@ def main(args):
                     args.clip_norm,
                     args.rank,
                     args.forecast_steps,
-                    holdout_rendered,
+                    empty_end_day,
+                    empty_holdout,
                 )
             )
     elif args.vary_guide_type:
         for guide_type in args.vary_guide_type.split(","):
-            holdout = empty_holdout
-            holdout_rendered = {k: dict(v) for k, v in holdout}
             configs.append(
                 (
                     args.cond_data,
@@ -162,7 +161,8 @@ def main(args):
                     args.clip_norm,
                     args.rank,
                     args.forecast_steps,
-                    holdout_rendered,
+                    None,
+                    empty_holdout,
                 )
             )
     elif args.vary_holdout:
@@ -183,7 +183,6 @@ def main(args):
             holdout = tuple(
                 (k, tuple(sorted(v.items()))) for k, v in sorted(holdout.items())
             )
-            holdout_rendered = {k: dict(v) for k, v in holdout}
             configs.append(
                 (
                     args.cond_data,
@@ -194,14 +193,11 @@ def main(args):
                     args.clip_norm,
                     args.rank,
                     args.forecast_steps,
-                    holdout_rendered,
+                    None,
+                    holdout,
                 )
             )
     elif args.backtesting_max_day:
-        print(f"Backtesting")
-        
-        holdout_rendered = {"end_day": args.backtesting_max_day}
-        
         configs.append(
             (
                 args.cond_data,
@@ -212,13 +208,11 @@ def main(args):
                 args.clip_norm,
                 args.rank,
                 args.forecast_steps,
-                holdout_rendered,
+                args.backtesting_max_day,
+                empty_holdout,
             )
         )
-
     else:
-        holdout = empty_holdout
-        holdout_rendered = {k: dict(v) for k, v in holdout}
         configs.append(
             (
                 args.cond_data,
@@ -229,7 +223,8 @@ def main(args):
                 args.clip_norm,
                 args.rank,
                 args.forecast_steps,
-                holdout_rendered,
+                None,
+                empty_holdout,
             )
         )
 
@@ -239,9 +234,13 @@ def main(args):
         logger.info(f"Config: {config}")
                
         # Holdout is the last in the config
-        #holdout = {k: dict(v) for k, v in config[-1]}
-        holdout = config[-1]
-        dataset = load_data(args, **holdout)
+        holdout = {k: dict(v) for k, v in config[-1]}
+        end_day = config[-2]
+
+        dataset = load_data(args, end_day = end_day, **holdout)
+        
+        # remove the end day from the config
+        #config_svi = config[:-2]+config[-1:]
         
         # Run the fit
         result = fit_svi(args, dataset, *config)
