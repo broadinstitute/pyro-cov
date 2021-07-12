@@ -182,7 +182,7 @@ def load_gisaid_data(
         f"(dropped {len(lineages) - int(weekly_strains.sum())})"
     )
 
-    # Filter regions
+    # Filter regions.
     num_times_observed = (weekly_strains > 0).max(2).values.sum(0)
     ok_regions = (num_times_observed >= 2).nonzero(as_tuple=True)[0]
     ok_region_set = set(ok_regions.tolist())
