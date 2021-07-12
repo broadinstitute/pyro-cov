@@ -65,55 +65,90 @@ def load_gisaid_data(
     device="cpu",
     include={},
     exclude={},
+    end_day=None,
+    gisaid_columns_filename="results/gisaid.columns.pkl",
+    nextclade_features_filename="results/nextclade.features.pt",
 ):
     """
-    Loads the two files
-    - ``results/gisaid.columns.pkl`` and
-    - ``results/nextclade.features.pt``
-
-    This converts the input data to PyTorch tensors and truncates according to
+    Loads the two files gisaid_columns_filename and nextclade_features_filename,
+    converts teh input to PyTorch tensors and truncates the data according to
     ``include`` and ``exclude``.
+    
+    Keyword arguments:
+    device -- torch device to use
+    include -- 
+    exclude --
+    end_day -- last day to include
+    gisaid_columns_filename --
+    nextclade_features_filename --
     """
     logger.info("Loading data")
+    
+    if end_day:
+        logger.info(f"Load_gisaid_data end_day {end_day}")
+    
+    # Precompile regex for including/excluding
     include = {k: re.compile(v) for k, v in include.items()}
     exclude = {k: re.compile(v) for k, v in exclude.items()}
-    with open("results/gisaid.columns.pkl", "rb") as f:
+    
+    # Load ``gisaid_columns_filename``
+    with open(gisaid_columns_filename, "rb") as f:
         columns = pickle.load(f)
+        
     logger.info("Training on {} rows with columns:".format(len(columns["day"])))
     logger.info(", ".join(columns.keys()))
+    
+    # Filter regions to at least 50 sample and aggregate rest to country level
     fine_regions = get_fine_regions(columns)
 
     # Filter features into numbers of mutations.
-    aa_features = torch.load("results/nextclade.features.pt")
+    aa_features = torch.load(nextclade_features_filename)
     mutations = aa_features["mutations"]
     features = aa_features["features"].to(
         device=device, dtype=torch.get_default_dtype()
     )
+    
     keep = [m.count(",") == 0 for m in mutations]
     mutations = [m for k, m in zip(keep, mutations) if k]
     features = features[:, keep]
     logger.info("Loaded {} feature matrix".format(" x ".join(map(str, features.shape))))
 
-    # Aggregate regions.
+    # Aggregate regions
+    
+    # Get lineages 
     lineages = list(map(pangolin.compress, columns["lineage"]))
     lineage_id_inv = list(map(pangolin.compress, aa_features["lineages"]))
     lineage_id = {k: i for i, k in enumerate(lineage_id_inv)}
+    
     sparse_data = Counter()
     location_id = OrderedDict()
+    
+    # Set of lineages that are skipped
     skipped = set()
+    
+    # Generate sparse_data
     for virus_name, day, location, lineage in zip(
         columns["virus_name"], columns["day"], columns["location"], lineages
     ):
-        row = {"virus_name": virus_name, "location": location}
+        row = {"virus_name": virus_name, "location": location, "day": day}
         if lineage not in lineage_id:
             if lineage not in skipped:
                 skipped.add(lineage)
                 logger.warning(f"WARNING skipping unsampled lineage {lineage}")
             continue
+        
+        # Filter by include/exclude
         if not all(v.search(row[k]) for k, v in include.items()):
             continue
         if any(v.search(row[k]) for k, v in exclude.items()):
             continue
+        
+        # Filter by day
+        if end_day is not None:
+            if (day > end_day):
+                continue
+        
+        # preprocess parts
         parts = location.split("/")
         if len(parts) < 2:
             continue
@@ -121,23 +156,30 @@ def load_gisaid_data(
         if len(parts) == 3 and parts not in fine_regions:
             parts = parts[:2]
         location = " / ".join(parts)
+        
         p = location_id.setdefault(location, len(location_id))
         s = lineage_id[lineage]
         t = day // TIMESTEP
         sparse_data[t, p, s] += 1
 
+    # Generate weekly_strains tensor from sparse_data
     T = 1 + max(columns["day"]) // TIMESTEP
     P = len(location_id)
     S = len(lineage_id)
     weekly_strains = torch.zeros(T, P, S)
     for (t, p, s), n in sparse_data.items():
         weekly_strains[t, p, s] = n
+    
+    logger.info(
+        f"Dataset size [T x P x S] {T} x {P} x {S}")
+    quit()
+    
     logger.info(
         f"Keeping {int(weekly_strains.sum())}/{len(lineages)} rows "
         f"(dropped {len(lineages) - int(weekly_strains.sum())})"
     )
 
-    # Filter regions.
+    # Filter regions
     num_times_observed = (weekly_strains > 0).max(2).values.sum(0)
     ok_regions = (num_times_observed >= 2).nonzero(as_tuple=True)[0]
     ok_region_set = set(ok_regions.tolist())

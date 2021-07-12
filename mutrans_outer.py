@@ -58,7 +58,7 @@ def _load_data_filename(args, **kwargs):
     return "results/mutrans.{}.pt".format(".".join(parts))
 
 
-@cached(_load_data_filename)
+#@cached(_load_data_filename)
 def load_data(args, **kwargs):
     """
     Cached wrapper to load GISAID data.
@@ -115,6 +115,9 @@ def fit_svi(
 
 
 def main(args):
+    """Main Entry Point"""
+    
+    # Torch configuration
     torch.set_default_dtype(torch.double if args.double else torch.float)
     if args.cuda:
         torch.set_default_tensor_type(
@@ -126,9 +129,12 @@ def main(args):
     # Configure fits.
     configs = []
     empty_holdout = ()
+    
     if args.vary_num_steps:
         grid = sorted(int(n) for n in args.vary_num_steps.split(","))
         for num_steps in grid:
+            holdout = empty_holdout
+            holdout_rendered = {k: dict(v) for k, v in holdout}
             configs.append(
                 (
                     args.cond_data,
@@ -139,11 +145,13 @@ def main(args):
                     args.clip_norm,
                     args.rank,
                     args.forecast_steps,
-                    empty_holdout,
+                    holdout_rendered,
                 )
             )
     elif args.vary_guide_type:
         for guide_type in args.vary_guide_type.split(","):
+            holdout = empty_holdout
+            holdout_rendered = {k: dict(v) for k, v in holdout}
             configs.append(
                 (
                     args.cond_data,
@@ -154,7 +162,7 @@ def main(args):
                     args.clip_norm,
                     args.rank,
                     args.forecast_steps,
-                    empty_holdout,
+                    holdout_rendered,
                 )
             )
     elif args.vary_holdout:
@@ -175,6 +183,7 @@ def main(args):
             holdout = tuple(
                 (k, tuple(sorted(v.items()))) for k, v in sorted(holdout.items())
             )
+            holdout_rendered = {k: dict(v) for k, v in holdout}
             configs.append(
                 (
                     args.cond_data,
@@ -185,10 +194,14 @@ def main(args):
                     args.clip_norm,
                     args.rank,
                     args.forecast_steps,
-                    holdout,
+                    holdout_rendered,
                 )
             )
-    else:
+    elif args.backtesting_max_day:
+        print(f"Backtesting")
+        
+        holdout_rendered = {"end_day": args.backtesting_max_day}
+        
         configs.append(
             (
                 args.cond_data,
@@ -199,7 +212,24 @@ def main(args):
                 args.clip_norm,
                 args.rank,
                 args.forecast_steps,
-                empty_holdout,
+                holdout_rendered,
+            )
+        )
+
+    else:
+        holdout = empty_holdout
+        holdout_rendered = {k: dict(v) for k, v in holdout}
+        configs.append(
+            (
+                args.cond_data,
+                args.guide_type,
+                args.num_steps,
+                args.learning_rate,
+                args.learning_rate_decay,
+                args.clip_norm,
+                args.rank,
+                args.forecast_steps,
+                holdout_rendered,
             )
         )
 
@@ -207,14 +237,22 @@ def main(args):
     results = {}
     for config in configs:
         logger.info(f"Config: {config}")
-        holdout = {k: dict(v) for k, v in config[-1]}
+               
+        # Holdout is the last in the config
+        #holdout = {k: dict(v) for k, v in config[-1]}
+        holdout = config[-1]
         dataset = load_data(args, **holdout)
+        
+        # Run the fit
         result = fit_svi(args, dataset, *config)
         mutrans.log_stats(dataset, result)
+        
+        # Save the results for this config
         result["mutations"] = dataset["mutations"]
         result = torch_map(result, device="cpu", dtype=torch.float)  # to save space
         results[config] = result
 
+        # Cleanup
         del dataset
         pyro.clear_param_store()
         gc.collect()
@@ -245,6 +283,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--cuda", action="store_true", default=torch.cuda.is_available()
     )
+    parser.add_argument("--backtesting-max-day", default=None, type=int)
     parser.add_argument("--cpu", dest="cuda", action="store_false")
     parser.add_argument("--jit", action="store_true", default=False)
     parser.add_argument("--no-jit", dest="jit", action="store_false")
