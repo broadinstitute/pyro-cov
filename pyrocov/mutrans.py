@@ -85,7 +85,7 @@ def load_gisaid_data(
     logger.info("Loading data")
     
     if end_day:
-        logger.info(f"Load_gisaid_data end_day {end_day}")
+        logger.info(f"Load gisaid data end_day: {end_day}")
     
     # Precompile regex for including/excluding
     include = {k: re.compile(v) for k, v in include.items()}
@@ -163,7 +163,11 @@ def load_gisaid_data(
         sparse_data[t, p, s] += 1
 
     # Generate weekly_strains tensor from sparse_data
-    T = 1 + max(columns["day"]) // TIMESTEP
+    if end_day is not None:
+        T = 1 + end_day // TIMESTEP
+    else:
+        T = 1 + max(columns["day"]) // TIMESTEP
+    
     P = len(location_id)
     S = len(lineage_id)
     weekly_strains = torch.zeros(T, P, S)
