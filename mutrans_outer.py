@@ -58,7 +58,7 @@ def _load_data_filename(args, **kwargs):
     return "results/mutrans.{}.pt".format(".".join(parts))
 
 
-#@cached(_load_data_filename)
+@cached(_load_data_filename)
 def load_data(args, **kwargs):
     """
     Cached wrapper to load GISAID data.
@@ -161,7 +161,7 @@ def main(args):
                     args.clip_norm,
                     args.rank,
                     args.forecast_steps,
-                    None,
+                    empty_end_day,
                     empty_holdout,
                 )
             )
@@ -193,7 +193,7 @@ def main(args):
                     args.clip_norm,
                     args.rank,
                     args.forecast_steps,
-                    None,
+                    empty_end_day,
                     holdout,
                 )
             )
@@ -223,7 +223,7 @@ def main(args):
                 args.clip_norm,
                 args.rank,
                 args.forecast_steps,
-                None,
+                empty_end_day,
                 empty_holdout,
             )
         )
@@ -235,8 +235,10 @@ def main(args):
                
         # Holdout is the last in the config
         holdout = {k: dict(v) for k, v in config[-1]}
+        # end_day is second from last
         end_day = config[-2]
-
+        
+        # load dataset
         dataset = load_data(args, end_day = end_day, **holdout)
         
         # remove the end day from the config
