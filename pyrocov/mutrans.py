@@ -172,7 +172,6 @@ def load_gisaid_data(
     
     logger.info(
         f"Dataset size [T x P x S] {T} x {P} x {S}")
-    quit()
     
     logger.info(
         f"Keeping {int(weekly_strains.sum())}/{len(lineages)} rows "
