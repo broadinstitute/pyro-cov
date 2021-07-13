@@ -182,6 +182,13 @@ Early iterations of the model used overdispersed likelihoods such as Dirichlet-M
 However, we found that we can obtain much more accurate model predictions by using a Multinomial likelihood and accounting for model misfit by adding hierarchical structure elsewhere.
 The intercepts $\alpha_{ps}$ denote initial relative log prevalence of lineage $s$ in region $p$; these are modeled hierarchically around global relative log prevalences $\alpha_s$ of each lineage.
 The slopes $\beta_{ps}$ are modeled hierarchically around global per-lineage growth rates $\sum_f \beta_f X_{sf}$ that are linearly regressed against amino acid mutation features $X_{sf}$.
+These linear coefficients $\beta_f$ can be directly interpreted as the effect of a mutation on a lineage's growth rate, all other variation being equal.
+In figures we plot ${\mathbb E\left[\beta_f\right] =\hspace{-0.1ex}: \Delta\log R}$ as an estimate of effect size and plot the z score
+${
+  |\mathbb E\left[\beta_f\right]| / \sqrt{\mathbb V\left[\beta_f\right]} =\hspace{-0.1ex}: |\mu|/\sigma
+}$
+as a proxy for statistical significance.
+
 Note that by regressing against mutations we obviate the need to directly incorporate phylogenetic information into the model: if two lineages are close together in a phylogeny, then their mutation features are likely also similar, so their regressed growth rates will likely be similar.
 By sharing statistical strength in this way we are also able to make more accurate predictions for emergent lineages with few observations.
 Both of these hierarchies in $\alpha$ and $\beta$ improve model fit in the presence of heavily skewed observations (e.g.~most samples are from the UK, and there is a long tail of sparsely sampled regions).
