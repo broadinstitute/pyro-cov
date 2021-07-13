@@ -73,31 +73,31 @@ def load_gisaid_data(
     Loads the two files gisaid_columns_filename and nextclade_features_filename,
     converts teh input to PyTorch tensors and truncates the data according to
     ``include`` and ``exclude``.
-    
+
     Keyword arguments:
     device -- torch device to use
-    include -- 
+    include --
     exclude --
     end_day -- last day to include
     gisaid_columns_filename --
     nextclade_features_filename --
     """
     logger.info("Loading data")
-    
+
     if end_day:
         logger.info(f"Load gisaid data end_day: {end_day}")
-    
+
     # Precompile regex for including/excluding
     include = {k: re.compile(v) for k, v in include.items()}
     exclude = {k: re.compile(v) for k, v in exclude.items()}
-    
+
     # Load ``gisaid_columns_filename``
     with open(gisaid_columns_filename, "rb") as f:
         columns = pickle.load(f)
-        
+
     logger.info("Training on {} rows with columns:".format(len(columns["day"])))
     logger.info(", ".join(columns.keys()))
-    
+
     # Filter regions to at least 50 sample and aggregate rest to country level
     fine_regions = get_fine_regions(columns)
 
@@ -107,25 +107,25 @@ def load_gisaid_data(
     features = aa_features["features"].to(
         device=device, dtype=torch.get_default_dtype()
     )
-    
+
     keep = [m.count(",") == 0 for m in mutations]
     mutations = [m for k, m in zip(keep, mutations) if k]
     features = features[:, keep]
     logger.info("Loaded {} feature matrix".format(" x ".join(map(str, features.shape))))
 
     # Aggregate regions
-    
-    # Get lineages 
+
+    # Get lineages
     lineages = list(map(pangolin.compress, columns["lineage"]))
     lineage_id_inv = list(map(pangolin.compress, aa_features["lineages"]))
     lineage_id = {k: i for i, k in enumerate(lineage_id_inv)}
-    
+
     sparse_data = Counter()
     location_id = OrderedDict()
-    
+
     # Set of lineages that are skipped
     skipped = set()
-    
+
     # Generate sparse_data
     for virus_name, day, location, lineage in zip(
         columns["virus_name"], columns["day"], columns["location"], lineages
@@ -136,18 +136,18 @@ def load_gisaid_data(
                 skipped.add(lineage)
                 logger.warning(f"WARNING skipping unsampled lineage {lineage}")
             continue
-        
+
         # Filter by include/exclude
         if not all(v.search(row[k]) for k, v in include.items()):
             continue
         if any(v.search(row[k]) for k, v in exclude.items()):
             continue
-        
+
         # Filter by day
         if end_day is not None:
-            if (day > end_day):
+            if day > end_day:
                 continue
-        
+
         # preprocess parts
         parts = location.split("/")
         if len(parts) < 2:
@@ -156,7 +156,7 @@ def load_gisaid_data(
         if len(parts) == 3 and parts not in fine_regions:
             parts = parts[:2]
         location = " / ".join(parts)
-        
+
         p = location_id.setdefault(location, len(location_id))
         s = lineage_id[lineage]
         t = day // TIMESTEP
@@ -167,16 +167,15 @@ def load_gisaid_data(
         T = 1 + end_day // TIMESTEP
     else:
         T = 1 + max(columns["day"]) // TIMESTEP
-    
+
     P = len(location_id)
     S = len(lineage_id)
     weekly_strains = torch.zeros(T, P, S)
     for (t, p, s), n in sparse_data.items():
         weekly_strains[t, p, s] = n
-    
-    logger.info(
-        f"Dataset size [T x P x S] {T} x {P} x {S}")
-    
+
+    logger.info(f"Dataset size [T x P x S] {T} x {P} x {S}")
+
     logger.info(
         f"Keeping {int(weekly_strains.sum())}/{len(lineages)} rows "
         f"(dropped {len(lineages) - int(weekly_strains.sum())})"

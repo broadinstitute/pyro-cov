@@ -117,7 +117,7 @@ def fit_svi(
 
 def main(args):
     """Main Entry Point"""
-    
+
     # Torch configuration
     torch.set_default_dtype(torch.double if args.double else torch.float)
     if args.cuda:
@@ -131,7 +131,7 @@ def main(args):
     configs = []
     empty_holdout = ()
     empty_end_day = None
-    
+
     if args.vary_num_steps:
         grid = sorted(int(n) for n in args.vary_num_steps.split(","))
         for num_steps in grid:
@@ -232,19 +232,19 @@ def main(args):
     results = {}
     for config in configs:
         logger.info(f"Config: {config}")
-               
+
         # Holdout is the last in the config
         holdout = {k: dict(v) for k, v in config[-1]}
         # end_day is second from last
         end_day = config[-2]
-        
+
         # load dataset
-        dataset = load_data(args, end_day = end_day, **holdout)
-        
+        dataset = load_data(args, end_day=end_day, **holdout)
+
         # Run the fit
         result = fit_svi(args, dataset, *config)
         mutrans.log_stats(dataset, result)
-        
+
         # Save the results for this config
         result["mutations"] = dataset["mutations"]
         result = torch_map(result, device="cpu", dtype=torch.float)  # to save space
