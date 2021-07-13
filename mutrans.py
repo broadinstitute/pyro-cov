@@ -26,11 +26,14 @@ def cached(filename: Union[str, Callable]):
     def decorator(fn):
         @functools.wraps(fn)
         def cached_fn(*args, **kwargs):
+            base_args = args[0]
+            if base_args.no_cache:
+                return fn(*args, **kwargs)
             f = filename(*args, **kwargs) if callable(filename) else filename
             if os.path.exists(f):
                 logger.info(f"loading cached {f}")
                 return torch.load(f, map_location=torch.empty(()).device)
-            if args[0].no_new:
+            if base_args.no_new:
                 raise ValueError(f"Missing {f}")
             result = fn(*args, **kwargs)
             if not args[0].test:
@@ -110,6 +113,7 @@ def fit_svi(
         log_every=args.log_every,
         seed=args.seed,
         jit=args.jit,
+        num_samples=args.num_samples,
     )
     result["args"] = args
     return result
@@ -271,6 +275,7 @@ if __name__ == "__main__":
     parser.add_argument("-cd", "--cond-data", default="coef_scale=0.5")
     parser.add_argument("-g", "--guide-type", default="custom")
     parser.add_argument("-n", "--num-steps", default=10001, type=int)
+    parser.add_argument("-s", "--num-samples", default=1000, type=int)
     parser.add_argument("-lr", "--learning-rate", default=0.05, type=float)
     parser.add_argument("-lrd", "--learning-rate-decay", default=0.1, type=float)
     parser.add_argument("-cn", "--clip-norm", default=10.0, type=float)
@@ -281,13 +286,14 @@ if __name__ == "__main__":
     parser.add_argument(
         "--cuda", action="store_true", default=torch.cuda.is_available()
     )
-    parser.add_argument("--backtesting-max-day", default=None, type=int)
+    parser.add_argument("-b", "--backtesting-max-day", default=None, type=int)
     parser.add_argument("--cpu", dest="cuda", action="store_false")
     parser.add_argument("--jit", action="store_true", default=False)
     parser.add_argument("--no-jit", dest="jit", action="store_false")
     parser.add_argument("--seed", default=20210319, type=int)
     parser.add_argument("-l", "--log-every", default=50, type=int)
     parser.add_argument("--no-new", action="store_true")
+    parser.add_argument("--no-cache", action="store_true")
     parser.add_argument("--test", action="store_true")
     parser.add_argument("--debug", action="store_true")
     args = parser.parse_args()
