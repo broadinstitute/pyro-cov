@@ -241,9 +241,6 @@ def main(args):
         # load dataset
         dataset = load_data(args, end_day = end_day, **holdout)
         
-        # remove the end day from the config
-        #config_svi = config[:-2]+config[-1:]
-        
         # Run the fit
         result = fit_svi(args, dataset, *config)
         mutrans.log_stats(dataset, result)
