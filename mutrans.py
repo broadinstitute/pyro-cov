@@ -254,7 +254,6 @@ def main(args):
 
         # Save the results for this config
         result["mutations"] = dataset["mutations"]
-        #result["weekly_cases"] = dataset["weekly_cases"]
         result["weekly_strains_shape"] = tuple(dataset["weekly_strains"].shape)
         result = torch_map(result, device="cpu", dtype=torch.float)  # to save space
         results[config] = result
