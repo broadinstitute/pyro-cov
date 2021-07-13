@@ -58,6 +58,7 @@ def _load_data_filename(args, **kwargs):
         parts.append(f"I{k}={_safe_str(v)}")
     for k, v in sorted(kwargs.get("exclude", {}).items()):
         parts.append(f"E{k}={_safe_str(v)}")
+    parts.append(str(kwargs.get("end_day")))
     return "results/mutrans.{}.pt".format(".".join(parts))
 
 
