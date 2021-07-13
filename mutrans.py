@@ -88,6 +88,7 @@ def fit_svi(
     cn=10.0,
     r=200,
     f=6,
+    end_day=None,
     holdout=(),
 ):
     """
@@ -115,6 +116,9 @@ def fit_svi(
 
 
 def main(args):
+    """Main Entry Point"""
+    
+    # Torch configuration
     torch.set_default_dtype(torch.double if args.double else torch.float)
     if args.cuda:
         torch.set_default_tensor_type(
@@ -126,6 +130,8 @@ def main(args):
     # Configure fits.
     configs = []
     empty_holdout = ()
+    empty_end_day = None
+    
     if args.vary_num_steps:
         grid = sorted(int(n) for n in args.vary_num_steps.split(","))
         for num_steps in grid:
@@ -139,6 +145,7 @@ def main(args):
                     args.clip_norm,
                     args.rank,
                     args.forecast_steps,
+                    empty_end_day,
                     empty_holdout,
                 )
             )
@@ -154,6 +161,7 @@ def main(args):
                     args.clip_norm,
                     args.rank,
                     args.forecast_steps,
+                    empty_end_day,
                     empty_holdout,
                 )
             )
@@ -185,9 +193,25 @@ def main(args):
                     args.clip_norm,
                     args.rank,
                     args.forecast_steps,
+                    empty_end_day,
                     holdout,
                 )
             )
+    elif args.backtesting_max_day:
+        configs.append(
+            (
+                args.cond_data,
+                args.guide_type,
+                args.num_steps,
+                args.learning_rate,
+                args.learning_rate_decay,
+                args.clip_norm,
+                args.rank,
+                args.forecast_steps,
+                args.backtesting_max_day,
+                empty_holdout,
+            )
+        )
     else:
         configs.append(
             (
@@ -199,6 +223,7 @@ def main(args):
                 args.clip_norm,
                 args.rank,
                 args.forecast_steps,
+                empty_end_day,
                 empty_holdout,
             )
         )
@@ -207,14 +232,25 @@ def main(args):
     results = {}
     for config in configs:
         logger.info(f"Config: {config}")
+               
+        # Holdout is the last in the config
         holdout = {k: dict(v) for k, v in config[-1]}
-        dataset = load_data(args, **holdout)
+        # end_day is second from last
+        end_day = config[-2]
+        
+        # load dataset
+        dataset = load_data(args, end_day = end_day, **holdout)
+        
+        # Run the fit
         result = fit_svi(args, dataset, *config)
         mutrans.log_stats(dataset, result)
+        
+        # Save the results for this config
         result["mutations"] = dataset["mutations"]
         result = torch_map(result, device="cpu", dtype=torch.float)  # to save space
         results[config] = result
 
+        # Cleanup
         del dataset
         pyro.clear_param_store()
         gc.collect()
@@ -245,6 +281,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--cuda", action="store_true", default=torch.cuda.is_available()
     )
+    parser.add_argument("--backtesting-max-day", default=None, type=int)
     parser.add_argument("--cpu", dest="cuda", action="store_false")
     parser.add_argument("--jit", action="store_true", default=False)
     parser.add_argument("--no-jit", dest="jit", action="store_false")
