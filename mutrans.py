@@ -203,20 +203,22 @@ def main(args):
                 )
             )
     elif args.backtesting_max_day:
-        configs.append(
-            (
-                args.cond_data,
-                args.guide_type,
-                args.num_steps,
-                args.learning_rate,
-                args.learning_rate_decay,
-                args.clip_norm,
-                args.rank,
-                args.forecast_steps,
-                args.backtesting_max_day,
-                empty_holdout,
+        for max_day in args.backtesting_max_day.split(","):
+            max_day = int(max_day)
+            configs.append(
+                (
+                    args.cond_data,
+                    args.guide_type,
+                    args.num_steps,
+                    args.learning_rate,
+                    args.learning_rate_decay,
+                    args.clip_norm,
+                    args.rank,
+                    args.forecast_steps,
+                    max_day,
+                    empty_holdout,
+                )
             )
-        )
     else:
         configs.append(
             (
@@ -252,6 +254,8 @@ def main(args):
 
         # Save the results for this config
         result["mutations"] = dataset["mutations"]
+        #result["weekly_cases"] = dataset["weekly_cases"]
+        result["weekly_strains_shape"] = tuple(dataset["weekly_strains"].shape)
         result = torch_map(result, device="cpu", dtype=torch.float)  # to save space
         results[config] = result
 
@@ -287,7 +291,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--cuda", action="store_true", default=torch.cuda.is_available()
     )
-    parser.add_argument("-b", "--backtesting-max-day", default=None, type=int)
+    parser.add_argument("-b", "--backtesting-max-day", default=None)
     parser.add_argument("--cpu", dest="cuda", action="store_false")
     parser.add_argument("--jit", action="store_true", default=False)
     parser.add_argument("--no-jit", dest="jit", action="store_false")
