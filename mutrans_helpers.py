@@ -24,7 +24,6 @@ def plusminus(mean, std):
 def generate_forecast(fit, queries=None, num_strains=10):
     """Generate forecasts for specified fit
     
-    #sphinx format 
     :param dict fit: the model fit
     :param weekly_cases: aggregate
     -- 
@@ -91,8 +90,18 @@ def generate_forecast(fit, queries=None, num_strains=10):
     return forecast
 
 def plot_forecast(forecast, filename=None, plot_relative_cases=True, plot_relative_samples=True, plot_observed=True, plot_fit=True, plot_fit_ci=True):
-    """Plot a forecast generated from the model"""
+    """Plot a forecast generated from the model
     
+    :param forecast: forecast results from generate forecast function
+    :param filename: name of file to save output graphic
+    :param plot_relative_cases: flag for plotting relative cases
+    :param plot_relative_samples: flag for plotting relavtive saples
+    :param plot_observed: flag for plotting observed values
+    :param plot_fit: flag for plotting the fit
+    :param plot_fit_ci: flag for plotting the fit CIs
+    """
+    
+    # get the data from the input forecast
     queries = forecast['queries']
     date_range = forecast['date_range']
     strain_ids = forecast['strain_ids']
@@ -102,7 +111,7 @@ def plot_forecast(forecast, filename=None, plot_relative_cases=True, plot_relati
     weekly_strains = forecast['weekly_strains'] # T x P x S
     lineage_id_inv = forecast['lineage_id_inv']
     
-    num_strains = forecast1['strain_ids'].shape[0]
+    num_strains = forecast['strain_ids'].shape[-1]
     
     # generate figure and axes -- one axes per query
     fig, axes = plt.subplots(len(queries), figsize=(8, 1.5 + 2 * len(queries)), sharex=True)
@@ -137,16 +146,18 @@ def plot_forecast(forecast, filename=None, plot_relative_cases=True, plot_relati
             counts /= counts.max()
             ax.plot(dates[:len(counts)], counts, "k--", color=light, lw=1, zorder=-20)
 
-        # .sum(-2) sums over regions
+        # Calculate the predicted values for the specified regions
         pred = predicted.index_select(-2, ids).sum(-2)
         pred /= pred[1].sum(-1, True).clamp_(min=1e-8)
         
+        # Calculate the observed values
         obs = weekly_strains[:, ids].sum(1)
         obs /= obs.sum(-1, True).clamp_(min=1e-9)
         
         # Plot individual strains
         for s, color in zip(strain_ids, colors):
             lb, mean, ub = pred[..., s]
+
             
             if plot_fit:
                 if plot_fit_ci:
@@ -192,3 +203,71 @@ def plot_forecast(forecast, filename=None, plot_relative_cases=True, plot_relati
     
     if filename:
         plt.savefig(filename)
+        
+def get_forecast_values(forecast):
+    """Calculate forecast values for strains
+   
+    :param forecast: forecast return values from generate_forecast()
+    
+    """
+
+    # get the data from the input forecast
+    queries = forecast['queries']
+    date_range = forecast['date_range']
+    strain_ids = forecast['strain_ids']
+    predicted = forecast['predicted']
+    location_id = forecast['location_id']
+    weekly_cases = forecast['weekly_cases'] # T x P
+    weekly_strains = forecast['weekly_strains'] # T x P x S
+    lineage_id_inv = forecast['lineage_id_inv']
+
+    logging.debug(f"predicted shape {predicted.shape}")
+    logging.debug(f"queries length {len(queries)}")
+    logging.debug(f"weekly_cases shape {tuple(weekly_cases.shape)}")
+    logging.debug(f"weekly_strains shape {tuple(weekly_strains.shape)}")
+
+    # Determine output tensor shapes
+    logging.info("Generating output tensor")
+    predicted_shape = list(predicted.shape)
+
+    output_tensor_shape = predicted_shape
+    # remove the place dimension as we will be summing over that
+    del output_tensor_shape[-2]
+    # append a leftmost dim for each query
+    output_tensor_shape.insert(0, len(queries))
+
+    logging.debug(f"Output tensor shape: {output_tensor_shape}")
+
+    # Generate output tensors
+    output_predicted = torch.zeros(output_tensor_shape)
+    output_observed = torch.zeros(output_tensor_shape)
+
+    # Process each query
+    for k, query in enumerate(queries):
+        logging.info(f"--- Processing query {k}")
+        ids = torch.tensor([i for name, i in location_id.items() if query in name])
+        logging.debug(f"ids in query: {ids}")
+        logging.debug(f"ids length:{len(ids)}")
+
+        # Calculate predicted
+        pred = predicted.index_select(-2, ids).sum(-2)
+        # Sum overplaces
+        pred /= pred[1].sum(-1,True).clamp_(min=1e-8)
+        logging.debug(f"pred shape {tuple(pred.shape)}")
+        # of shape 3 x T_total x S, first dim is stats, T_total includes data abd predicted
+
+        # Calculate observed
+        obs = weekly_strains[:,ids].sum(1)
+        obs /= obs.sum(-1,True).clamp_(min=1e-9)
+        logging.debug(f"obs shape {tuple(pred.shape)}")
+        # same shape as pred above
+
+        output_predicted[k,:] = pred
+        output_observed[k,:] = obs
+
+    return {
+        "queries": queries,
+        "predicted": output_predicted,
+        "observed": output_observed,
+    }
+
