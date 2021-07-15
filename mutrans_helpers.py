@@ -223,6 +223,8 @@ def get_forecast_values(forecast):
     weekly_strains = forecast['weekly_strains'] # T x P x S
     lineage_id_inv = forecast['lineage_id_inv']
 
+    # log input shapes
+    logging.debug(f"date_range shape {date_range.shape}")
     logging.debug(f"predicted shape {predicted.shape}")
     logging.debug(f"queries length {len(queries)}")
     logging.debug(f"weekly_cases shape {tuple(weekly_cases.shape)}")
@@ -230,19 +232,24 @@ def get_forecast_values(forecast):
 
     # Determine output tensor shapes
     logging.info("Generating output tensor")
-    predicted_shape = list(predicted.shape)
 
-    output_tensor_shape = predicted_shape
+    output_predicted_tensor_shape = list(predicted.shape)
     # remove the place dimension as we will be summing over that
-    del output_tensor_shape[-2]
+    del output_predicted_tensor_shape[-2]
     # append a leftmost dim for each query
-    output_tensor_shape.insert(0, len(queries))
+    output_predicted_tensor_shape.insert(0, len(queries))
+    
+    output_observed_tensor_shape = list(weekly_strains.shape)
+    del output_observed_tensor_shape[-2]
+    output_observed_tensor_shape.insert(0, len(queries))
+    
 
-    logging.debug(f"Output tensor shape: {output_tensor_shape}")
-
+    logging.debug(f"Output predicted tensor shape: {output_predicted_tensor_shape}")
+    logging.debug(f"Output observed tensor shape: {output_observed_tensor_shape}")
+    
     # Generate output tensors
-    output_predicted = torch.zeros(output_tensor_shape)
-    output_observed = torch.zeros(output_tensor_shape)
+    output_predicted = torch.zeros(output_predicted_tensor_shape)
+    output_observed = torch.zeros(output_observed_tensor_shape)
 
     # Process each query
     for k, query in enumerate(queries):
@@ -253,7 +260,7 @@ def get_forecast_values(forecast):
 
         # Calculate predicted
         pred = predicted.index_select(-2, ids).sum(-2)
-        # Sum overplaces
+        # Sum over places
         pred /= pred[1].sum(-1,True).clamp_(min=1e-8)
         logging.debug(f"pred shape {tuple(pred.shape)}")
         # of shape 3 x T_total x S, first dim is stats, T_total includes data abd predicted
@@ -261,15 +268,105 @@ def get_forecast_values(forecast):
         # Calculate observed
         obs = weekly_strains[:,ids].sum(1)
         obs /= obs.sum(-1,True).clamp_(min=1e-9)
-        logging.debug(f"obs shape {tuple(pred.shape)}")
+        logging.debug(f"obs shape {tuple(obs.shape)}")
         # same shape as pred above
 
+        logging.debug(f"output_predicted shape: {tuple(output_predicted.shape)}")
+        logging.debug(f"output_observed shape: {tuple(output_observed.shape)}")
+        logging.debug(f"k: {k}")
+        
         output_predicted[k,:] = pred
         output_observed[k,:] = obs
 
     return {
         "queries": queries,
-        "predicted": output_predicted,
-        "observed": output_observed,
+        "predicted": output_predicted, # Query x 3 (stats) x T_total x S
+        "observed": output_observed, # Query x 3 (stats) x T_total x S
+        "date_range": date_range,
+        "strain_ids": strain_ids,
+        "lineage_id_inv": lineage_id_inv,
     }
 
+
+
+
+def get_available_strains(fits, fit_i, num_strains=100):
+    """Get the strains available for plotting in the specified fit
+    
+    :param fits: fits
+    :param fit_i: index of fit key to look at
+    :param num_strains: number of strains to pass to generate_forecast
+    
+    """
+
+    # Select the fit
+    k = list(fits.keys())
+    fit = fits[k[fit_i]]
+
+    # Generate a forecast and get values
+    fc1 = mutrans_helpers.generate_forecast(fit=fit, queries=queries,num_strains=num_strains)
+    forecast_values = mutrans_helpers.get_forecast_values(forecast=fc1)
+    
+    # Extract the names of the lineages
+    strain_ids = forecast_values['strain_ids']
+    lineage_id_inv = forecast_values['lineage_id_inv']
+    
+    return [lineage_id_inv[i] for i in strain_ids]
+
+
+def plot_fit_forecasts(
+    fits, 
+    fit_i=0, 
+    queries = ["England", "USA / California", "Brazil"],
+    strains_to_show = ["B.1.1","B.1","B.40"],
+    show_forecast = True,
+    show_observed = True,
+):
+    """Function to plot forecasts of specific strains in specific regions"""
+    k = list(fits.keys())
+
+    fit = fits[k[fit_i]]
+    fc1 = mutrans_helpers.generate_forecast(fit=fit, queries=queries)
+    forecast_values = mutrans_helpers.get_forecast_values(forecast=fc1)
+    
+    # Strain ids
+    strain_ids = forecast_values['strain_ids']
+    lineage_id_inv = forecast_values['lineage_id_inv']
+
+    n_queries = len(queries)
+
+    fig, ax = plt.subplots(nrows=n_queries)
+
+    colors = [f"C{i}" for i in range(10)] + ["black"] * 90
+    
+    for i, (k, ax_c) in enumerate(zip(range(n_queries), ax)):
+        # 2nd dim is 1 because we want means
+        sel_forecast = forecast_values['predicted'][k,1,:]
+        sel_observed = forecast_values['observed'][k,:]
+            
+        # Plot one strain at a time
+        for s, color in zip(strain_ids, colors):
+            strain = lineage_id_inv[s]
+            if strain in strains_to_show:
+                if show_forecast:
+                    ax_c.plot(sel_forecast[:,s], label=strain, color=color)
+                if show_observed:
+                    ax_c.plot(sel_observed[:,s], lw=0, marker='o', color=color)
+            if i==0:
+                ax_c.legend(loc="upper left", fontsize=8)
+
+    fig.show()
+
+
+
+
+
+
+
+
+
+
+
+
+if __name__ == "__main__":
+    pass
