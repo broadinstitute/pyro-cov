@@ -253,25 +253,25 @@ def main(args):
         mutrans.log_stats(dataset, result)
 
         # Save the results for this config
-        
+
         # Augment gisaid dataset with JHU timeseries counts
         dataset.update(mutrans.load_jhu_data(dataset))
-        
+
         # Generate results
         result["mutations"] = dataset["mutations"]
         result["weekly_strains"] = dataset["weekly_strains"]
-        result["weekly_cases"] =  dataset["weekly_cases"]
+        result["weekly_cases"] = dataset["weekly_cases"]
         result["weekly_strains_shape"] = tuple(dataset["weekly_strains"].shape)
         result["location_id"] = dataset["location_id"]
         result["lineage_id_inv"] = dataset["lineage_id_inv"]
-        
+
         result = torch_map(result, device="cpu", dtype=torch.float)  # to save space
         results[config] = result
 
         # Ensure number of regions match
-        assert dataset['weekly_strains'].shape[1] == result['mean']['probs'].shape[1]
-        assert dataset['weekly_cases'].shape[1] == result['mean']['probs'].shape[1]
-        
+        assert dataset["weekly_strains"].shape[1] == result["mean"]["probs"].shape[1]
+        assert dataset["weekly_cases"].shape[1] == result["mean"]["probs"].shape[1]
+
         # Cleanup
         del dataset
         pyro.clear_param_store()
