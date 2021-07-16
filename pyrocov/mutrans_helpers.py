@@ -1,21 +1,11 @@
-import datetime
 import logging
-import math
-import os
-import pickle
-import re
-from collections import Counter, OrderedDict, defaultdict
 
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
-import pyro.distributions as dist
 import torch
 
-from pyrocov import mutrans, pangolin, stats
-from pyrocov.stats import normal_log10bf
-from pyrocov.util import pearson_correlation, pretty_print
+from pyrocov import mutrans
 
 
 def plusminus(mean, std):
@@ -26,11 +16,10 @@ def plusminus(mean, std):
 
 def generate_forecast(fit, queries=None, num_strains=10):
     """Generate forecasts for specified fit
-    
+
     :param dict fit: the model fit
     :param weekly_cases: aggregate
-    --
-    
+
     """
 
     print(f"DEBUG num_strains is {num_strains}")
@@ -54,7 +43,7 @@ def generate_forecast(fit, queries=None, num_strains=10):
     weekly_strains = fit["weekly_strains"]
 
     # Trim weekly cases to size of weekly_strains
-    weekly_cases_trimmed = weekly_cases[: len(weekly_strains)]
+    #   weekly_cases_trimmed = weekly_cases[: len(weekly_strains)]
 
     # forecast is anything we don't have data for
     # both probs and weekly_strains are of dim TxPxS
@@ -107,7 +96,7 @@ def plot_forecast(
     plot_fit_ci=True,
 ):
     """Plot a forecast generated from the model
-    
+
     :param forecast: forecast results from generate forecast function
     :param filename: name of file to save output graphic
     :param plot_relative_cases: flag for plotting relative cases
@@ -119,7 +108,7 @@ def plot_forecast(
 
     # get the data from the input forecast
     queries = forecast["queries"]
-    date_range = forecast["date_range"]
+#    date_range = forecast["date_range"]
     strain_ids = forecast["strain_ids"]
     predicted = forecast["predicted"]
     location_id = forecast["location_id"]
@@ -180,7 +169,6 @@ def plot_forecast(
                 if plot_fit_ci:
                     ax.fill_between(dates, lb, ub, color=color, alpha=0.2, zorder=-10)
                 ax.plot(dates, mean, color=color, lw=1, zorder=-9)
-
             strain = lineage_id_inv[s]
 
             if plot_observed:
@@ -232,10 +220,10 @@ def plot_forecast(
 
 def get_forecast_values(forecast):
     """Calculate forecast values for strains
-   
+
     :param forecast: forecast return values from generate_forecast()
-    
-    :return: Dictionary of queries and predicted tensor and observed tensor. Tensors have shape 
+
+    :return: Dictionary of queries and predicted tensor and observed tensor. Tensors have shape
         num_queries x 3 (stats) x T x S
     """
 
@@ -315,11 +303,11 @@ def get_forecast_values(forecast):
 
 def get_available_strains(fits, fit_i, num_strains=100):
     """Get the strains available for plotting in the specified fit
-    
+
     :param fits: fits
     :param fit_i: index of fit key to look at
     :param num_strains: number of strains to pass to generate_forecast
-    
+
     """
 
     # Select the fit
@@ -327,10 +315,11 @@ def get_available_strains(fits, fit_i, num_strains=100):
     fit = fits[k[fit_i]]
 
     # Generate a forecast and get values
-    fc1 = mutrans_helpers.generate_forecast(
+    #here
+    fc1 = generate_forecast(
         fit=fit, queries=queries, num_strains=num_strains
     )
-    forecast_values = mutrans_helpers.get_forecast_values(forecast=fc1)
+    forecast_values = get_forecast_values(forecast=fc1)
 
     # Extract the names of the lineages
     strain_ids = forecast_values["strain_ids"]
@@ -354,10 +343,10 @@ def plot_fit_forecasts(
     print(f"DEBUG plot_fit_forecasts num_strains is {num_strains}")
 
     fit = fits[k[fit_i]]
-    fc1 = mutrans_helpers.generate_forecast(
+    fc1 = generate_forecast(
         fit=fit, queries=queries, num_strains=num_strains
     )
-    forecast_values = mutrans_helpers.get_forecast_values(forecast=fc1)
+    forecast_values = get_forecast_values(forecast=fc1)
 
     # Strain ids
     strain_ids = forecast_values["strain_ids"]
