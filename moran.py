@@ -18,6 +18,7 @@ def moran(values, distances, lengthscale):
 
 # compute moran statistic and do permutation test with given number of permutations
 def permutation_test(values, distances, lengthscale, num_permutations=9999):
+    values = values - values.mean()
     moran_given = moran(values, distances, lengthscale).item()
     idx = torch.stack([torch.randperm(distances.size(-1)) for _ in range(num_permutations)])
     moran_perm = moran(values[idx], distances, lengthscale)
