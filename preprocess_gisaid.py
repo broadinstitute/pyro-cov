@@ -8,6 +8,7 @@ import os
 import pickle
 import warnings
 from collections import Counter, defaultdict
+from subprocess import check_call
 
 from pyrocov import pangolin
 from pyrocov.geo import gisaid_normalize
@@ -105,20 +106,32 @@ def main(args):
 
     num_sequences = sum(len(v) for v in subsamples.values())
     logger.info(f"saving {num_sequences} sequences to {args.subset_file_out}")
+    os.makedirs(args.subset_dir_out, exist_ok=True)
     # This file is too large for pickle, so we save as tsv.
     # See https://stackoverflow.com/questions/42653386
-    with open(args.subset_file_out, "wt") as f:
+    with open(args.subset_file_out, "wt") as tsv:
         for lineage, samples in subsamples.items():
             assert "\t" not in lineage
-            for accession_id, seq in samples.items():
-                assert "\t" not in accession_id
-                assert "\t" not in seq
-                f.write(lineage)
-                f.write("\t")
-                f.write(accession_id)
-                f.write("\t")
-                f.write(seq.replace("\n", "_"))
-                f.write("\n")
+            basename = pangolin.compress(lineage) + ".fasta"
+            with open(os.path.join(args.subset_dir_out, basename), "wt") as fasta:
+                for accession_id, seq in samples.items():
+                    assert "\t" not in accession_id
+                    assert "\t" not in seq
+                    # Write a tsv line in a single large file.
+                    tsv.write(lineage)
+                    tsv.write("\t")
+                    tsv.write(accession_id)
+                    tsv.write("\t")
+                    tsv.write(seq.replace("\n", "_"))
+                    tsv.write("\n")
+                    # Write a FASTA entry grouped by lineage.
+                    fasta.write(">")
+                    fasta.write(accession_id)
+                    fasta.write("\n")
+                    fasta.write(seq)
+                    fasta.write("\n")
+    logger.info(f"compressing {args.subset_dir_out}")
+    check_call(["zip", "-r", args.subset_dir_out + ".zip", args.subset_dir_out])
 
 
 if __name__ == "__main__":
@@ -129,6 +142,7 @@ if __name__ == "__main__":
     parser.add_argument("--columns-file-out", default="results/gisaid.columns.pkl")
     parser.add_argument("--stats-file-out", default="results/gisaid.stats.pkl")
     parser.add_argument("--subset-file-out", default="results/gisaid.subset.tsv")
+    parser.add_argument("--subset-dir-out", default="results/fasta")
     parser.add_argument("--start-date", default=START_DATE)
     parser.add_argument("--min-nchars", default=29000, type=int)
     parser.add_argument("--max-nchars", default=31000, type=int)
