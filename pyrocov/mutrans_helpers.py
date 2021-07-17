@@ -22,8 +22,6 @@ def generate_forecast(fit, queries=None, num_strains=10):
 
     """
 
-    print(f"DEBUG num_strains is {num_strains}")
-
     # Get locations from dataset to perform query
     location_id = fit["location_id"]
 
@@ -108,7 +106,7 @@ def plot_forecast(
 
     # get the data from the input forecast
     queries = forecast["queries"]
-#    date_range = forecast["date_range"]
+    #    date_range = forecast["date_range"]
     strain_ids = forecast["strain_ids"]
     predicted = forecast["predicted"]
     location_id = forecast["location_id"]
@@ -301,8 +299,15 @@ def get_forecast_values(forecast):
     }
 
 
-def get_available_strains(fits, fit_i, num_strains=100):
-    """Get the strains available for plotting in the specified fit
+def get_fit_by_index(fits, i):
+    k = list(fits.keys())
+    key = k[i]
+    fit = fits[key]
+    return (key, fit)
+
+
+def get_available_strains(fit, num_strains=100):
+    """Get the strains available for plotting  in the specified fit
 
     :param fits: fits
     :param fit_i: index of fit key to look at
@@ -311,14 +316,12 @@ def get_available_strains(fits, fit_i, num_strains=100):
     """
 
     # Select the fit
-    k = list(fits.keys())  # probably should sort here
-    fit = fits[k[fit_i]]
+    # k = list(fits.keys())  # probably should sort here
+    # fit = fits[k[fit_i]]
 
     # Generate a forecast and get values
-    #here
-    fc1 = generate_forecast(
-        fit=fit, queries=queries, num_strains=num_strains
-    )
+    # here
+    fc1 = generate_forecast(fit=fit, num_strains=num_strains)
     forecast_values = get_forecast_values(forecast=fc1)
 
     # Extract the names of the lineages
@@ -329,24 +332,31 @@ def get_available_strains(fits, fit_i, num_strains=100):
 
 
 def plot_fit_forecasts(
-    fits,
-    fit_i=0,
+    fit,
     queries=["England", "USA / California", "Brazil"],
     strains_to_show=["B.1.1", "B.1", "B.40"],
     show_forecast=True,
     show_observed=True,
     num_strains=100,
 ):
-    """Function to plot forecasts of specific strains in specific regions"""
-    k = list(fits.keys())
+    """
+    Function to plot forecasts of specific strains in specific regions
+    
+    :param fit: the fit to plot
+    :param queries: region queries to plot
+    :param strains_to_show: strains to plot
+    :param show_forecast: plot model strain fit
+    :param show_observed: show the observed points
+    :param num_strains: num_strains param to pass downstream
+    """
 
-    print(f"DEBUG plot_fit_forecasts num_strains is {num_strains}")
-
-    fit = fits[k[fit_i]]
-    fc1 = generate_forecast(
-        fit=fit, queries=queries, num_strains=num_strains
-    )
+    fc1 = generate_forecast(fit=fit, queries=queries, num_strains=num_strains)
     forecast_values = get_forecast_values(forecast=fc1)
+
+    if isinstance(queries, str):
+        queries = [queries]
+
+    dates = matplotlib.dates.date2num(mutrans.date_range(len(fit["mean"]["probs"])))
 
     # Strain ids
     strain_ids = forecast_values["strain_ids"]
@@ -354,24 +364,48 @@ def plot_fit_forecasts(
 
     n_queries = len(queries)
 
-    fig, ax = plt.subplots(nrows=n_queries)
+    fig, ax = plt.subplots(nrows=n_queries, sharex=True)
+
+    if not isinstance(ax, (list, np.ndarray)):
+        ax = [ax]
 
     colors = [f"C{i}" for i in range(10)] + ["black"] * 90
 
-    for i, (k, ax_c) in enumerate(zip(range(n_queries), ax)):
+    for i, (k, ax_c, query) in enumerate(zip(range(n_queries), ax, queries)):
         # 2nd dim is 1 because we want means only
         sel_forecast = forecast_values["predicted"][k, 1, :]
         sel_observed = forecast_values["observed"][k, :]
+
+        ax_c.set_ylim(0, 1)
+        ax_c.set_yticks(())
+        ax_c.set_ylabel(query.replace(" / ", "\n"))
+        ax_c.set_xlim(dates.min(), dates.max())
 
         # Plot one strain at a time
         for s, color in zip(strain_ids, colors):
             strain = lineage_id_inv[s]
             if strain in strains_to_show:
                 if show_forecast:
-                    ax_c.plot(sel_forecast[:, s], label=strain, color=color)
+                    ax_c.plot(
+                        dates[: len(sel_forecast)],
+                        sel_forecast[:, s],
+                        label=strain,
+                        color=color,
+                    )
                 if show_observed:
-                    ax_c.plot(sel_observed[:, s], lw=0, marker="o", color=color)
+                    ax_c.plot(
+                        dates[: len(sel_observed)],
+                        sel_observed[:, s],
+                        lw=0,
+                        marker="o",
+                        color=color,
+                    )
             if i == 0:
                 ax_c.legend(loc="upper left", fontsize=8)
 
+    ax_c.xaxis.set_major_locator(matplotlib.dates.MonthLocator())
+    ax_c.xaxis.set_major_formatter(matplotlib.dates.DateFormatter("%b %Y"))
+    plt.subplots_adjust(hspace=0)
+
+    plt.xticks(rotation=90)
     fig.show()
