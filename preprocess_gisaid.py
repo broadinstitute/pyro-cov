@@ -41,8 +41,7 @@ def main(args):
         raise OSError(
             "Each user must independently request a data feed from gisaid.org"
         )
-    if not os.path.exists("results"):
-        os.makedirs("results")
+    os.makedirs("results", exist_ok=True)
 
     columns = defaultdict(list)
     stats = defaultdict(Counter)

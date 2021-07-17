@@ -21,7 +21,7 @@ class NextcladeDB:
     need to be sequenced.
     """
 
-    def __init__(self, fileprefix="results/nextcladedb", max_fasta_count=5000):
+    def __init__(self, fileprefix="results/nextcladedb", max_fasta_count=4000):
         self.header_filename = fileprefix + ".header.tsv"
         self.rows_filename = fileprefix + ".rows.tsv"
         self.rows_temp_filename = fileprefix + "rows.temp.tsv"
@@ -43,12 +43,27 @@ class NextcladeDB:
         self._tasks = defaultdict(list)
 
     def schedule(self, sequence, *fn_args):
+        """
+        Schedule a task for a given input ``sequence``.
+        """
         key = hash_sequence(sequence)
         if key not in self._already_aligned:
             self._schedule_alignment(key, sequence)
         self._tasks[key].append(fn_args)
 
+    def maybe_schedule(self, sequence, *fn_args):
+        """
+        Schedule a task iff no new alignment work is required.
+        Tasks requiring new alignment work will be silently dropped.
+        """
+        key = hash_sequence(sequence)
+        if key in self._already_aligned:
+            self._tasks[key].append(fn_args)
+
     def wait(self, log_every=1000):
+        """
+        Wait for all scheduled or maybe_scheduled tasks to complete.
+        """
         self._flush()
         with open(self.header_filename) as f:
             header = f.read().strip().split("\t")
@@ -60,7 +75,7 @@ class NextcladeDB:
                 for fn_args in self._tasks.pop(key, []):
                     fn, args = fn_args[0], fn_args[1:]
                     fn(*args, row)
-                if i % log_every == 0:
+                if log_every and i % log_every == 0:
                     print(".", end="", flush=True)
 
     def _schedule_alignment(self, key, sequence):

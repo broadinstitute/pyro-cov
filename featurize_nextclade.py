@@ -57,7 +57,7 @@ def main(args):
         status_counts = lineage_status_counts[lineage]
         for seq in sequences.values():
             db.schedule(seq, count_mutations, mutation_counts, status_counts)
-    db.wait()
+    db.wait(log_every=args.log_every)
 
     message = ["Total quality:"]
     status_counts = Counter()
@@ -72,6 +72,15 @@ def main(args):
         message.append(f"{l}: {c}")
     logger.info("\n\t".join(message))
 
+    # Collect a set of all single mutations observed in this subsample.
+    all_mutations = {
+        m
+        for ms in lineage_mutation_counts.values()
+        for m in ms
+        if m is not None and "," not in m
+    }
+    all_mutations = sorted(all_mutations)
+
     # Filter to lineages with at least a few good samples.
     for lineage, status_counts in list(lineage_status_counts.items()):
         if status_counts["good"] < args.min_good_samples:
@@ -83,7 +92,6 @@ def main(args):
     lineage_counts = {
         k: v.pop(None) for k, v in lineage_mutation_counts.items() if None in v
     }
-    total = len(set().union(*lineage_mutation_counts.values()))
     mutations = set()
     for lineage, mutation_counts in list(lineage_mutation_counts.items()):
         if not mutation_counts:
@@ -96,7 +104,7 @@ def main(args):
     by_num = Counter(m.count(",") for m in mutations)
     logger.info(
         "Keeping only ({} single + {} double) = {} of {} mutations".format(
-            by_num[0], by_num[1], len(mutations), total
+            by_num[0], by_num[1], len(mutations), len(all_mutations)
         )
     )
 
@@ -118,6 +126,7 @@ def main(args):
         "lineages": lineages,
         "mutations": mutations,
         "features": features,
+        "all_mutations": all_mutations,
     }
     logger.info(f"saving {tuple(features.shape)}-features to {args.features_file_out}")
     torch.save(result, args.features_file_out)
@@ -128,5 +137,6 @@ if __name__ == "__main__":
     parser.add_argument("--min-good-samples", default=5, type=float)
     parser.add_argument("--subset-file-in", default="results/gisaid.subset.tsv")
     parser.add_argument("--features-file-out", default="results/nextclade.features.pt")
+    parser.add_argument("-l", "--log-every", default=1000, type=int)
     args = parser.parse_args()
     main(args)
