@@ -1,21 +1,11 @@
-import datetime
 import logging
-import math
-import os
-import pickle
-import re
-from collections import Counter, OrderedDict, defaultdict
 
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
-import pyro.distributions as dist
 import torch
 
-from pyrocov import mutrans, pangolin, stats
-from pyrocov.stats import normal_log10bf
-from pyrocov.util import pearson_correlation, pretty_print
+from pyrocov import mutrans
 
 
 def plusminus(mean, std):
@@ -52,7 +42,7 @@ def generate_forecast(fit, queries=None, num_strains=10):
     weekly_strains = fit["weekly_strains"]
 
     # Trim weekly cases to size of weekly_strains
-    weekly_cases_trimmed = weekly_cases[: len(weekly_strains)]
+    # weekly_cases_trimmed = weekly_cases[: len(weekly_strains)]
 
     # forecast is anything we don't have data for
     # both probs and weekly_strains are of dim TxPxS
@@ -135,7 +125,7 @@ def plot_forecast(
         axes = [axes]
 
     # construct date range for ploting
-    dates = matplotlib.dates.date2num(forecast["date_range"])
+    dates = matplotlib.dates.date2num(date_range)
 
     # generate colors
     colors = [f"C{i}" for i in range(10)] + ["black"] * 90
@@ -325,10 +315,9 @@ def get_available_strains(fits, fit_i, num_strains=100):
     fit = fits[k[fit_i]]
 
     # Generate a forecast and get values
-    fc1 = mutrans_helpers.generate_forecast(
-        fit=fit, queries=queries, num_strains=num_strains
-    )
-    forecast_values = mutrans_helpers.get_forecast_values(forecast=fc1)
+    queries = None  # FIXME
+    fc1 = generate_forecast(fit=fit, queries=queries, num_strains=num_strains)
+    forecast_values = get_forecast_values(forecast=fc1)
 
     # Extract the names of the lineages
     strain_ids = forecast_values["strain_ids"]
@@ -349,8 +338,8 @@ def plot_fit_forecasts(
     k = list(fits.keys())
 
     fit = fits[k[fit_i]]
-    fc1 = mutrans_helpers.generate_forecast(fit=fit, queries=queries)
-    forecast_values = mutrans_helpers.get_forecast_values(forecast=fc1)
+    fc1 = generate_forecast(fit=fit, queries=queries)
+    forecast_values = get_forecast_values(forecast=fc1)
 
     # Strain ids
     strain_ids = forecast_values["strain_ids"]
