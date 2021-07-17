@@ -13,7 +13,7 @@ def moran(values, distances, lengthscale):
     assert values.size(-1) == distances.size(-1)
     weights = (distances.unsqueeze(-1) - distances.unsqueeze(-2)) / lengthscale
     weights = torch.exp(-weights.pow(2.0))
-    weights *= (1.0 - torch.eye(weights.size(-1)))
+    weights *= 1.0 - torch.eye(weights.size(-1))
     weights /= weights.sum(-1, keepdim=True)
 
     output = torch.einsum("...ij,...i,...j->...", weights, values, values)
@@ -34,7 +34,9 @@ def permutation_test(values, distances, lengthscale, num_perm=9999):
 
 def main(args):
     # read in inferred mutations
-    df = pd.read_csv("paper/mutations.tsv", sep="\t", index_col=0)[["mutation", "Δ log R"]]
+    df = pd.read_csv("paper/mutations.tsv", sep="\t", index_col=0)[
+        ["mutation", "Δ log R"]
+    ]
     mutations = df.values[:, 0]
     assert mutations.shape == (2337,)
     coefficients = df.values[:, 1] if not args.magnitude else np.abs(df.values[:, 1])
@@ -61,9 +63,13 @@ def main(args):
     # compute moran statistic for entire genome for mulitple lengthscales
     for global_lengthscale in [100.0, 500.0]:
         distances_ = [aa_mutation_to_position(m) for m in mutations]
-        distances = torch.from_numpy(np.array(distances_, dtype=np.float32) - min(distances_))
+        distances = torch.from_numpy(
+            np.array(distances_, dtype=np.float32) - min(distances_)
+        )
         values = torch.tensor(np.array(coefficients, dtype=np.float32)).float()
-        _, p_value = permutation_test(values, distances, global_lengthscale, num_perm=99999)
+        _, p_value = permutation_test(
+            values, distances, global_lengthscale, num_perm=99999
+        )
         genome_size = distances.max().item()
         s = "Entire Genome (Size = {}): \t p-value: {:.6f}  Lengthscale: {:.1f}"
         print(s.format(genome_size, p_value, global_lengthscale))
