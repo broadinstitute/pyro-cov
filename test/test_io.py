@@ -11,7 +11,7 @@ ROOT = os.path.dirname(os.path.dirname(__file__))
 FILENAME = os.path.join(ROOT, "data", "GTR4G_posterior.trees")
 
 
-@pytest.mark.skipif(not os.path.exists(FILENAME))
+@pytest.mark.skipif(not os.path.exists(FILENAME), reason="file unavailable")
 @pytest.mark.xfail(reason="Python <3.8 cannot .read() large files", run=False)
 def test_bio_phylo_parse():
     trees = Phylo.parse(FILENAME, format="nexus")
@@ -19,7 +19,7 @@ def test_bio_phylo_parse():
         print(tree.count_terminals())
 
 
-@pytest.mark.skipif(not os.path.exists(FILENAME))
+@pytest.mark.skipif(not os.path.exists(FILENAME), reason="file unavailable")
 @pytest.mark.parametrize("processes", [0, 2])
 def test_read_nexus_trees(processes):
     trees = read_nexus_trees(FILENAME, max_num_trees=5, processes=processes)
@@ -29,7 +29,7 @@ def test_read_nexus_trees(processes):
         assert tree.count_terminals() == 772
 
 
-@pytest.mark.skipif(not os.path.exists(FILENAME))
+@pytest.mark.skipif(not os.path.exists(FILENAME), reason="file unavailable")
 @pytest.mark.parametrize("processes", [0, 2])
 def test_stack_nexus_trees(processes):
     phylo = stack_nexus_trees(FILENAME, max_num_trees=5, processes=processes)
