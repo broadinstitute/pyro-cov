@@ -34,7 +34,7 @@ jobs:
         make lint
   unit:
     runs-on: ubuntu-20.04
-    needs: docs
+    needs: lint
     strategy:
       matrix:
         python-version: [3.6]
