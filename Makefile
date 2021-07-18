@@ -21,8 +21,8 @@ format: FORCE
 	isort .
 
 test: lint data FORCE
-	pytest -n auto test
-	python mutrans.py --mcmc -n 2 -w 2 -s 4 -t 2 -c 1 -l 1 -f
+	pytest -v -n auto test
+	python mutrans.py --test -n 2 -s 4
 
 update: FORCE
 	python git_pull.py cov-lineages/pango-designation
