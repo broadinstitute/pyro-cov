@@ -39,7 +39,7 @@ def generate_forecast(fit, queries=None, num_strains=10, future_fit=None):
     # Weekly strains is of size TxPxS (e.g. [29, 869, 1281])
     # It does not include forecast periods
     weekly_strains = fit["weekly_strains"]
-    
+
     # Trim weekly cases to size of weekly_strains
     #   weekly_cases_trimmed = weekly_cases[: len(weekly_strains)]
 
@@ -79,8 +79,12 @@ def generate_forecast(fit, queries=None, num_strains=10, future_fit=None):
         "weekly_cases": weekly_cases,
         "weekly_strains": weekly_strains,
         "lineage_id_inv": fit["lineage_id_inv"],
-        "weekly_cases_future": future_fit["weekly_cases"] if future_fit is not None else None,
-        "weekly_strains_future": future_fit["weekly_strains"] if future_fit is not None else None,
+        "weekly_cases_future": future_fit["weekly_cases"]
+        if future_fit is not None
+        else None,
+        "weekly_strains_future": future_fit["weekly_strains"]
+        if future_fit is not None
+        else None,
     }
 
     return forecast
@@ -236,7 +240,7 @@ def get_forecast_values(forecast):
     weekly_cases = forecast["weekly_cases"]  # T x P
     weekly_strains = forecast["weekly_strains"]  # T x P x S
     lineage_id_inv = forecast["lineage_id_inv"]
-    
+
     weekly_cases_future = forecast["weekly_cases_future"]
     weekly_strains_future = forecast["weekly_strains_future"]
 
@@ -259,8 +263,6 @@ def get_forecast_values(forecast):
     output_observed_tensor_shape = list(weekly_strains.shape)
     del output_observed_tensor_shape[-2]
     output_observed_tensor_shape.insert(0, len(queries))
-    
-
 
     logging.debug(f"Output predicted tensor shape: {output_predicted_tensor_shape}")
     logging.debug(f"Output observed tensor shape: {output_observed_tensor_shape}")
@@ -268,15 +270,14 @@ def get_forecast_values(forecast):
     # Generate output tensors
     output_predicted = torch.zeros(output_predicted_tensor_shape)
     output_observed = torch.zeros(output_observed_tensor_shape)
-    
+
     # If we are processing future data
-    if weekly_cases_future is not None:                                       
+    if weekly_cases_future is not None:
         output_observed_future_tensor_shape = list(weekly_strains_future.shape)
         del output_observed_future_tensor_shape[-2]
         output_observed_future_tensor_shape.insert(0, len(queries))
         output_observed_future = torch.zeros(output_observed_future_tensor_shape)
 
-                                                   
     # Process each query
     for k, query in enumerate(queries):
         logging.info(f"--- Processing query {k}")
@@ -296,7 +297,7 @@ def get_forecast_values(forecast):
         obs /= obs.sum(-1, True).clamp_(min=1e-9)
         logging.debug(f"obs shape {tuple(obs.shape)}")
         # same shape as pred above
-                                                   
+
         if weekly_cases_future is not None:
             obs_future = weekly_strains_future[:, ids].sum(1)
             obs_future /= obs_future.sum(-1, True).clamp_(min=1e-9)
@@ -308,7 +309,6 @@ def get_forecast_values(forecast):
 
         output_predicted[k, :] = pred
         output_observed[k, :] = obs
-        
 
     return {
         "queries": queries,
@@ -317,7 +317,9 @@ def get_forecast_values(forecast):
         "date_range": date_range,
         "strain_ids": strain_ids,
         "lineage_id_inv": lineage_id_inv,
-        "observed_future": output_observed_future if weekly_cases_future is not None else None,
+        "observed_future": output_observed_future
+        if weekly_cases_future is not None
+        else None,
     }
 
 
@@ -375,7 +377,9 @@ def plot_fit_forecasts(
     :param future_fit: optional fit with future data, used to print datapoint in predicted interval
     """
 
-    fc1 = generate_forecast(fit=fit, queries=queries, num_strains=num_strains, future_fit=future_fit)
+    fc1 = generate_forecast(
+        fit=fit, queries=queries, num_strains=num_strains, future_fit=future_fit
+    )
     forecast_values = get_forecast_values(forecast=fc1)
 
     if isinstance(queries, str):
@@ -400,11 +404,14 @@ def plot_fit_forecasts(
         # 2nd dim is 1 because we want means only
         sel_forecast = forecast_values["predicted"][k, 1, :]
         sel_observed = forecast_values["observed"][k, :]
-        
+
         if future_fit is not None:
-            sel_observed_future = forecast_values["observed_future"][k, :] if future_fit is not None else None
-            forecast_periods = len(sel_forecast) - len(sel_observed) -1       
-        
+            sel_observed_future = (
+                forecast_values["observed_future"][k, :]
+                if future_fit is not None
+                else None
+            )
+            forecast_periods = len(sel_forecast) - len(sel_observed) - 1
 
         ax_c.set_ylim(0, 1)
         ax_c.set_yticks(())
@@ -433,11 +440,13 @@ def plot_fit_forecasts(
                 # Plot actual points from future fit
                 if future_fit is not None:
                     ax_c.plot(
-                        dates[len(sel_observed):len(sel_observed)+forecast_periods],
-                        sel_observed_future[len(sel_observed):len(sel_observed)+forecast_periods, s],
+                        dates[len(sel_observed) : len(sel_observed) + forecast_periods],
+                        sel_observed_future[
+                            len(sel_observed) : len(sel_observed) + forecast_periods, s
+                        ],
                         lw=0,
                         marker="x",
-                        color=color
+                        color=color,
                     )
             if i == 0:
                 ax_c.legend(loc="upper left", fontsize=8)
@@ -448,6 +457,6 @@ def plot_fit_forecasts(
 
     plt.xticks(rotation=90)
     fig.show()
-    
-    if (filename):
+
+    if filename:
         plt.savefig(filename)
