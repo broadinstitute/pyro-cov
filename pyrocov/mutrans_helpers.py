@@ -317,7 +317,7 @@ def get_forecast_values(forecast):
         "date_range": date_range,
         "strain_ids": strain_ids,
         "lineage_id_inv": lineage_id_inv,
-        "observed_future": output_observed_future,
+        "observed_future": output_observed_future if weekly_cases_future is not None else None,
     }
 
 
@@ -361,6 +361,7 @@ def plot_fit_forecasts(
     show_observed=True,
     num_strains=100,
     future_fit=None,
+    filename=None,
 ):
     """
     Function to plot forecasts of specific strains in specific regions
@@ -447,3 +448,6 @@ def plot_fit_forecasts(
 
     plt.xticks(rotation=90)
     fig.show()
+    
+    if (filename):
+        plt.savefig(filename)
