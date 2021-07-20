@@ -136,24 +136,23 @@ def main(args):
     configs = []
     empty_holdout = ()
     empty_end_day = None
+    default_config = (
+        args.cond_data,
+        args.guide_type,
+        args.num_steps,
+        args.learning_rate,
+        args.learning_rate_decay,
+        args.clip_norm,
+        args.rank,
+        args.forecast_steps,
+        empty_end_day,
+        empty_holdout,
+    )
 
     if args.vary_num_steps:
         grid = sorted(int(n) for n in args.vary_num_steps.split(","))
         for num_steps in grid:
-            configs.append(
-                (
-                    args.cond_data,
-                    args.guide_type,
-                    num_steps,
-                    args.learning_rate,
-                    args.learning_rate_decay,
-                    args.clip_norm,
-                    args.rank,
-                    args.forecast_steps,
-                    empty_end_day,
-                    empty_holdout,
-                )
-            )
+            configs.append()
     elif args.vary_guide_type:
         for guide_type in args.vary_guide_type.split(","):
             configs.append(
@@ -219,21 +218,22 @@ def main(args):
                     empty_holdout,
                 )
             )
-    else:
-        configs.append(
-            (
-                args.cond_data,
-                args.guide_type,
-                args.num_steps,
-                args.learning_rate,
-                args.learning_rate_decay,
-                args.clip_norm,
-                args.rank,
-                args.forecast_steps,
-                empty_end_day,
-                empty_holdout,
+    elif args.vary_leaves:
+        # Run default config to get ranking.
+        dataset = load_data(args)
+        result = fit_svi(args, dataset, *default_config)
+
+        # Rank lineages by divergence from parent.
+        leaves = mutrans.rank_leaves(dataset, result)
+        leaves = leaves[: args.vary_leaves]
+        logger.info(
+            "\n".join(
+                [f"Predicting growth rate of {len(leaves)} leaf lineages:"] + leaves
             )
         )
+        raise NotImplementedError("TODO append one config per leaf")
+    else:
+        configs.append(default_config)
 
     # Sequentially fit models.
     results = {}
@@ -290,6 +290,9 @@ if __name__ == "__main__":
     parser.add_argument("--vary-guide-type", help="comma delimited list of guide types")
     parser.add_argument("--vary-num-steps", help="comma delimited list of num_steps")
     parser.add_argument("--vary-holdout", action="store_true")
+    parser.add_argument(
+        "--vary-leaves", type=int, help="number of leaf lineages to hold out"
+    )
     parser.add_argument("-cd", "--cond-data", default="coef_scale=0.5")
     parser.add_argument("-g", "--guide-type", default="custom")
     parser.add_argument("-n", "--num-steps", default=10001, type=int)

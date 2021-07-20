@@ -6,6 +6,7 @@ import pickle
 import re
 from collections import Counter, OrderedDict, defaultdict
 from timeit import default_timer
+from typing import List
 
 import numpy as np
 import pyro
@@ -60,6 +61,63 @@ def get_fine_regions(columns, min_samples=50):
     return frozenset(parts for parts, count in counts.items() if count >= min_samples)
 
 
+def rank_leaves(
+    full_dataset: dict,
+    full_result: dict,
+    min_samples: int = 100,
+) -> List[str]:
+    """
+    Compute a list of leaf lineages ranked in descending order of how much
+    their growth rate differs from their parents' growth rate. This is used in
+    growth rate prediction experiments.
+    """
+    # Decompress lineage names before computing parents.
+    lineage_id_inv = [
+        pangolin.decompress(name) for name in full_dataset["lineage_id_inv"]
+    ]
+    lineage_id = {name: i for i, name in enumerate(lineage_id_inv)}
+
+    # Compute children sets.
+    children = defaultdict(list)
+    for child in lineage_id_inv:
+        parent = pangolin.get_parent(child)
+        if parent is None:
+            continue  # ignore the root node
+        children[parent].append(child)
+        if parent not in lineage_id:
+            continue  # ignore orphans
+
+    # Filter to often-observed leaves.
+    weekly_strains = full_dataset["weekly_strains"]  # [T, P, S]
+    lineage_counts = weekly_strains.sum([0, 1])  # [S]
+    leaves = []
+    for c, child in enumerate(lineage_id_inv):
+        parent = pangolin.get_parent(child)
+        if parent is None:
+            continue  # ignore the root node
+        if parent not in lineage_id:
+            continue  # ignore orphans
+        if children[child]:
+            continue  # restrict to leaves
+        if lineage_counts[c] < min_samples:
+            continue  # ignore rare lineages
+        leaves.append(child)
+
+    # Sort leaf nodes by their distance from parent.
+    rate_loc = full_result["median"]["rate_loc"]
+    ranked_leaves = []
+    for child in leaves:
+        parent = pangolin.get_parent(child)
+        c = lineage_id[child]
+        p = lineage_id[parent]
+        gap = (rate_loc[c] - rate_loc[p]).abs().item()
+        ranked_leaves.append((gap, child))
+    ranked_leaves.sort(reverse=True)
+    print("DEBUG", ranked_leaves[:20])
+
+    return [pangolin.compress(name) for gap, name in ranked_leaves]
+
+
 def load_gisaid_data(
     *,
     device="cpu",
@@ -68,7 +126,7 @@ def load_gisaid_data(
     end_day=None,
     gisaid_columns_filename="results/gisaid.columns.pkl",
     nextclade_features_filename="results/nextclade.features.pt",
-):
+) -> dict:
     """
     Loads the two files gisaid_columns_filename and nextclade_features_filename,
     converts teh input to PyTorch tensors and truncates the data according to
@@ -120,8 +178,8 @@ def load_gisaid_data(
     lineage_id_inv = list(map(pangolin.compress, aa_features["lineages"]))
     lineage_id = {k: i for i, k in enumerate(lineage_id_inv)}
 
-    sparse_data = Counter()
-    location_id = OrderedDict()
+    sparse_data: dict = Counter()
+    location_id: dict = OrderedDict()
 
     # Set of lineages that are skipped
     skipped = set()
@@ -130,7 +188,6 @@ def load_gisaid_data(
     for virus_name, day, location, lineage in zip(
         columns["virus_name"], columns["day"], columns["location"], lineages
     ):
-        row = {"virus_name": virus_name, "location": location, "day": day}
         if lineage not in lineage_id:
             if lineage not in skipped:
                 skipped.add(lineage)
@@ -138,6 +195,13 @@ def load_gisaid_data(
             continue
 
         # Filter by include/exclude
+        row = {
+            "virus_name": virus_name,
+            "location": location,
+            "day": day,
+            "decompressed_lineage": pangolin.decompress(lineage),
+            "compressed_lineage": pangolin.compress(lineage),
+        }
         if not all(v.search(row[k]) for k, v in include.items()):
             continue
         if any(v.search(row[k]) for k, v in exclude.items()):
@@ -208,10 +272,10 @@ def load_gisaid_data(
 
 
 def subset_gisaid_data(
-    gisaid_dataset,
+    gisaid_dataset: dict,
     location_queries=None,
     max_strains=math.inf,
-):
+) -> dict:
     """
     Selects a small subset of data for exploratory fitting of a small model.
     This is not used in the final published results.
@@ -268,7 +332,7 @@ def subset_gisaid_data(
     return new
 
 
-def load_jhu_data(gisaid_data):
+def load_jhu_data(gisaid_data: dict) -> dict:
     """
     Load case count time series.
 
@@ -472,7 +536,7 @@ def predict(
     vectorize=None,
     save_params=("rate", "init", "probs"),
     forecast_steps=0,
-):
+) -> dict:
     model = guide.model
 
     def get_conditionals(data):
@@ -487,7 +551,7 @@ def predict(
         }
 
     # Compute median point estimate.
-    result = defaultdict(dict)
+    result: dict = defaultdict(dict)
     for name, value in get_conditionals(guide.median(dataset)).items():
         if value.numel() < 1e5 or name in save_params:
             result["median"][name] = value
@@ -519,9 +583,9 @@ def predict(
 
 
 def fit_svi(
-    dataset,
+    dataset: dict,
     *,
-    guide_type,
+    guide_type: str,
     cond_data={},
     forecast_steps=0,
     learning_rate=0.05,
@@ -534,7 +598,7 @@ def fit_svi(
     log_every=50,
     seed=20210319,
     check_loss=False,
-):
+) -> dict:
     """
     Fits a variational posterior using stochastic variational inference (SVI).
     """
@@ -578,7 +642,7 @@ def fit_svi(
     )
 
     # Log gradient norms during inference.
-    series = defaultdict(list)
+    series: dict = defaultdict(list)
 
     def hook(g, series):
         series.append(torch.linalg.norm(g.reshape(-1), math.inf).item())
@@ -587,7 +651,7 @@ def fit_svi(
         value.register_hook(functools.partial(hook, series=series[name]))
 
     def optim_config(param_name):
-        config = {
+        config: dict = {
             "lr": learning_rate,
             "lrd": learning_rate_decay ** (1 / num_steps),
             "clip_norm": clip_norm,
@@ -653,7 +717,7 @@ def fit_svi(
 
 
 @torch.no_grad()
-def log_stats(dataset, result):
+def log_stats(dataset: dict, result: dict) -> dict:
     """
     Logs statistics of predictions and model fit in the ``result`` of
     ``fit_svi()``.
@@ -738,7 +802,7 @@ def log_stats(dataset, result):
 
 
 @torch.no_grad()
-def log_holdout_stats(fits: dict):
+def log_holdout_stats(fits: dict) -> dict:
     """
     Logs statistics comparing multiple results from ``fit_svi``.
     """
