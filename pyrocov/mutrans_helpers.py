@@ -367,7 +367,7 @@ def plot_fit_forecasts(
 ):
     """
     Function to plot forecasts of specific strains in specific regions
-    
+
     :param fit: the fit to plot
     :param queries: region queries to plot
     :param strains_to_show: strains to plot
