@@ -120,6 +120,69 @@ def fit_svi(
     return result
 
 
+def holdout_to_hashable(holdout):
+    return tuple((k, tuple(sorted(v.items()))) for k, v in sorted(holdout.items()))
+
+
+def vary_leaves(args, default_config):
+    """
+    Run a leave-one-out experiment over a set of leaf lineages, saving results
+    to ``results/mutrans.vary_leaves.pt``.
+    """
+    # Run default config to get a ranking of leaves.
+    dataset = load_data(args)
+    result = fit_svi(args, dataset, *default_config)
+
+    # Rank lineages by divergence from parent.
+    leaves = mutrans.rank_leaves(dataset, result)
+    leaves = leaves[: args.vary_leaves]
+    logger.info(
+        "\n".join([f"Predicting growth rate of {len(leaves)} leaf lineages:"] + leaves)
+    )
+
+    # Create a set of inference configs.
+    configs = []
+    for leaf in leaves:
+        holdout = {"exclude": {"lineage": "^" + leaf + "$"}}
+        config = list(default_config)
+        config[-1] = holdout_to_hashable(holdout)
+        config = tuple(config)
+        configs.append(config)
+
+    results = {}
+    for config in configs:
+        logger.info(f"Config: {config}")
+
+        # Holdout is the last in the config
+        holdout = {k: dict(v) for k, v in config[-1]}
+
+        # load dataset
+        dataset = load_data(args, **holdout)
+
+        # Run SVI
+        result = fit_svi(args, dataset, *config)
+
+        # Save only what's needed to evaluate predictions.
+        result = {
+            "coef": result["median"]["coef"],  # [F]
+            "rate_loc": result["median"]["rate_loc"],  # [S]
+            "mutations": dataset["mutations"],
+            "location_id": dataset["location_id"],
+            "lineage_id_inv": dataset["lineage_id_inv"],
+        }
+        result = torch_map(result, device="cpu", dtype=torch.float)  # to save space
+        results[config] = result
+
+        # Cleanup
+        del dataset
+        pyro.clear_param_store()
+        gc.collect()
+
+    if not args.test:
+        logger.info("saving results/mutrans.vary_leaves.pt")
+        torch.save(results, "results/mutrans.vary_leaves.pt")
+
+
 def main(args):
     """Main Entry Point"""
 
@@ -148,6 +211,9 @@ def main(args):
         empty_end_day,
         empty_holdout,
     )
+
+    if args.vary_leaves:
+        return vary_leaves(args, default_config)
 
     if args.vary_num_steps:
         grid = sorted(int(n) for n in args.vary_num_steps.split(","))
@@ -184,9 +250,6 @@ def main(args):
             # {"include": {"virus_name": "^hCoV-19/USA/..-CDC-2-"}},
         ]
         for holdout in grid:
-            holdout = tuple(
-                (k, tuple(sorted(v.items()))) for k, v in sorted(holdout.items())
-            )
             configs.append(
                 (
                     args.cond_data,
@@ -198,7 +261,7 @@ def main(args):
                     args.rank,
                     args.forecast_steps,
                     empty_end_day,
-                    holdout,
+                    holdout_to_hashable(holdout),
                 )
             )
     elif args.backtesting_max_day:
@@ -218,20 +281,6 @@ def main(args):
                     empty_holdout,
                 )
             )
-    elif args.vary_leaves:
-        # Run default config to get ranking.
-        dataset = load_data(args)
-        result = fit_svi(args, dataset, *default_config)
-
-        # Rank lineages by divergence from parent.
-        leaves = mutrans.rank_leaves(dataset, result)
-        leaves = leaves[: args.vary_leaves]
-        logger.info(
-            "\n".join(
-                [f"Predicting growth rate of {len(leaves)} leaf lineages:"] + leaves
-            )
-        )
-        raise NotImplementedError("TODO append one config per leaf")
     else:
         configs.append(default_config)
 
@@ -248,7 +297,7 @@ def main(args):
         # load dataset
         dataset = load_data(args, end_day=end_day, **holdout)
 
-        # Run the fit
+        # Run SVI
         result = fit_svi(args, dataset, *config)
         mutrans.log_stats(dataset, result)
 

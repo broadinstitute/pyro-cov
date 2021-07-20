@@ -199,8 +199,7 @@ def load_gisaid_data(
             "virus_name": virus_name,
             "location": location,
             "day": day,
-            "decompressed_lineage": pangolin.decompress(lineage),
-            "compressed_lineage": pangolin.compress(lineage),
+            "lineage": pangolin.compress(lineage),
         }
         if not all(v.search(row[k]) for k, v in include.items()):
             continue
