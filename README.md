@@ -1,3 +1,5 @@
+[![Build Status](https://github.com/broadinstitute/pyro-cov/workflows/CI/badge.svg)](https://github.com/broadinstitute/pyro-cov/actions)
+
 # Pyro models for SARS-CoV-2 analysis
 
 ## Mutation analysis paper

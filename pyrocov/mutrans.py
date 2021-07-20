@@ -167,7 +167,7 @@ def load_gisaid_data(
         T = 1 + end_day // TIMESTEP
     else:
         T = 1 + max(columns["day"]) // TIMESTEP
-    
+
     P = len(location_id)
     S = len(lineage_id)
     weekly_strains = torch.zeros(T, P, S)
