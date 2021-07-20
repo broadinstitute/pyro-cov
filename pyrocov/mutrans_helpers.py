@@ -403,6 +403,8 @@ def plot_fit_forecasts(
     for i, (k, ax_c, query) in enumerate(zip(range(n_queries), ax, queries)):
         # 2nd dim is 1 because we want means only
         sel_forecast = forecast_values["predicted"][k, 1, :]
+        sel_forecast_lb = forecast_values["predicted"][k, 0, :]
+        sel_forecast_ub = forecast_values["predicted"][k, 2, :]
         sel_observed = forecast_values["observed"][k, :]
 
         if future_fit is not None:
@@ -418,11 +420,22 @@ def plot_fit_forecasts(
         ax_c.set_ylabel(query.replace(" / ", "\n"))
         ax_c.set_xlim(dates.min(), dates.max())
 
+        print(f"sel_forecast shape {sel_forecast.shape}")
+        print(f"sel_forecast_lb shape {sel_forecast_lb.shape}")
+
         # Plot one strain at a time
         for s, color in zip(strain_ids, colors):
             strain = lineage_id_inv[s]
             if strain in strains_to_show:
                 if show_forecast:
+                    ax_c.fill_between(
+                        dates[: len(sel_forecast)],
+                        sel_forecast_lb[: len(sel_forecast), s],
+                        sel_forecast_ub[: len(sel_forecast), s],
+                        color=color,
+                        alpha=0.2,
+                        zorder=-10,
+                    )
                     ax_c.plot(
                         dates[: len(sel_forecast)],
                         sel_forecast[:, s],
