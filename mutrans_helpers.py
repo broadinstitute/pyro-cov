@@ -5,7 +5,6 @@ import os
 import pickle
 import re
 from collections import Counter, OrderedDict, defaultdict
-import logging
 
 import matplotlib
 import matplotlib.pyplot as plt
@@ -17,9 +16,6 @@ import torch
 from pyrocov import mutrans, pangolin, stats
 from pyrocov.stats import normal_log10bf
 from pyrocov.util import pearson_correlation, pretty_print
-import torch
-
-from pyrocov import mutrans
 
 
 def plusminus(mean, std):
@@ -34,6 +30,7 @@ def generate_forecast(fit, queries=None, num_strains=10):
     :param dict fit: the model fit
     :param weekly_cases: aggregate
     --
+    """
 
     # Get locations from dataset to perform query
     location_id = fit["location_id"]
@@ -137,7 +134,7 @@ def plot_forecast(
 
     # construct date range for ploting
     dates = matplotlib.dates.date2num(forecast["date_range"])
-    #dates = matplotlib.dates.date2num(date_range)
+    # dates = matplotlib.dates.date2num(date_range)
 
     # generate colors
     colors = [f"C{i}" for i in range(10)] + ["black"] * 90
@@ -331,9 +328,9 @@ def get_available_strains(fits, fit_i, num_strains=100):
         fit=fit, queries=queries, num_strains=num_strains
     )
     forecast_values = mutrans_helpers.get_forecast_values(forecast=fc1)
-    #queries = None  # FIXME
-    #fc1 = generate_forecast(fit=fit, queries=queries, num_strains=num_strains)
-    #forecast_values = get_forecast_values(forecast=fc1)
+    # queries = None  # FIXME
+    # fc1 = generate_forecast(fit=fit, queries=queries, num_strains=num_strains)
+    # forecast_values = get_forecast_values(forecast=fc1)
 
     # Extract the names of the lineages
     strain_ids = forecast_values["strain_ids"]
@@ -361,8 +358,8 @@ def plot_fit_forecasts(
         fit=fit, queries=queries, num_strains=num_strains
     )
     forecast_values = mutrans_helpers.get_forecast_values(forecast=fc1)
-    #fc1 = generate_forecast(fit=fit, queries=queries)
-    #forecast_values = get_forecast_values(forecast=fc1)
+    # fc1 = generate_forecast(fit=fit, queries=queries)
+    # forecast_values = get_forecast_values(forecast=fc1)
 
     # Strain ids
     strain_ids = forecast_values["strain_ids"]
