@@ -32,7 +32,8 @@ The following plots assess robustness via 2-fold crossvalidation, splitting data
 ![Lineage correlation](lineage_agreement.png)
 ![Mutation correlation](mutation_agreement.png)
 ![Lineage box plots](strain_europe_boxplot.png)
-![Mutation box plots](mutation_europe_boxplot.png)
+![Mutation box plots](mutation_europe_boxplot_s.png)
+![Mutation box plots](mutation_europe_boxplot_t.png)
 
 ## Misc plots
 
