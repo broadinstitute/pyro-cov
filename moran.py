@@ -34,14 +34,15 @@ def permutation_test(values, distances, lengthscale, num_perm=9999):
 
 def main(args):
     # read in inferred mutations
-    df = pd.read_csv("paper/mutations.tsv", sep="\t", index_col=0)[
-        ["mutation", "Δ log R"]
-    ]
+    df = pd.read_csv("paper/mutations.tsv", sep="\t", index_col=0)
+    df = df[["mutation", "Δ log R"]]
     mutations = df.values[:, 0]
     assert mutations.shape == (2337,)
     coefficients = df.values[:, 1] if not args.magnitude else np.abs(df.values[:, 1])
     gene_map = defaultdict(list)
     distance_map = defaultdict(list)
+
+    results = []
 
     # collect indices and nucleotide positions corresponding to each mutation
     for i, m in enumerate(mutations):
@@ -56,9 +57,10 @@ def main(args):
         distances = torch.from_numpy(np.array(distances) - min(distances))
         gene_size = distances.max().item()
         lengthscale = min(gene_size / 20, 50.0)
-        _, p_value = permutation_test(values, distances, lengthscale, num_perm=99999)
-        s = "Gene: {} \t Size: {} \t p-value: {:.6f}  Lengthscale: {:.1f}"
-        print(s.format(gene, gene_size, p_value, lengthscale))
+        _, p_value = permutation_test(values, distances, lengthscale, num_perm=999999)
+        s = "Gene: {} \t #Mut: {} Size: {} \t p-value: {:.6f}  Lengthscale: {:.1f}"
+        print(s.format(gene, distances.size(0), gene_size, p_value, lengthscale))
+        results.append([distances.size(0), gene_size, p_value, lengthscale])
 
     # compute moran statistic for entire genome for mulitple lengthscales
     for global_lengthscale in [100.0, 500.0]:
@@ -68,11 +70,19 @@ def main(args):
         )
         values = torch.tensor(np.array(coefficients, dtype=np.float32)).float()
         _, p_value = permutation_test(
-            values, distances, global_lengthscale, num_perm=99999
+            values, distances, global_lengthscale, num_perm=999999
         )
         genome_size = distances.max().item()
-        s = "Entire Genome (Size = {}): \t p-value: {:.6f}  Lengthscale: {:.1f}"
-        print(s.format(genome_size, p_value, global_lengthscale))
+        s = "Entire Genome (#Mut = {}; Size = {}): \t p-value: {:.6f}  Lengthscale: {:.1f}"
+        print(s.format(distances.size(0), genome_size, p_value, global_lengthscale))
+        results.append([distances.size(0), genome_size, p_value, global_lengthscale])
+
+    # save results as csv
+    results = np.stack(results)
+    columns = ["NumMutations", "GeneSize", "PValue", "Lengthscale"]
+    index = list(gene_map.keys()) + ["EntireGenome"] * 2
+    result = pd.DataFrame(data=results, index=index, columns=columns)
+    result.to_csv("moran.csv")
 
 
 if __name__ == "__main__":
