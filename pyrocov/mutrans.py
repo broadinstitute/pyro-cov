@@ -61,15 +61,15 @@ def get_fine_regions(columns, min_samples=50):
     return frozenset(parts for parts, count in counts.items() if count >= min_samples)
 
 
-def rank_leaves(
+def rank_loo_lineages(
     full_dataset: dict,
     full_result: dict,
     min_samples: int = 100,
 ) -> List[str]:
     """
-    Compute a list of leaf lineages ranked in descending order of how much
-    their growth rate differs from their parents' growth rate. This is used in
-    growth rate prediction experiments.
+    Compute a list of lineages ranked in descending order of how much their
+    growth rate differs from their parents' growth rate. This is used in growth
+    rate leave-one-out prediction experiments.
     """
     # Decompress lineage names before computing parents.
     lineage_id_inv = [
@@ -80,6 +80,8 @@ def rank_leaves(
     # Compute children sets.
     children = defaultdict(list)
     for child in lineage_id_inv:
+        if child in ("A", "B"):
+            continue  # ignore very early lineages
         parent = pangolin.get_parent(child)
         if parent is None:
             continue  # ignore the root node
@@ -87,10 +89,10 @@ def rank_leaves(
         if parent not in lineage_id:
             continue  # ignore orphans
 
-    # Filter to often-observed leaves.
+    # Filter to often-observed lineages.
     weekly_strains = full_dataset["weekly_strains"]  # [T, P, S]
     lineage_counts = weekly_strains.sum([0, 1])  # [S]
-    leaves = []
+    lineages = []
     for c, child in enumerate(lineage_id_inv):
         parent = pangolin.get_parent(child)
         if parent is None:
@@ -98,25 +100,24 @@ def rank_leaves(
         if parent not in lineage_id:
             continue  # ignore orphans
         if children[child]:
-            continue  # restrict to leaves
+            continue  # restrict to lineages
         if lineage_counts[c] < min_samples:
             continue  # ignore rare lineages
-        leaves.append(child)
+        lineages.append(child)
 
     # Sort leaf nodes by their distance from parent.
     rate_loc = full_result["median"]["rate_loc"]
-    ranked_leaves = []
-    for child in leaves:
+    ranked_lineages = []
+    for child in lineages:
         parent = pangolin.get_parent(child)
         assert parent is not None
         c = lineage_id[child]
         p = lineage_id[parent]
         gap = (rate_loc[c] - rate_loc[p]).abs().item()
-        ranked_leaves.append((gap, child))
-    ranked_leaves.sort(reverse=True)
-    print("DEBUG", ranked_leaves[:20])
+        ranked_lineages.append((gap, child))
+    ranked_lineages.sort(reverse=True)
 
-    return [pangolin.compress(name) for gap, name in ranked_leaves]
+    return [pangolin.compress(name) for gap, name in ranked_lineages]
 
 
 def load_gisaid_data(
