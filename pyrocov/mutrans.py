@@ -108,6 +108,7 @@ def rank_leaves(
     ranked_leaves = []
     for child in leaves:
         parent = pangolin.get_parent(child)
+        assert parent is not None
         c = lineage_id[child]
         p = lineage_id[parent]
         gap = (rate_loc[c] - rate_loc[p]).abs().item()
