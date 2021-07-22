@@ -3,6 +3,7 @@
 import argparse
 import functools
 import gc
+import glob
 import logging
 import os
 import re
@@ -50,6 +51,14 @@ def _safe_str(v):
     v = str(v)
     v = re.sub("[^A-Za-x0-9-]", "_", v)
     return v
+
+
+def holdout_to_hashable(holdout):
+    return tuple((k, tuple(sorted(v.items()))) for k, v in sorted(holdout.items()))
+
+
+def hashable_to_holdout(holdout):
+    return {k: dict(v) for k, v in holdout}
 
 
 def _load_data_filename(args, **kwargs):
@@ -100,6 +109,7 @@ def fit_svi(
     """
     cond_data = [kv.split("=") for kv in cond_data.split(",") if kv]
     cond_data = {k: float(v) for k, v in cond_data}
+    holdout = hashable_to_holdout(holdout)
 
     result = mutrans.fit_svi(
         dataset,
@@ -116,12 +126,18 @@ def fit_svi(
         jit=args.jit,
         num_samples=args.num_samples,
     )
+
+    if "lineage" in holdout.get("exclude", {}):
+        # Save only what's needed to evaluate loo predictions.
+        result = {
+            "median": {
+                "coef": result["median"]["coef"].float(),  # [F]
+                "rate_loc": result["median"]["rate_loc"].float(),  # [S]
+            },
+        }
+
     result["args"] = args
     return result
-
-
-def holdout_to_hashable(holdout):
-    return tuple((k, tuple(sorted(v.items()))) for k, v in sorted(holdout.items()))
 
 
 def vary_leaves(args, default_config):
@@ -129,8 +145,27 @@ def vary_leaves(args, default_config):
     Run a leave-one-out experiment over a set of leaf lineages, saving results
     to ``results/mutrans.vary_leaves.pt``.
     """
-    # Run default config to get a ranking of leaves.
+    # Optionally fix old results.
+    if args.fix_old_vary_leaves:
+        for filename in glob.glob("results/mutrans.svi.*exclude=___lineage___*.pt"):
+            logger.info("fixing " + filename)
+            result = torch.load(filename)
+            median = result.get("median", result)
+            result = {
+                "args": result["args"],
+                "median": {
+                    "coef": median["coef"].float(),  # [F]
+                    "rate_loc": median["rate_loc"].float(),  # [S]
+                },
+            }
+            torch.save(result, filename)
+            del result
+
+    # Load a single common dataset.
     dataset = load_data(args)
+    lineage_id = {name: i for i, name in enumerate(dataset["lineage_id_inv"])}
+
+    # Run default config to get a ranking of leaves.
     result = fit_svi(args, dataset, *default_config)
 
     # Rank lineages by divergence from parent.
@@ -153,28 +188,21 @@ def vary_leaves(args, default_config):
     for config in configs:
         logger.info(f"Config: {config}")
 
-        # Holdout is the last in the config
-        holdout = {k: dict(v) for k, v in config[-1]}
-
-        # load dataset
-        dataset = load_data(args, **holdout)
+        # Construct a leave-one-out dataset.
+        i = lineage_id[leaf]
+        loo_dataset = dataset.copy()
+        loo_dataset["weekly_strains"] = dataset["weekly_strains"].clone()
+        loo_dataset["weekly_strains"][:, :, i] = 0
 
         # Run SVI
-        result = fit_svi(args, dataset, *config)
-
-        # Save only what's needed to evaluate predictions.
-        result = {
-            "coef": result["median"]["coef"],  # [F]
-            "rate_loc": result["median"]["rate_loc"],  # [S]
-            "mutations": dataset["mutations"],
-            "location_id": dataset["location_id"],
-            "lineage_id_inv": dataset["lineage_id_inv"],
-        }
-        result = torch_map(result, device="cpu", dtype=torch.float)  # to save space
+        result = fit_svi(args, loo_dataset, *config)
+        result["mutations"] = dataset["mutations"]
+        result["location_id"] = dataset["location_id"]
+        result["lineage_id_inv"] = dataset["lineage_id_inv"]
         results[config] = result
 
         # Cleanup
-        del dataset
+        del result
         pyro.clear_param_store()
         gc.collect()
 
@@ -290,7 +318,7 @@ def main(args):
         logger.info(f"Config: {config}")
 
         # Holdout is the last in the config
-        holdout = {k: dict(v) for k, v in config[-1]}
+        holdout = hashable_to_holdout(config[-1])
         # end_day is second from last
         end_day = config[-2]
 
@@ -362,6 +390,7 @@ if __name__ == "__main__":
     parser.add_argument("--no-jit", dest="jit", action="store_false")
     parser.add_argument("--seed", default=20210319, type=int)
     parser.add_argument("-l", "--log-every", default=50, type=int)
+    parser.add_argument("--fix-old-vary-leaves", action="store_true")
     parser.add_argument("--no-new", action="store_true")
     parser.add_argument("--no-cache", action="store_true")
     parser.add_argument("--test", action="store_true")
