@@ -189,12 +189,11 @@ def vary_leaves(args, default_config):
         logger.info(f"Config: {config}")
 
         # Construct a leave-one-out dataset by zeroing out a subclade.
-        i = lineage_id[lineage]
-        loo_dataset = dataset.copy()
-        loo_dataset["weekly_strains"] = dataset["weekly_strains"].clone()
-        clade = [i]
+        clade = [lineage_id[lineage]]
         for descendent in descendents[lineage]:
             clade.append(lineage_id[descendent])
+        loo_dataset = dataset.copy()
+        loo_dataset["weekly_strains"] = dataset["weekly_strains"].clone()
         loo_dataset["weekly_strains"][:, :, clade] = 0
 
         # Run SVI

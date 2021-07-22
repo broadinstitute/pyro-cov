@@ -77,30 +77,17 @@ def rank_loo_lineages(
     ]
     lineage_id = {name: i for i, name in enumerate(lineage_id_inv)}
 
-    # Compute children sets.
-    children = defaultdict(list)
-    for child in lineage_id_inv:
-        if child in ("A", "B"):
-            continue  # ignore very early lineages
-        parent = pangolin.get_parent(child)
-        if parent is None:
-            continue  # ignore the root node
-        children[parent].append(child)
-        if parent not in lineage_id:
-            continue  # ignore orphans
-
     # Filter to often-observed lineages.
     weekly_strains = full_dataset["weekly_strains"]  # [T, P, S]
     lineage_counts = weekly_strains.sum([0, 1])  # [S]
     lineages = []
     for c, child in enumerate(lineage_id_inv):
+        if child in ("A", "B"):
+            continue  # ignore very early lineages
         parent = pangolin.get_parent(child)
-        if parent is None:
-            continue  # ignore the root node
+        assert parent is not None
         if parent not in lineage_id:
             continue  # ignore orphans
-        if children[child]:
-            continue  # restrict to lineages
         if lineage_counts[c] < min_samples:
             continue  # ignore rare lineages
         lineages.append(child)
