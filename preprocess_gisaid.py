@@ -136,7 +136,7 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Preprocess GISAID data")
     parser.add_argument(
-        "--gisaid-file-in", default=os.path.expanduser("~/data/gisaid/provision.json")
+        "--gisaid-file-in", default=os.path.expanduser("data/gisaid.json")
     )
     parser.add_argument("--columns-file-out", default="results/gisaid.columns.pkl")
     parser.add_argument("--stats-file-out", default="results/gisaid.stats.pkl")
