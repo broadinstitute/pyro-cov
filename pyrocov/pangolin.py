@@ -61,10 +61,18 @@ PANGOLIN_ALIASES = {
 
 # From https://www.who.int/en/activities/tracking-SARS-CoV-2-variants/
 WHO_ALIASES = {
-    "α": ["B.1.1.7"],
-    "β": ["B.1.351", "B.1.351.2", "B.1.351.3"],
-    "γ": ["P.1", "P.1.1", "P.1.2"],
-    "δ": ["B.1.617.2", "AY.1", "AY.2", "AY.3"],
+    # Variants of concern.
+    "Alpha": ["B.1.1.7"],
+    "Beta": ["B.1.351", "B.1.351.2", "B.1.351.3"],
+    "Gamma": ["P.1", "P.1.1", "P.1.2"],
+    "Delta": ["B.1.617.2", "AY.1", "AY.2", "AY.3"],
+    # Variants of interest.
+    "Eta": ["B.1.525"],
+    "Iota": ["B.1.526"],
+    "Kappa": ["B.1.617.1"],
+    "Lambda": ["C.37"],
+    # Former variants of interest.
+    # Epsilon (B.1.427/B.1.429), Zeta (P.2), Theta (P.3)
 }
 
 
