@@ -28,8 +28,7 @@ update: FORCE
 	python git_pull.py cov-lineages/pango-designation
 	python git_pull.py CSSEGISandData/COVID-19
 	python git_pull.py nextstrain/nextclade
-	#python git_pull.py owid/covid-19-data
-	(cd ~/data/gisaid ; ./pull)
+	. pull_gisaid.sh
 	time nice python preprocess_gisaid.py
 	time python featurize_nextclade.py
 

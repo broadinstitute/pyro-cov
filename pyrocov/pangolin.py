@@ -3,7 +3,7 @@ import os
 import re
 import warnings
 from collections import Counter
-from typing import Dict
+from typing import Dict, List, Optional, Tuple
 
 import torch
 
@@ -59,6 +59,14 @@ PANGOLIN_ALIASES = {
     "Z": "B.1.177.50",
 }
 
+# From https://www.who.int/en/activities/tracking-SARS-CoV-2-variants/
+WHO_ALIASES = {
+    "α": ["B.1.1.7"],
+    "β": ["B.1.351", "B.1.351.2", "B.1.351.3"],
+    "γ": ["P.1", "P.1.1", "P.1.2"],
+    "δ": ["B.1.617.2", "AY.1", "AY.2", "AY.3"],
+}
+
 
 def update_aliases():
     repo = os.path.expanduser(PANGOLIN_REPO)
@@ -81,7 +89,7 @@ DECOMPRESS = PANGOLIN_ALIASES.copy()
 COMPRESS: Dict[str, str] = {}
 
 
-def decompress(name):
+def decompress(name: str) -> str:
     """
     Decompress an alias like C.10 to a full lineage like B.1.1.1.10.
     """
@@ -101,7 +109,7 @@ def decompress(name):
     raise ValueError(f"Unknown alias: {repr(name)}")
 
 
-def compress(name):
+def compress(name: str) -> str:
     """
     Compress a full lineage like B.1.1.1.10 to an alias like C.10.
     """
@@ -126,7 +134,7 @@ def compress(name):
 assert compress("B.1.1.7") == "B.1.1.7"
 
 
-def get_parent(name):
+def get_parent(name: str) -> Optional[str]:
     assert decompress(name) == name, "expected a decompressed name"
     if name == "A":
         return None
@@ -136,7 +144,7 @@ def get_parent(name):
     return name.rsplit(".", 1)[0]
 
 
-def find_edges(names):
+def find_edges(names: List[str]) -> List[Tuple[str, str]]:
     """
     Given a set of short lineages, return a list of pairs of parent-child
     relationships among lineages.
@@ -147,8 +155,10 @@ def find_edges(names):
         if x == "A":
             continue  # A is root
         y = get_parent(x)
-        while y not in longnames:
+        while y is not None and y not in longnames:
             y = get_parent(y)
+        if y is None:
+            continue
         if y != x:
             edges.append((x, y) if x < y else (y, x))
     edges = [(compress(x), compress(y)) for x, y in edges]
@@ -157,7 +167,23 @@ def find_edges(names):
     return edges
 
 
-def merge_lineages(counts, min_count):
+def find_descendents(names: List[str]) -> Dict[str, List[str]]:
+    """
+    Given a set of short lineages, returns a dict mapping short lineage to its
+    list of descendents.
+    """
+    longnames = [decompress(name) for name in names]
+    descendents: Dict[str, List[str]] = {}
+    for long1, short1 in zip(longnames, names):
+        prefix = long1 + "."
+        descendents1 = descendents[short1] = []
+        for long2, short2 in zip(longnames, names):
+            if long2.startswith(prefix):
+                descendents1.append(short2)
+    return descendents
+
+
+def merge_lineages(counts: Dict[str, int], min_count: int) -> Dict[str, str]:
     """
     Given a dict of lineage counts and a min_count, returns a mapping from all
     lineages to merged lineages.
@@ -167,12 +193,12 @@ def merge_lineages(counts, min_count):
     assert min_count > 0
 
     # Merge rare children into their parents.
-    counts = Counter({decompress(k): v for k, v in counts.items()})
+    counts: Dict[str, int] = Counter({decompress(k): v for k, v in counts.items()})
     mapping = {}
     for child in sorted(counts, key=lambda k: (-len(k), k)):
         if counts[child] < min_count:
             parent = get_parent(child)
-            if parent == child:
+            if parent is None:
                 continue  # at a root
             counts[parent] += counts.pop(child)
             mapping[child] = parent
@@ -188,7 +214,7 @@ def merge_lineages(counts, min_count):
     return mapping
 
 
-def classify(lineage):
+def classify(lineage: List[str]) -> Tuple[torch.Tensor, List[Tuple[int, int]]]:
     """
     Given a list of compressed lineages, return a torch long tensor of class
     ids and a list of pairs of integers representing parent-child lineage
