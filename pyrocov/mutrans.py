@@ -709,6 +709,10 @@ def log_stats(dataset: dict, result: dict) -> dict:
     """
     Logs statistics of predictions and model fit in the ``result`` of
     ``fit_svi()``.
+
+    :param dict dataset: The dataset dictionary.
+    :param dict result: The output of :func:`fit_svi`.
+    :returns: A dictionary of statistics.
     """
     stats = {}
     stats["loss"] = float(np.median(result["losses"][-100:]))
@@ -747,21 +751,23 @@ def log_stats(dataset: dict, result: dict) -> dict:
         stats[f"R({s})/R(A)"] = R_RA
 
     # Posterior predictive error.
-    true = dataset["weekly_strains"] + 1 / dataset["weekly_strains"].shape[-1]
-    true /= true.sum(-1, True)
-    pred = result["median"]["probs"][: len(true)]
+    true = dataset["weekly_strains"]
+    true = true + 0.5 / dataset["weekly_strains"].shape[-1]  # add Jeffreys prior
+    true /= true.sum(-1, True)  # normalize
+    pred = result["median"]["probs"][: len(true)]  # truncate
     error = (true - pred).abs()
-    mae = error.mean(0)
-    mse = error.square().mean(0)
+    mae = error.mean(0)  # average over time
+    mse = error.square().mean(0)  # average over time
     logger.info("MAE = {:0.4g}, RMSE = {:0.4g}".format(mae.mean(), mse.mean().sqrt()))
-    stats["MAE"] = mae.mean()
-    stats["RMSE"] = mse.mean().sqrt()
+    stats["MAE"] = mae.mean()  # average over region
+    stats["RMSE"] = mse.mean().sqrt()  # root average over region
+
+    # Examine the MSE and RMSE over a few regions of interest.
     queries = {
         "England": ["B.1.1.7"],
         # "England": ["B.1.1.7", "B.1.177", "B.1.1", "B.1"],
         # "USA / California": ["B.1.1.7", "B.1.429", "B.1.427", "B.1.2", "B.1", "P.1"],
     }
-
     for place, strains in queries.items():
         matches = [p for name, p in dataset["location_id"].items() if place in name]
         if not matches:
