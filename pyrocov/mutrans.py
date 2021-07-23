@@ -76,6 +76,7 @@ def rank_loo_lineages(
         pangolin.decompress(name) for name in full_dataset["lineage_id_inv"]
     ]
     lineage_id = {name: i for i, name in enumerate(lineage_id_inv)}
+    ancestors = set(lineage_id)
 
     # Filter to often-observed lineages.
     weekly_strains = full_dataset["weekly_strains"]  # [T, P, S]
@@ -84,10 +85,6 @@ def rank_loo_lineages(
     for c, child in enumerate(lineage_id_inv):
         if child in ("A", "B"):
             continue  # ignore very early lineages
-        parent = pangolin.get_parent(child)
-        assert parent is not None
-        if parent not in lineage_id:
-            continue  # ignore orphans
         if lineage_counts[c] < min_samples:
             continue  # ignore rare lineages
         lineages.append(child)
@@ -96,7 +93,9 @@ def rank_loo_lineages(
     rate_loc = full_result["median"]["rate_loc"]
     ranked_lineages = []
     for child in lineages:
-        parent = pangolin.get_parent(child)
+        # Allow grandparent to adopt orphan, since e.g. B.1.617 is missing from
+        # lineage_id, but B.1.617.2 is very important.
+        parent = pangolin.get_most_recent_ancestor(child, ancestors)
         assert parent is not None
         c = lineage_id[child]
         p = lineage_id[parent]
@@ -104,6 +103,7 @@ def rank_loo_lineages(
         ranked_lineages.append((gap, child))
     ranked_lineages.sort(reverse=True)
 
+    # Compress lineage names before returning.
     return [pangolin.compress(name) for gap, name in ranked_lineages]
 
 

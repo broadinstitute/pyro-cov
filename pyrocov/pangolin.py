@@ -3,7 +3,7 @@ import os
 import re
 import warnings
 from collections import Counter
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 import torch
 
@@ -135,6 +135,10 @@ assert compress("B.1.1.7") == "B.1.1.7"
 
 
 def get_parent(name: str) -> Optional[str]:
+    """
+    Given a decompressed lineage name ``name``, find the decompressed name of
+    its parent lineage.
+    """
     assert decompress(name) == name, "expected a decompressed name"
     if name == "A":
         return None
@@ -142,6 +146,19 @@ def get_parent(name: str) -> Optional[str]:
         return "A"
     assert "." in name, name
     return name.rsplit(".", 1)[0]
+
+
+def get_most_recent_ancestor(name: str, ancestors: Set[str]) -> Optional[str]:
+    """
+    Given a decompressed lineage name ``name``, find the decompressed name of
+    its the lineage's most recent ancestor from ``ancestors``. This is like
+    :func:`get_parent` but may skip one or more generations in case a parent is
+    not in ``ancestors``.
+    """
+    ancestor = get_parent(name)
+    while ancestor is not None and ancestor not in ancestors:
+        ancestor = get_parent(ancestor)
+    return ancestor
 
 
 def find_edges(names: List[str]) -> List[Tuple[str, str]]:
