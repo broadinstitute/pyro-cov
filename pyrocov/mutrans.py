@@ -61,15 +61,15 @@ def get_fine_regions(columns, min_samples=50):
     return frozenset(parts for parts, count in counts.items() if count >= min_samples)
 
 
-def rank_leaves(
+def rank_loo_lineages(
     full_dataset: dict,
     full_result: dict,
     min_samples: int = 100,
 ) -> List[str]:
     """
-    Compute a list of leaf lineages ranked in descending order of how much
-    their growth rate differs from their parents' growth rate. This is used in
-    growth rate prediction experiments.
+    Compute a list of lineages ranked in descending order of how much their
+    growth rate differs from their parents' growth rate. This is used in growth
+    rate leave-one-out prediction experiments.
     """
     # Decompress lineage names before computing parents.
     lineage_id_inv = [
@@ -77,46 +77,34 @@ def rank_leaves(
     ]
     lineage_id = {name: i for i, name in enumerate(lineage_id_inv)}
 
-    # Compute children sets.
-    children = defaultdict(list)
-    for child in lineage_id_inv:
-        parent = pangolin.get_parent(child)
-        if parent is None:
-            continue  # ignore the root node
-        children[parent].append(child)
-        if parent not in lineage_id:
-            continue  # ignore orphans
-
-    # Filter to often-observed leaves.
+    # Filter to often-observed lineages.
     weekly_strains = full_dataset["weekly_strains"]  # [T, P, S]
     lineage_counts = weekly_strains.sum([0, 1])  # [S]
-    leaves = []
+    lineages = []
     for c, child in enumerate(lineage_id_inv):
+        if child in ("A", "B"):
+            continue  # ignore very early lineages
         parent = pangolin.get_parent(child)
-        if parent is None:
-            continue  # ignore the root node
+        assert parent is not None
         if parent not in lineage_id:
             continue  # ignore orphans
-        if children[child]:
-            continue  # restrict to leaves
         if lineage_counts[c] < min_samples:
             continue  # ignore rare lineages
-        leaves.append(child)
+        lineages.append(child)
 
     # Sort leaf nodes by their distance from parent.
     rate_loc = full_result["median"]["rate_loc"]
-    ranked_leaves = []
-    for child in leaves:
+    ranked_lineages = []
+    for child in lineages:
         parent = pangolin.get_parent(child)
         assert parent is not None
         c = lineage_id[child]
         p = lineage_id[parent]
         gap = (rate_loc[c] - rate_loc[p]).abs().item()
-        ranked_leaves.append((gap, child))
-    ranked_leaves.sort(reverse=True)
-    print("DEBUG", ranked_leaves[:20])
+        ranked_lineages.append((gap, child))
+    ranked_lineages.sort(reverse=True)
 
-    return [pangolin.compress(name) for gap, name in ranked_leaves]
+    return [pangolin.compress(name) for gap, name in ranked_lineages]
 
 
 def load_gisaid_data(
@@ -721,6 +709,10 @@ def log_stats(dataset: dict, result: dict) -> dict:
     """
     Logs statistics of predictions and model fit in the ``result`` of
     ``fit_svi()``.
+
+    :param dict dataset: The dataset dictionary.
+    :param dict result: The output of :func:`fit_svi`.
+    :returns: A dictionary of statistics.
     """
     stats = {}
     stats["loss"] = float(np.median(result["losses"][-100:]))
@@ -759,21 +751,23 @@ def log_stats(dataset: dict, result: dict) -> dict:
         stats[f"R({s})/R(A)"] = R_RA
 
     # Posterior predictive error.
-    true = dataset["weekly_strains"] + 1 / dataset["weekly_strains"].shape[-1]
-    true /= true.sum(-1, True)
-    pred = result["median"]["probs"][: len(true)]
+    true = dataset["weekly_strains"]
+    true = true + 0.5 / dataset["weekly_strains"].shape[-1]  # add Jeffreys prior
+    true /= true.sum(-1, True)  # normalize
+    pred = result["median"]["probs"][: len(true)]  # truncate
     error = (true - pred).abs()
-    mae = error.mean(0)
-    mse = error.square().mean(0)
+    mae = error.mean(0)  # average over time
+    mse = error.square().mean(0)  # average over time
     logger.info("MAE = {:0.4g}, RMSE = {:0.4g}".format(mae.mean(), mse.mean().sqrt()))
-    stats["MAE"] = mae.mean()
-    stats["RMSE"] = mse.mean().sqrt()
+    stats["MAE"] = mae.mean()  # average over region
+    stats["RMSE"] = mse.mean().sqrt()  # root average over region
+
+    # Examine the MSE and RMSE over a few regions of interest.
     queries = {
         "England": ["B.1.1.7"],
         # "England": ["B.1.1.7", "B.1.177", "B.1.1", "B.1"],
         # "USA / California": ["B.1.1.7", "B.1.429", "B.1.427", "B.1.2", "B.1", "P.1"],
     }
-
     for place, strains in queries.items():
         matches = [p for name, p in dataset["location_id"].items() if place in name]
         if not matches:

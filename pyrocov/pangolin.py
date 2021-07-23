@@ -59,6 +59,14 @@ PANGOLIN_ALIASES = {
     "Z": "B.1.177.50",
 }
 
+# From https://www.who.int/en/activities/tracking-SARS-CoV-2-variants/
+WHO_ALIASES = {
+    "α": ["B.1.1.7"],
+    "β": ["B.1.351", "B.1.351.2", "B.1.351.3"],
+    "γ": ["P.1", "P.1.1", "P.1.2"],
+    "δ": ["B.1.617.2", "AY.1", "AY.2", "AY.3"],
+}
+
 
 def update_aliases():
     repo = os.path.expanduser(PANGOLIN_REPO)

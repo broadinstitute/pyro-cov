@@ -12,7 +12,7 @@ from typing import Callable, Union
 import pyro
 import torch
 
-from pyrocov import mutrans
+from pyrocov import mutrans, pangolin
 from pyrocov.util import torch_map
 
 logger = logging.getLogger(__name__)
@@ -164,35 +164,37 @@ def vary_leaves(args, default_config):
     # Load a single common dataset.
     dataset = load_data(args)
     lineage_id = {name: i for i, name in enumerate(dataset["lineage_id_inv"])}
+    descendents = pangolin.find_descendents(dataset["lineage_id_inv"])
 
     # Run default config to get a ranking of leaves.
     result = fit_svi(args, dataset, *default_config)
 
     # Rank lineages by divergence from parent.
-    leaves = mutrans.rank_leaves(dataset, result)
-    leaves = leaves[: args.vary_leaves]
+    lineages = mutrans.rank_loo_lineages(dataset, result)
+    lineages = lineages[: args.vary_leaves]
     logger.info(
-        "\n".join([f"Predicting growth rate of {len(leaves)} leaf lineages:"] + leaves)
+        "\n".join(
+            [f"Leave-one-out predicting growth rate of {len(lineages)} lineages:"]
+            + lineages
+        )
     )
 
-    # Create a set of inference configs.
-    configs = []
-    for leaf in leaves:
-        holdout = {"exclude": {"lineage": "^" + leaf + "$"}}
+    # Run inference for each lineage. This is very expensive.
+    results = {}
+    for lineage in lineages:
+        holdout = {"exclude": {"lineage": "^" + lineage + "$"}}
         config = list(default_config)
         config[-1] = holdout_to_hashable(holdout)
         config = tuple(config)
-        configs.append(config)
-
-    results = {}
-    for config in configs:
         logger.info(f"Config: {config}")
 
-        # Construct a leave-one-out dataset.
-        i = lineage_id[leaf]
+        # Construct a leave-one-out dataset by zeroing out a subclade.
+        clade = [lineage_id[lineage]]
+        for descendent in descendents[lineage]:
+            clade.append(lineage_id[descendent])
         loo_dataset = dataset.copy()
         loo_dataset["weekly_strains"] = dataset["weekly_strains"].clone()
-        loo_dataset["weekly_strains"][:, :, i] = 0
+        loo_dataset["weekly_strains"][:, :, clade] = 0
 
         # Run SVI
         result = fit_svi(args, loo_dataset, *config)
