@@ -83,7 +83,7 @@ def rank_loo_lineages(
     lineage_counts = weekly_strains.sum([0, 1])  # [S]
     lineages = []
     for c, child in enumerate(lineage_id_inv):
-        if child in ("A", "B"):
+        if child in ("A", "B", "B.1"):
             continue  # ignore very early lineages
         if lineage_counts[c] < min_samples:
             continue  # ignore rare lineages
