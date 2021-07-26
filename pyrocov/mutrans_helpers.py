@@ -326,7 +326,9 @@ def get_forecast_values(forecast):
 
 def get_fit_by_index(fits, i):
     k = list(fits.keys())
+    logging.debug(f"key list length {len(k)}")
     key = k[i]
+    logging.debug(f"key is {key}")
     fit = fits[key]
     return (key, fit)
 
@@ -414,7 +416,7 @@ def evaluate_fit_forecast(fit, future_fit, queries = None, n_intervals = None,
     # Optionally truncate the tensors to n_intevals
     assert n_intervals is None or n_intervals < n_forecast_steps
     if n_intervals:
-        logging.info(f"Evaluating forecasts for {n_intervals}")
+        logging.debug(f"Evaluating forecasts for {n_intervals}")
         true_forecast = true_forecast.narrow(0, n_intervals_skip, n_intervals)
         pred_forecast = pred_forecast.narrow(0, n_intervals_skip, n_intervals)
     
@@ -468,6 +470,7 @@ def plot_fit_forecasts(
     num_strains=100,
     future_fit=None,
     filename=None,
+    forecast_periods_plot=None,
 ):
     """
     Function to plot forecasts of specific strains in specific regions
@@ -479,18 +482,26 @@ def plot_fit_forecasts(
     :param show_observed: show the observed points
     :param num_strains: num_strains param to pass downstream
     :param future_fit: optional fit with future data, used to print datapoint in predicted interval
+    :param filename: filename to save plot
     """
     
     logging.debug("Entering plot_fit_forecast()")
+    
     if isinstance(queries, str):
+        logging.debug('queries was string; converting to array')
         queries = [queries]
 
     logging.debug("Generating forecast...")
     fc1 = generate_forecast(
         fit=fit, queries=queries, 
         num_strains=num_strains, 
-        future_fit=future_fit
+        future_fit=future_fit,
     )
+    
+    #return fc1
+
+    # Check that all the strains to show are in the lineage_id_inv
+    assert all([ item in fc1['lineage_id_inv'] for item in strains_to_show ]) 
     
     logging.debug("Getting forecast values...")
     forecast_values = get_forecast_values(forecast=fc1)
@@ -563,10 +574,13 @@ def plot_fit_forecasts(
                     )
                 # Plot actual points from future fit
                 if future_fit is not None:
+                    last_point = len(sel_observed) + forecast_periods
+                    if forecast_periods_plot:
+                        last_point = len(sel_observed) + forecast_periods_plot
                     ax_c.plot(
-                        dates[len(sel_observed) : len(sel_observed) + forecast_periods],
+                        dates[len(sel_observed) : last_point],
                         sel_observed_future[
-                            len(sel_observed) : len(sel_observed) + forecast_periods, s
+                            len(sel_observed) : last_point, s
                         ],
                         lw=0,
                         marker="x",
