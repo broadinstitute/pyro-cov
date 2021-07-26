@@ -454,7 +454,7 @@ def evaluate_fit_forecast(
     for place, strains in queries.items():
         matches = [p for name, p in common_regions_dict.items() if place in name]
         if not matches:
-            logging.debug(f"No matches for {place}, {strain}")
+            logging.debug(f"No matches for {place}, {strains}")
             continue
         assert len(matches) == 1, matches
         p = matches[0]
