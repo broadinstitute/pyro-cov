@@ -170,8 +170,7 @@ def vary_leaves(args, default_config):
     result = fit_svi(args, dataset, *default_config)
 
     # Rank lineages by divergence from parent.
-    lineages = mutrans.rank_loo_lineages(dataset, result)
-    lineages = lineages[: args.vary_leaves]
+    lineages = mutrans.rank_loo_lineages(dataset, result, min_samples=args.vary_leaves)
     logger.info(
         "\n".join(
             [f"Leave-one-out predicting growth rate of {len(lineages)} lineages:"]
@@ -370,7 +369,7 @@ if __name__ == "__main__":
     parser.add_argument("--vary-num-steps", help="comma delimited list of num_steps")
     parser.add_argument("--vary-holdout", action="store_true")
     parser.add_argument(
-        "--vary-leaves", type=int, help="number of leaf lineages to hold out"
+        "--vary-leaves", type=int, help="min number of samples per held out lineage"
     )
     parser.add_argument("-cd", "--cond-data", default="coef_scale=0.5")
     parser.add_argument("-g", "--guide-type", default="custom")
