@@ -4,6 +4,7 @@ import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+from collections import OrderedDict 
 
 from pyrocov import mutrans
 
@@ -354,6 +355,109 @@ def get_available_strains(fit, num_strains=100):
 
     return [lineage_id_inv[i] for i in strain_ids]
 
+@torch.no_grad()
+def evaluate_fit_forecast(fit, future_fit, queries = None, n_intervals = None,
+                        n_intervals_skip = 0,
+                         add_jeffreys_prior = True):
+    """
+    Evaluate the forecast produced by a fit w.r.t. future data
+    
+    :param fit: fit to evaluate
+    :param future_fit: fit to get future data values form
+    :param queries: a queries object in the form of hash of location => array(strains)
+    :param n_intervals: number of intervals to evaluate forecast for, if None, all available
+    :param n_intevals_skip: number of intervals to skip in evaluating the fit forecast
+    :param add_jeffreys_prior: addition of jeffreys prior on true data for stability
+    
+    """
+    
+    if not queries:
+        queries = { "England": ["B.1.1.7"], }
+
+    # Output stats dictionary
+    stats = {}
+    
+    # Ensure the strains of the fit and future_fit match
+    assert fit['lineage_id_inv'] == future_fit['lineage_id_inv']
+    
+    lineages = OrderedDict()
+    for i, s in enumerate(fit["lineage_id_inv"]):
+        lineages[s] = i
+    
+    # Get the truth from the future dataset
+    true = future_fit["weekly_strains"]
+    if add_jeffreys_prior:
+        true = true + 0.5 / future_fit["weekly_strains"].shape[-1]  # add Jeffreys prior
+    logging.debug(f"initial true shape: {true.shape}")
+    
+    # Get the predicted fit
+    pred = fit["median"]["probs"]
+    logging.debug(f"initial pred shape: {pred.shape}")
+    
+    # Number of steps forecasted in fit    
+    n_forecast_steps = len(pred) - len(fit["weekly_strains"])
+    logging.debug(f"Forecast steps: {n_forecast_steps}")
+    
+    # Remove timepoints not predicted from truth tensor
+    true = true[:len(pred)]
+    logging.debug(f"true shape after filtering: {true.shape}")
+
+    # Get the first step at which we are predicting
+    forecast_start = len(true) - n_forecast_steps
+    
+    # Keep only forecast steps from both tensors
+    true_forecast = true.narrow(0, forecast_start, n_forecast_steps)
+    pred_forecast = pred.narrow(0, forecast_start, n_forecast_steps)
+    logging.debug(f"true_forecast shape: {true_forecast.shape}")
+    logging.debug(f"pred_forecast shape: {pred_forecast.shape}")
+    
+    # Optionally truncate the tensors to n_intevals
+    assert n_intervals is None or n_intervals < n_forecast_steps
+    if n_intervals:
+        logging.info(f"Evaluating forecasts for {n_intervals}")
+        true_forecast = true_forecast.narrow(0, n_intervals_skip, n_intervals)
+        pred_forecast = pred_forecast.narrow(0, n_intervals_skip, n_intervals)
+    
+    # Make an OrderedDict of Regions to keep in the tensors we are comparing
+    common_regions_dict = OrderedDict()
+    for i, r in enumerate(future_fit['location_id'].keys() & fit['location_id'].keys()):
+        common_regions_dict[r] = i
+    
+    # Get indices of the common regions in the two fits
+    future_fit_loc_idx = torch.tensor([future_fit['location_id'][ct] for ct in common_regions_dict])
+    fit_loc_idx = torch.tensor([fit['location_id'][ct] for ct in common_regions_dict])
+    
+    # Put tensors in same order for place (P)
+    true_forecast = true_forecast.index_select(1, future_fit_loc_idx)
+    pred_forecast = pred_forecast.index_select(1, fit_loc_idx)
+    logging.debug(f"true_forecast shape: {true_forecast.shape}")
+    logging.debug(f"pred_forecast shape: {pred_forecast.shape}")
+    
+    # Calculate error
+    error = (true_forecast - pred_forecast).abs()
+    mae = error.mean(0)
+    mse = error.square().mean(0)
+
+    # Generate output statistics
+    for place, strains in queries.items():
+        matches = [p for name, p in common_regions_dict.items() if place in name]
+        if not matches:
+            logging.debug(f"No matches for {place}, {strain}")
+            continue
+        assert len(matches) == 1, matches
+        p = matches[0]
+        stats[f"{place} MAE"] = mae[p].mean()
+        stats[f"{place} RMSE"] = mse[p].mean().sqrt()
+        
+        for strain_name in strains:
+            s = lineages[strain_name]
+            s = [s]           
+            stats[f"{place} {strain_name} MAE"] = mae[p, s].mean()
+            stats[f"{place} {strain_name} RMSE"] = mse[p, s].sqrt()
+    
+    # return the calculated statistics
+    return stats
+        
 
 def plot_fit_forecasts(
     fit,
@@ -376,16 +480,23 @@ def plot_fit_forecasts(
     :param num_strains: num_strains param to pass downstream
     :param future_fit: optional fit with future data, used to print datapoint in predicted interval
     """
-
-    fc1 = generate_forecast(
-        fit=fit, queries=queries, num_strains=num_strains, future_fit=future_fit
-    )
-    forecast_values = get_forecast_values(forecast=fc1)
-
+    
+    logging.debug("Entering plot_fit_forecast()")
     if isinstance(queries, str):
         queries = [queries]
 
+    logging.debug("Generating forecast...")
+    fc1 = generate_forecast(
+        fit=fit, queries=queries, 
+        num_strains=num_strains, 
+        future_fit=future_fit
+    )
+    
+    logging.debug("Getting forecast values...")
+    forecast_values = get_forecast_values(forecast=fc1)
+    
     dates = matplotlib.dates.date2num(mutrans.date_range(len(fit["mean"]["probs"])))
+    logging.debug(f"dates length: {len(dates)}")
 
     # Strain ids
     strain_ids = forecast_values["strain_ids"]
