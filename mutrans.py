@@ -3,7 +3,6 @@
 import argparse
 import functools
 import gc
-import glob
 import logging
 import os
 import re
@@ -145,32 +144,37 @@ def vary_leaves(args, default_config):
     Run a leave-one-out experiment over a set of leaf lineages, saving results
     to ``results/mutrans.vary_leaves.pt``.
     """
-    # Optionally fix old results.
-    if args.fix_old_vary_leaves:
-        for filename in glob.glob("results/mutrans.svi.*exclude=___lineage___*.pt"):
-            logger.info("fixing " + filename)
-            result = torch.load(filename)
-            median = result.get("median", result)
-            result = {
-                "args": result["args"],
-                "median": {
-                    "coef": median["coef"].float(),  # [F]
-                    "rate_loc": median["rate_loc"].float(),  # [S]
-                },
-            }
-            torch.save(result, filename)
-            del result
-
     # Load a single common dataset.
     dataset = load_data(args)
     lineage_id = {name: i for i, name in enumerate(dataset["lineage_id_inv"])}
     descendents = pangolin.find_descendents(dataset["lineage_id_inv"])
 
+    # Optionally restrict mutations to a single gene.
+    if args.only_gene:
+        select = []
+        mutations = []
+        for i, m in enumerate(dataset["mutations"]):
+            if m.split(":")[0] == args.only_gene:
+                select.append(i)
+                mutations.append(m)
+        assert select, f"no mutations found in gene {args.only_gene}"
+        dataset["mutations"] = mutations
+        dataset["features"] = dataset["features"][:, select]
+
     # Run default config to get a ranking of leaves.
-    result = fit_svi(args, dataset, *default_config)
+    def make_config(**holdout):
+        if args.only_gene:
+            holdout["include"]["gene"] = args.only_gene
+        config = list(default_config)
+        config[-1] = holdout_to_hashable(holdout)
+        config = tuple(config)
+        return config
+
+    result = fit_svi(args, dataset, *make_config())
 
     # Rank lineages by divergence from parent.
-    lineages = mutrans.rank_loo_lineages(dataset, result, min_samples=args.vary_leaves)
+    lineages = mutrans.rank_loo_lineages(dataset, result)
+    lineages = lineages[: args.vary_leaves]
     logger.info(
         "\n".join(
             [f"Leave-one-out predicting growth rate of {len(lineages)} lineages:"]
@@ -181,10 +185,7 @@ def vary_leaves(args, default_config):
     # Run inference for each lineage. This is very expensive.
     results = {}
     for lineage in lineages:
-        holdout = {"exclude": {"lineage": "^" + lineage + "$"}}
-        config = list(default_config)
-        config[-1] = holdout_to_hashable(holdout)
-        config = tuple(config)
+        config = make_config(exclude={"lineage": "^" + lineage + "$"})
         logger.info(f"Config: {config}")
 
         # Construct a leave-one-out dataset by zeroing out a subclade.
@@ -371,6 +372,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--vary-leaves", type=int, help="min number of samples per held out lineage"
     )
+    parser.add_argument("--only-gene")
     parser.add_argument("-cd", "--cond-data", default="coef_scale=0.5")
     parser.add_argument("-g", "--guide-type", default="custom")
     parser.add_argument("-n", "--num-steps", default=10001, type=int)
@@ -391,7 +393,6 @@ if __name__ == "__main__":
     parser.add_argument("--no-jit", dest="jit", action="store_false")
     parser.add_argument("--seed", default=20210319, type=int)
     parser.add_argument("-l", "--log-every", default=50, type=int)
-    parser.add_argument("--fix-old-vary-leaves", action="store_true")
     parser.add_argument("--no-new", action="store_true")
     parser.add_argument("--no-cache", action="store_true")
     parser.add_argument("--test", action="store_true")
