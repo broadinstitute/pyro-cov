@@ -5,6 +5,7 @@ import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+import torch.distributions as dist
 
 from pyrocov import mutrans
 
@@ -362,113 +363,79 @@ def get_available_strains(fit, num_strains=100):
 def evaluate_fit_forecast(
     fit,
     future_fit,
-    queries=None,
-    n_intervals=None,
-    n_intervals_skip=0,
-    add_jeffreys_prior=True,
 ):
     """
     Evaluate the forecast produced by a fit w.r.t. future data
 
     :param fit: fit to evaluate
     :param future_fit: fit to get future data values form
-    :param queries: a queries object in the form of hash of location => array(strains)
-    :param n_intervals: number of intervals to evaluate forecast for, if None, all available
-    :param n_intevals_skip: number of intervals to skip in evaluating the fit forecast
-    :param add_jeffreys_prior: addition of jeffreys prior on true data for stability
 
     """
-
-    if not queries:
-        queries = {
-            "England": ["B.1.1.7"],
-        }
-
-    # Output stats dictionary
-    stats = {}
-
     # Ensure the strains of the fit and future_fit match
     assert fit["lineage_id_inv"] == future_fit["lineage_id_inv"]
 
-    lineages = OrderedDict()
-    for i, s in enumerate(fit["lineage_id_inv"]):
-        lineages[s] = i
-
     # Get the truth from the future dataset
     true = future_fit["weekly_strains"]
-    if add_jeffreys_prior:
-        true = true + 0.5 / future_fit["weekly_strains"].shape[-1]  # add Jeffreys prior
     logging.debug(f"initial true shape: {true.shape}")
 
     # Get the predicted fit
     pred = fit["median"]["probs"]
     logging.debug(f"initial pred shape: {pred.shape}")
 
-    # Number of steps forecasted in fit
-    n_forecast_steps = len(pred) - len(fit["weekly_strains"])
-    logging.debug(f"Forecast steps: {n_forecast_steps}")
-
-    # Remove timepoints not predicted from truth tensor
-    true = true[: len(pred)]
-    logging.debug(f"true shape after filtering: {true.shape}")
-
-    # Get the first step at which we are predicting
-    forecast_start = len(true) - n_forecast_steps
-
-    # Keep only forecast steps from both tensors
-    true_forecast = true.narrow(0, forecast_start, n_forecast_steps)
-    pred_forecast = pred.narrow(0, forecast_start, n_forecast_steps)
-    logging.debug(f"true_forecast shape: {true_forecast.shape}")
-    logging.debug(f"pred_forecast shape: {pred_forecast.shape}")
-
-    # Optionally truncate the tensors to n_intevals
-    assert n_intervals is None or n_intervals < n_forecast_steps
-    if n_intervals:
-        logging.debug(f"Evaluating forecasts for {n_intervals}")
-        true_forecast = true_forecast.narrow(0, n_intervals_skip, n_intervals)
-        pred_forecast = pred_forecast.narrow(0, n_intervals_skip, n_intervals)
-
-    # Make an OrderedDict of Regions to keep in the tensors we are comparing
-    common_regions_dict = OrderedDict()
-    for i, r in enumerate(future_fit["location_id"].keys() & fit["location_id"].keys()):
-        common_regions_dict[r] = i
+    # Restrict to the forecast interval.
+    t0 = len(fit["weekly_strains"])
+    t1 = min(len(true), len(pred))
+    pred = pred[t0:t1]
+    true = true[t0:t1]
 
     # Get indices of the common regions in the two fits
-    future_fit_loc_idx = torch.tensor(
-        [future_fit["location_id"][ct] for ct in common_regions_dict]
+    common_regions = list(
+        future_fit["location_id"].keys() & fit["location_id"].keys()
     )
-    fit_loc_idx = torch.tensor([fit["location_id"][ct] for ct in common_regions_dict])
+    future_fit_loc_idx = torch.tensor(
+        [future_fit["location_id"][ct] for ct in common_regions]
+    )
+    fit_loc_idx = torch.tensor([fit["location_id"][ct] for ct in common_regions])
 
     # Put tensors in same order for place (P)
-    true_forecast = true_forecast.index_select(1, future_fit_loc_idx)
-    pred_forecast = pred_forecast.index_select(1, fit_loc_idx)
-    logging.debug(f"true_forecast shape: {true_forecast.shape}")
-    logging.debug(f"pred_forecast shape: {pred_forecast.shape}")
+    true = true.index_select(1, future_fit_loc_idx)
+    pred = pred.index_select(1, fit_loc_idx)
+    logging.debug(f"true shape: {true.shape}")
+    logging.debug(f"pred shape: {pred.shape}")
 
-    # Calculate error
-    error = (true_forecast - pred_forecast).abs()
-    mae = error.mean(0)
-    mse = error.square().mean(0)
+    # Calculate log likelihood per observation, over time
+    log_likelihood = dist.Multinomial(
+        probs=pred, validate_args=False).log_prob(true).sum(-1)
+    num_obs = true.sum([1, -1])
+    log_likelihood = log_likelihood / num_obs
 
-    # Generate output statistics
-    for place, strains in queries.items():
-        matches = [p for name, p in common_regions_dict.items() if place in name]
-        if not matches:
-            logging.debug(f"No matches for {place}, {strains}")
-            continue
-        assert len(matches) == 1, matches
-        p = matches[0]
-        stats[f"{place} MAE"] = mae[p].mean()
-        stats[f"{place} RMSE"] = mse[p].mean().sqrt()
+    # Compute obs-weighted perplexity as baseline for log_likelihood.
+    probs = true + 1e-8  # [T, P, S]
+    probs /= probs.sum(-1, True)
+    entropy = -(probs * probs.log()).sum(-1)  # [T, P]
+    perplexity = entropy.exp()
+    kl = (probs * (probs.log() - pred.log())).sum(-1)
+    # compute a weighted average over regions.
+    weight = true.sum(-1)  # [T, P]
+    weight /= weight.sum(-1, True)
+    entropy = (entropy * weight).sum(1)  # [T]
+    perplexity = (perplexity * weight).sum(1)  # [T]
+    kl = (kl * weight).sum(1)  # [T]
 
-        for strain_name in strains:
-            s = lineages[strain_name]
-            s = [s]
-            stats[f"{place} {strain_name} MAE"] = mae[p, s].mean()
-            stats[f"{place} {strain_name} RMSE"] = mse[p, s].sqrt()
+    # Calculate error over time
+    error = true - pred * true.sum(-1, True)
+    mae = error.abs().sum(-1).mean(1)
+    rmse = error.square().sum(-1).mean(0).sqrt()
 
-    # return the calculated statistics
-    return stats
+    # return the calculated statistics, each batched over time
+    return {
+            'log_likelihood': log_likelihood,
+            'entropy': entropy,
+            'perplexity': perplexity,
+            'kl': kl,
+            'mae': mae,
+            'rmse': rmse,
+    }
 
 
 def plot_fit_forecasts(
