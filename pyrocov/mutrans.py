@@ -148,15 +148,21 @@ def load_gisaid_data(
     # Filter regions to at least 50 sample and aggregate rest to country level
     fine_regions = get_fine_regions(columns)
 
-    # Filter features into numbers of mutations.
+    # Filter features into numbers of mutations and possibly genes.
     aa_features = torch.load(nextclade_features_filename)
     mutations = aa_features["mutations"]
     features = aa_features["features"].to(
         device=device, dtype=torch.get_default_dtype()
     )
-
     keep = [m.count(",") == 0 for m in mutations]
+    if include.get("gene"):
+        re_gene = include.pop("gene")
+        keep = [k and bool(re_gene.search(m)) for k, m in zip(keep, mutations)]
+    if exclude.get("gene"):
+        re_gene = exclude.pop("gene")
+        keep = [k and not re_gene.search(m) for k, m in zip(keep, mutations)]
     mutations = [m for k, m in zip(keep, mutations) if k]
+    assert mutations, "No mutations selected"
     features = features[:, keep]
     logger.info("Loaded {} feature matrix".format(" x ".join(map(str, features.shape))))
 
@@ -730,6 +736,8 @@ def log_stats(dataset: dict, result: dict) -> dict:
 
     # Effects of individual mutations.
     for name in ["S:D614G", "S:N501Y", "S:E484K", "S:L452R"]:
+        if name not in mutations:
+            continue
         i = mutations.index(name)
         m = mean[i] * 0.01
         s = std[i] * 0.01
@@ -750,10 +758,20 @@ def log_stats(dataset: dict, result: dict) -> dict:
         logger.info(f"R({s})/R(A) = {R_RA:0.3g}")
         stats[f"R({s})/R(A)"] = R_RA
 
-    # Posterior predictive error.
+    # Accuracy of mutation-only model, ie without region-local effects.
     true = dataset["weekly_strains"] + 1e-20  # avoid nans
     true_probs = true / true.sum(-1, True)
-    pred = result["median"]["probs"][: len(true)]  # truncate
+    local_time = dataset["local_time"][..., None]
+    local_time = local_time + result["params"]["local_time"].to(local_time.device)
+    rate = 0.01 * result["median"]["coef"] @ dataset["features"].T
+    pred = result["median"]["init"] + rate * local_time
+    pred -= pred.logsumexp(-1, True)  # apply log sigmoid function
+    kl = true.mul(true_probs.log() - pred).sum(-1)
+    stats["naive KL"] = kl.sum() / true.sum()
+    logger.info("naive KL = {:0.4g}".format(stats["naive KL"]))
+
+    # Posterior predictive error.
+    pred = result["median"]["probs"][: len(true)] + 1e-20  # truncate, avoid nans
     kl = true.mul(true_probs.log() - pred.log()).sum([0, -1])
     error = pred - true_probs
     mae = error.abs().mean(0)  # average over time
