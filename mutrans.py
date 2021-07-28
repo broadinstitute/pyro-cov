@@ -235,7 +235,7 @@ def vary_gene(args, default_config):
         # Fit a single model.
         logger.info(f"Holdout: {holdout}")
         dataset = load_data(args, **holdout)
-        result = fit_svi(args, dataset, make_config(**holdout))
+        result = fit_svi(args, dataset, *make_config(**holdout))
 
         # Save metrics.
         key = holdout_to_hashable(holdout)
