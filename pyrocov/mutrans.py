@@ -751,16 +751,17 @@ def log_stats(dataset: dict, result: dict) -> dict:
         stats[f"R({s})/R(A)"] = R_RA
 
     # Posterior predictive error.
-    true = dataset["weekly_strains"]
-    true = true + 0.5 / dataset["weekly_strains"].shape[-1]  # add Jeffreys prior
-    true /= true.sum(-1, True)  # normalize
+    true = dataset["weekly_strains"] + 1e-20  # avoid nans
+    true_probs = true / true.sum(-1, True)
     pred = result["median"]["probs"][: len(true)]  # truncate
-    error = (true - pred).abs()
-    mae = error.mean(0)  # average over time
+    kl = true.mul(true_probs.log() - pred.log()).sum([0, -1])
+    error = pred - true_probs
+    mae = error.abs().mean(0)  # average over time
     mse = error.square().mean(0)  # average over time
-    logger.info("MAE = {:0.4g}, RMSE = {:0.4g}".format(mae.mean(), mse.mean().sqrt()))
-    stats["MAE"] = mae.mean()  # average over region
-    stats["RMSE"] = mse.mean().sqrt()  # root average over region
+    stats["MAE"] = mae.sum(-1).mean()  # average over region
+    stats["RMSE"] = mse.sum(-1).mean().sqrt()  # root average over region
+    stats["KL"] = kl.sum() / true.sum()  # in units of nats / observation
+    logger.info("KL = {KL:0.4g}, MAE = {MAE:0.4g}, RMSE = {RMSE:0.4g}".format(**stats))
 
     # Examine the MSE and RMSE over a few regions of interest.
     queries = {
@@ -774,23 +775,30 @@ def log_stats(dataset: dict, result: dict) -> dict:
             continue
         assert len(matches) == 1, matches
         p = matches[0]
+        stats[f"{place} KL"] = kl[p].sum() / true[:, p].sum()
+        stats[f"{place} MAE"] = mae[p].sum()
+        stats[f"{place} RMSE"] = mse[p].sum().sqrt()
         logger.info(
-            "{}\tMAE = {:0.3g}, RMSE = {:0.3g}".format(
-                place, mae[p].mean(), mse[p].mean().sqrt()
+            "{}\tKL = {:0.3g}, MAE = {:0.3g}, RMSE = {:0.3g}".format(
+                place,
+                stats[f"{place} KL"],
+                stats[f"{place} MAE"],
+                stats[f"{place} RMSE"],
             )
         )
-        stats[f"{place} MAE"] = mae[p].mean()
-        stats[f"{place} RMSE"] = mse[p].mean().sqrt()
 
         for strain in strains:
             s = dataset["lineage_id"][strain]
-            logger.info(
-                "{} {}\tMAE = {:0.3g}, RMSE = {:0.3g}".format(
-                    place, strain, mae[p, s], mse[p, s].sqrt()
-                )
-            )
             stats[f"{place} {strain} MAE"] = mae[p, s]
             stats[f"{place} {strain} RMSE"] = mse[p, s].sqrt()
+            logger.info(
+                "{} {}\tMAE = {:0.3g}, RMSE = {:0.3g}".format(
+                    place,
+                    strain,
+                    stats[f"{place} {strain} MAE"],
+                    stats[f"{place} {strain} RMSE"],
+                )
+            )
 
     return {k: float(v) for k, v in stats.items()}
 
