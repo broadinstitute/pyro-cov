@@ -4,6 +4,7 @@ import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+import torch.distributions as dist
 
 from pyrocov import mutrans
 
@@ -325,7 +326,9 @@ def get_forecast_values(forecast):
 
 def get_fit_by_index(fits, i):
     k = list(fits.keys())
+    logging.debug(f"key list length {len(k)}")
     key = k[i]
+    logging.debug(f"key is {key}")
     fit = fits[key]
     return (key, fit)
 
@@ -355,6 +358,84 @@ def get_available_strains(fit, num_strains=100):
     return [lineage_id_inv[i] for i in strain_ids]
 
 
+@torch.no_grad()
+def evaluate_fit_forecast(
+    fit,
+    future_fit,
+):
+    """
+    Evaluate the forecast produced by a fit w.r.t. future data
+
+    :param fit: fit to evaluate
+    :param future_fit: fit to get future data values form
+
+    """
+    # Ensure the strains of the fit and future_fit match
+    assert fit["lineage_id_inv"] == future_fit["lineage_id_inv"]
+
+    # Get the truth from the future dataset
+    true = future_fit["weekly_strains"]
+    logging.debug(f"initial true shape: {true.shape}")
+
+    # Get the predicted fit
+    pred = fit["median"]["probs"]
+    logging.debug(f"initial pred shape: {pred.shape}")
+
+    # Restrict to the forecast interval.
+    t0 = len(fit["weekly_strains"])
+    t1 = min(len(true), len(pred))
+    pred = pred[t0:t1]
+    true = true[t0:t1]
+
+    # Get indices of the common regions in the two fits
+    common_regions = list(future_fit["location_id"].keys() & fit["location_id"].keys())
+    future_fit_loc_idx = torch.tensor(
+        [future_fit["location_id"][ct] for ct in common_regions]
+    )
+    fit_loc_idx = torch.tensor([fit["location_id"][ct] for ct in common_regions])
+
+    # Put tensors in same order for place (P)
+    true = true.index_select(1, future_fit_loc_idx)
+    pred = pred.index_select(1, fit_loc_idx)
+    logging.debug(f"true shape: {true.shape}")
+    logging.debug(f"pred shape: {pred.shape}")
+
+    # Calculate log likelihood per observation, over time
+    log_likelihood = (
+        dist.Multinomial(probs=pred, validate_args=False).log_prob(true).sum(-1)
+    )
+    num_obs = true.sum([1, -1])
+    log_likelihood = log_likelihood / num_obs
+
+    # Compute obs-weighted perplexity as baseline for log_likelihood.
+    probs = true + 1e-8  # [T, P, S]
+    probs /= probs.sum(-1, True)
+    entropy = -(probs * probs.log()).sum(-1)  # [T, P]
+    perplexity = entropy.exp()
+    kl = (probs * (probs.log() - pred.log())).sum(-1)
+    # compute a weighted average over regions.
+    weight = true.sum(-1)  # [T, P]
+    weight /= weight.sum(-1, True)
+    entropy = (entropy * weight).sum(1)  # [T]
+    perplexity = (perplexity * weight).sum(1)  # [T]
+    kl = (kl * weight).sum(1)  # [T]
+
+    # Calculate error over time
+    error = true - pred * true.sum(-1, True)
+    mae = error.abs().sum(-1).mean(1)
+    rmse = error.square().sum(-1).mean(0).sqrt()
+
+    # return the calculated statistics, each batched over time
+    return {
+        "log_likelihood": log_likelihood,
+        "entropy": entropy,
+        "perplexity": perplexity,
+        "kl": kl,
+        "mae": mae,
+        "rmse": rmse,
+    }
+
+
 def plot_fit_forecasts(
     fit,
     queries=["England", "USA / California", "Brazil"],
@@ -364,6 +445,7 @@ def plot_fit_forecasts(
     num_strains=100,
     future_fit=None,
     filename=None,
+    forecast_periods_plot=None,
 ):
     """
     Function to plot forecasts of specific strains in specific regions
@@ -375,17 +457,33 @@ def plot_fit_forecasts(
     :param show_observed: show the observed points
     :param num_strains: num_strains param to pass downstream
     :param future_fit: optional fit with future data, used to print datapoint in predicted interval
+    :param filename: filename to save plot
     """
 
-    fc1 = generate_forecast(
-        fit=fit, queries=queries, num_strains=num_strains, future_fit=future_fit
-    )
-    forecast_values = get_forecast_values(forecast=fc1)
+    logging.debug("Entering plot_fit_forecast()")
 
     if isinstance(queries, str):
+        logging.debug("queries was string; converting to array")
         queries = [queries]
 
+    logging.debug("Generating forecast...")
+    fc1 = generate_forecast(
+        fit=fit,
+        queries=queries,
+        num_strains=num_strains,
+        future_fit=future_fit,
+    )
+
+    # return fc1
+
+    # Check that all the strains to show are in the lineage_id_inv
+    assert all([item in fc1["lineage_id_inv"] for item in strains_to_show])
+
+    logging.debug("Getting forecast values...")
+    forecast_values = get_forecast_values(forecast=fc1)
+
     dates = matplotlib.dates.date2num(mutrans.date_range(len(fit["mean"]["probs"])))
+    logging.debug(f"dates length: {len(dates)}")
 
     # Strain ids
     strain_ids = forecast_values["strain_ids"]
@@ -452,11 +550,12 @@ def plot_fit_forecasts(
                     )
                 # Plot actual points from future fit
                 if future_fit is not None:
+                    last_point = len(sel_observed) + forecast_periods
+                    if forecast_periods_plot:
+                        last_point = len(sel_observed) + forecast_periods_plot
                     ax_c.plot(
-                        dates[len(sel_observed) : len(sel_observed) + forecast_periods],
-                        sel_observed_future[
-                            len(sel_observed) : len(sel_observed) + forecast_periods, s
-                        ],
+                        dates[len(sel_observed) : last_point],
+                        sel_observed_future[len(sel_observed) : last_point, s],
                         lw=0,
                         marker="x",
                         color=color,
