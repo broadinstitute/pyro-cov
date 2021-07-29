@@ -421,6 +421,8 @@ def evaluate_fit_forecast(
     entropy = (entropy * weight).sum(1)  # [T]
     perplexity = (perplexity * weight).sum(1)  # [T]
     kl = (kl * weight).sum(1)  # [T]
+    
+    
 
     # Calculate error over time
     error = true - pred * true.sum(-1, True)
