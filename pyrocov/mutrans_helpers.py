@@ -389,9 +389,7 @@ def evaluate_fit_forecast(
     true = true[t0:t1]
 
     # Get indices of the common regions in the two fits
-    common_regions = list(
-        future_fit["location_id"].keys() & fit["location_id"].keys()
-    )
+    common_regions = list(future_fit["location_id"].keys() & fit["location_id"].keys())
     future_fit_loc_idx = torch.tensor(
         [future_fit["location_id"][ct] for ct in common_regions]
     )
@@ -404,8 +402,9 @@ def evaluate_fit_forecast(
     logging.debug(f"pred shape: {pred.shape}")
 
     # Calculate log likelihood per observation, over time
-    log_likelihood = dist.Multinomial(
-        probs=pred, validate_args=False).log_prob(true).sum(-1)
+    log_likelihood = (
+        dist.Multinomial(probs=pred, validate_args=False).log_prob(true).sum(-1)
+    )
     num_obs = true.sum([1, -1])
     log_likelihood = log_likelihood / num_obs
 
@@ -421,8 +420,6 @@ def evaluate_fit_forecast(
     entropy = (entropy * weight).sum(1)  # [T]
     perplexity = (perplexity * weight).sum(1)  # [T]
     kl = (kl * weight).sum(1)  # [T]
-    
-    
 
     # Calculate error over time
     error = true - pred * true.sum(-1, True)
@@ -431,12 +428,12 @@ def evaluate_fit_forecast(
 
     # return the calculated statistics, each batched over time
     return {
-            'log_likelihood': log_likelihood,
-            'entropy': entropy,
-            'perplexity': perplexity,
-            'kl': kl,
-            'mae': mae,
-            'rmse': rmse,
+        "log_likelihood": log_likelihood,
+        "entropy": entropy,
+        "perplexity": perplexity,
+        "kl": kl,
+        "mae": mae,
+        "rmse": rmse,
     }
 
 
