@@ -62,4 +62,10 @@ pull-grid:
 	  pyro-cov-fritzo-vm:~/pyro-cov/results/mutrans.grid.pt \
 	  results/
 
+pull-leaves:
+	gcloud compute scp --project pyro-284215 --zone us-central1-c \
+	  --recurse --compress \
+	  pyro-cov-fritzo-vm:~/pyro-cov/results/mutrans.vary_leaves.pt \
+	  results/
+
 FORCE:

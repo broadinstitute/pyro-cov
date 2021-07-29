@@ -3,7 +3,6 @@
 import argparse
 import functools
 import gc
-import glob
 import logging
 import os
 import re
@@ -13,6 +12,7 @@ import pyro
 import torch
 
 from pyrocov import mutrans, pangolin
+from pyrocov.sarscov2 import GENE_TO_POSITION
 from pyrocov.util import torch_map
 
 logger = logging.getLogger(__name__)
@@ -145,29 +145,25 @@ def vary_leaves(args, default_config):
     Run a leave-one-out experiment over a set of leaf lineages, saving results
     to ``results/mutrans.vary_leaves.pt``.
     """
-    # Optionally fix old results.
-    if args.fix_old_vary_leaves:
-        for filename in glob.glob("results/mutrans.svi.*exclude=___lineage___*.pt"):
-            logger.info("fixing " + filename)
-            result = torch.load(filename)
-            median = result.get("median", result)
-            result = {
-                "args": result["args"],
-                "median": {
-                    "coef": median["coef"].float(),  # [F]
-                    "rate_loc": median["rate_loc"].float(),  # [S]
-                },
-            }
-            torch.save(result, filename)
-            del result
-
     # Load a single common dataset.
     dataset = load_data(args)
     lineage_id = {name: i for i, name in enumerate(dataset["lineage_id_inv"])}
     descendents = pangolin.find_descendents(dataset["lineage_id_inv"])
+    if args.only_gene:
+        for m in dataset["mutations"]:
+            assert m.startswith(args.only_gene + ":"), m
 
     # Run default config to get a ranking of leaves.
-    result = fit_svi(args, dataset, *default_config)
+    def make_config(**holdout):
+        if args.only_gene:
+            include = holdout.setdefault("include", {})
+            include["gene"] = args.only_gene
+        config = list(default_config)
+        config[-1] = holdout_to_hashable(holdout)
+        config = tuple(config)
+        return config
+
+    result = fit_svi(args, dataset, *make_config())
 
     # Rank lineages by divergence from parent.
     lineages = mutrans.rank_loo_lineages(dataset, result)
@@ -182,10 +178,7 @@ def vary_leaves(args, default_config):
     # Run inference for each lineage. This is very expensive.
     results = {}
     for lineage in lineages:
-        holdout = {"exclude": {"lineage": "^" + lineage + "$"}}
-        config = list(default_config)
-        config[-1] = holdout_to_hashable(holdout)
-        config = tuple(config)
+        config = make_config(exclude={"lineage": "^" + lineage + "$"})
         logger.info(f"Config: {config}")
 
         # Construct a leave-one-out dataset by zeroing out a subclade.
@@ -211,6 +204,51 @@ def vary_leaves(args, default_config):
     if not args.test:
         logger.info("saving results/mutrans.vary_leaves.pt")
         torch.save(results, "results/mutrans.vary_leaves.pt")
+
+
+def vary_gene(args, default_config):
+    """
+    Train on the whole genome and on various single genes, saving results to
+    ``results/mutrans.vary_gene.pt``.
+    """
+    # Collect a set of genes.
+    if args.vary_gene == "all":
+        genes = list(GENE_TO_POSITION)
+    else:
+        genes = args.vary_gene.split(",")
+    logger.info("Fitting to each of genes: {}".format(", ".join(genes)))
+
+    # Construct a grid of holdouts.
+    grid = [{}]
+    for gene in genes:
+        grid.append({"include": {"gene": f"^{gene}:"}})
+        grid.append({"exclude": {"gene": f"^{gene}:"}})
+
+    def make_config(**holdout):
+        config = list(default_config)
+        config[-1] = holdout_to_hashable(holdout)
+        config = tuple(config)
+        return config
+
+    results = {}
+    for holdout in grid:
+        # Fit a single model.
+        logger.info(f"Holdout: {holdout}")
+        dataset = load_data(args, **holdout)
+        result = fit_svi(args, dataset, *make_config(**holdout))
+
+        # Save metrics.
+        key = holdout_to_hashable(holdout)
+        results[key] = mutrans.log_stats(dataset, result)
+
+        # Clean up to save memory.
+        del dataset, result
+        pyro.clear_param_store()
+        gc.collect()
+
+    if not args.test:
+        logger.info("saving results/mutrans.vary_gene.pt")
+        torch.save(results, "results/mutrans.vary_gene.pt")
 
 
 def main(args):
@@ -244,6 +282,8 @@ def main(args):
 
     if args.vary_leaves:
         return vary_leaves(args, default_config)
+    if args.vary_gene:
+        return vary_gene(args, default_config)
 
     if args.vary_num_steps:
         grid = sorted(int(n) for n in args.vary_num_steps.split(","))
@@ -280,6 +320,9 @@ def main(args):
             # {"include": {"virus_name": "^hCoV-19/USA/..-CDC-2-"}},
         ]
         for holdout in grid:
+            if args.only_gene:
+                include = holdout.setdefault("include", {})
+                include["gene"] = f"^{args.only_gene}:"
             configs.append(
                 (
                     args.cond_data,
@@ -370,8 +413,13 @@ if __name__ == "__main__":
     parser.add_argument("--vary-num-steps", help="comma delimited list of num_steps")
     parser.add_argument("--vary-holdout", action="store_true")
     parser.add_argument(
-        "--vary-leaves", type=int, help="number of leaf lineages to hold out"
+        "--vary-leaves", type=int, help="min number of samples per held out lineage"
     )
+    parser.add_argument(
+        "--vary-gene",
+        help="a comma-separated list of genes or multiple genes, e.g. S,N,S|N",
+    )
+    parser.add_argument("--only-gene")
     parser.add_argument("-cd", "--cond-data", default="coef_scale=0.5")
     parser.add_argument("-g", "--guide-type", default="custom")
     parser.add_argument("-n", "--num-steps", default=10001, type=int)
@@ -392,7 +440,6 @@ if __name__ == "__main__":
     parser.add_argument("--no-jit", dest="jit", action="store_false")
     parser.add_argument("--seed", default=20210319, type=int)
     parser.add_argument("-l", "--log-every", default=50, type=int)
-    parser.add_argument("--fix-old-vary-leaves", action="store_true")
     parser.add_argument("--no-new", action="store_true")
     parser.add_argument("--no-cache", action="store_true")
     parser.add_argument("--test", action="store_true")

@@ -76,18 +76,15 @@ def rank_loo_lineages(
         pangolin.decompress(name) for name in full_dataset["lineage_id_inv"]
     ]
     lineage_id = {name: i for i, name in enumerate(lineage_id_inv)}
+    ancestors = set(lineage_id)
 
     # Filter to often-observed lineages.
     weekly_strains = full_dataset["weekly_strains"]  # [T, P, S]
     lineage_counts = weekly_strains.sum([0, 1])  # [S]
     lineages = []
     for c, child in enumerate(lineage_id_inv):
-        if child in ("A", "B"):
+        if child in ("A", "B", "B.1"):
             continue  # ignore very early lineages
-        parent = pangolin.get_parent(child)
-        assert parent is not None
-        if parent not in lineage_id:
-            continue  # ignore orphans
         if lineage_counts[c] < min_samples:
             continue  # ignore rare lineages
         lineages.append(child)
@@ -96,7 +93,9 @@ def rank_loo_lineages(
     rate_loc = full_result["median"]["rate_loc"]
     ranked_lineages = []
     for child in lineages:
-        parent = pangolin.get_parent(child)
+        # Allow grandparent to adopt orphan, since e.g. B.1.617 is missing from
+        # lineage_id, but B.1.617.2 is very important.
+        parent = pangolin.get_most_recent_ancestor(child, ancestors)
         assert parent is not None
         c = lineage_id[child]
         p = lineage_id[parent]
@@ -104,6 +103,7 @@ def rank_loo_lineages(
         ranked_lineages.append((gap, child))
     ranked_lineages.sort(reverse=True)
 
+    # Compress lineage names before returning.
     return [pangolin.compress(name) for gap, name in ranked_lineages]
 
 
@@ -148,15 +148,21 @@ def load_gisaid_data(
     # Filter regions to at least 50 sample and aggregate rest to country level
     fine_regions = get_fine_regions(columns)
 
-    # Filter features into numbers of mutations.
+    # Filter features into numbers of mutations and possibly genes.
     aa_features = torch.load(nextclade_features_filename)
     mutations = aa_features["mutations"]
     features = aa_features["features"].to(
         device=device, dtype=torch.get_default_dtype()
     )
-
     keep = [m.count(",") == 0 for m in mutations]
+    if include.get("gene"):
+        re_gene = include.pop("gene")
+        keep = [k and bool(re_gene.search(m)) for k, m in zip(keep, mutations)]
+    if exclude.get("gene"):
+        re_gene = exclude.pop("gene")
+        keep = [k and not re_gene.search(m) for k, m in zip(keep, mutations)]
     mutations = [m for k, m in zip(keep, mutations) if k]
+    assert mutations, "No mutations selected"
     features = features[:, keep]
     logger.info("Loaded {} feature matrix".format(" x ".join(map(str, features.shape))))
 
@@ -730,6 +736,8 @@ def log_stats(dataset: dict, result: dict) -> dict:
 
     # Effects of individual mutations.
     for name in ["S:D614G", "S:N501Y", "S:E484K", "S:L452R"]:
+        if name not in mutations:
+            continue
         i = mutations.index(name)
         m = mean[i] * 0.01
         s = std[i] * 0.01
@@ -750,17 +758,28 @@ def log_stats(dataset: dict, result: dict) -> dict:
         logger.info(f"R({s})/R(A) = {R_RA:0.3g}")
         stats[f"R({s})/R(A)"] = R_RA
 
+    # Accuracy of mutation-only model, ie without region-local effects.
+    true = dataset["weekly_strains"] + 1e-20  # avoid nans
+    true_probs = true / true.sum(-1, True)
+    local_time = dataset["local_time"][..., None]
+    local_time = local_time + result["params"]["local_time"].to(local_time.device)
+    rate = 0.01 * result["median"]["coef"] @ dataset["features"].T
+    pred = result["median"]["init"] + rate * local_time
+    pred -= pred.logsumexp(-1, True)  # apply log sigmoid function
+    kl = true.mul(true_probs.log() - pred).sum(-1)
+    stats["naive KL"] = kl.sum() / true.sum()
+    logger.info("naive KL = {:0.4g}".format(stats["naive KL"]))
+
     # Posterior predictive error.
-    true = dataset["weekly_strains"]
-    true = true + 0.5 / dataset["weekly_strains"].shape[-1]  # add Jeffreys prior
-    true /= true.sum(-1, True)  # normalize
-    pred = result["median"]["probs"][: len(true)]  # truncate
-    error = (true - pred).abs()
-    mae = error.mean(0)  # average over time
+    pred = result["median"]["probs"][: len(true)] + 1e-20  # truncate, avoid nans
+    kl = true.mul(true_probs.log() - pred.log()).sum([0, -1])
+    error = pred - true_probs
+    mae = error.abs().mean(0)  # average over time
     mse = error.square().mean(0)  # average over time
-    logger.info("MAE = {:0.4g}, RMSE = {:0.4g}".format(mae.mean(), mse.mean().sqrt()))
-    stats["MAE"] = mae.mean()  # average over region
-    stats["RMSE"] = mse.mean().sqrt()  # root average over region
+    stats["MAE"] = mae.sum(-1).mean()  # average over region
+    stats["RMSE"] = mse.sum(-1).mean().sqrt()  # root average over region
+    stats["KL"] = kl.sum() / true.sum()  # in units of nats / observation
+    logger.info("KL = {KL:0.4g}, MAE = {MAE:0.4g}, RMSE = {RMSE:0.4g}".format(**stats))
 
     # Examine the MSE and RMSE over a few regions of interest.
     queries = {
@@ -774,23 +793,30 @@ def log_stats(dataset: dict, result: dict) -> dict:
             continue
         assert len(matches) == 1, matches
         p = matches[0]
+        stats[f"{place} KL"] = kl[p].sum() / true[:, p].sum()
+        stats[f"{place} MAE"] = mae[p].sum()
+        stats[f"{place} RMSE"] = mse[p].sum().sqrt()
         logger.info(
-            "{}\tMAE = {:0.3g}, RMSE = {:0.3g}".format(
-                place, mae[p].mean(), mse[p].mean().sqrt()
+            "{}\tKL = {:0.3g}, MAE = {:0.3g}, RMSE = {:0.3g}".format(
+                place,
+                stats[f"{place} KL"],
+                stats[f"{place} MAE"],
+                stats[f"{place} RMSE"],
             )
         )
-        stats[f"{place} MAE"] = mae[p].mean()
-        stats[f"{place} RMSE"] = mse[p].mean().sqrt()
 
         for strain in strains:
             s = dataset["lineage_id"][strain]
-            logger.info(
-                "{} {}\tMAE = {:0.3g}, RMSE = {:0.3g}".format(
-                    place, strain, mae[p, s], mse[p, s].sqrt()
-                )
-            )
             stats[f"{place} {strain} MAE"] = mae[p, s]
             stats[f"{place} {strain} RMSE"] = mse[p, s].sqrt()
+            logger.info(
+                "{} {}\tMAE = {:0.3g}, RMSE = {:0.3g}".format(
+                    place,
+                    strain,
+                    stats[f"{place} {strain} MAE"],
+                    stats[f"{place} {strain} RMSE"],
+                )
+            )
 
     return {k: float(v) for k, v in stats.items()}
 

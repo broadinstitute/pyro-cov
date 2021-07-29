@@ -3,7 +3,7 @@ import os
 import re
 import warnings
 from collections import Counter
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 import torch
 
@@ -61,10 +61,18 @@ PANGOLIN_ALIASES = {
 
 # From https://www.who.int/en/activities/tracking-SARS-CoV-2-variants/
 WHO_ALIASES = {
-    "α": ["B.1.1.7"],
-    "β": ["B.1.351", "B.1.351.2", "B.1.351.3"],
-    "γ": ["P.1", "P.1.1", "P.1.2"],
-    "δ": ["B.1.617.2", "AY.1", "AY.2", "AY.3"],
+    # Variants of concern.
+    "Alpha": ["B.1.1.7"],
+    "Beta": ["B.1.351", "B.1.351.2", "B.1.351.3"],
+    "Gamma": ["P.1", "P.1.1", "P.1.2"],
+    "Delta": ["B.1.617.2", "AY.1", "AY.2", "AY.3"],
+    # Variants of interest.
+    "Eta": ["B.1.525"],
+    "Iota": ["B.1.526"],
+    "Kappa": ["B.1.617.1"],
+    "Lambda": ["C.37"],
+    # Former variants of interest.
+    # Epsilon (B.1.427/B.1.429), Zeta (P.2), Theta (P.3)
 }
 
 
@@ -135,6 +143,10 @@ assert compress("B.1.1.7") == "B.1.1.7"
 
 
 def get_parent(name: str) -> Optional[str]:
+    """
+    Given a decompressed lineage name ``name``, find the decompressed name of
+    its parent lineage.
+    """
     assert decompress(name) == name, "expected a decompressed name"
     if name == "A":
         return None
@@ -142,6 +154,19 @@ def get_parent(name: str) -> Optional[str]:
         return "A"
     assert "." in name, name
     return name.rsplit(".", 1)[0]
+
+
+def get_most_recent_ancestor(name: str, ancestors: Set[str]) -> Optional[str]:
+    """
+    Given a decompressed lineage name ``name``, find the decompressed name of
+    its the lineage's most recent ancestor from ``ancestors``. This is like
+    :func:`get_parent` but may skip one or more generations in case a parent is
+    not in ``ancestors``.
+    """
+    ancestor = get_parent(name)
+    while ancestor is not None and ancestor not in ancestors:
+        ancestor = get_parent(ancestor)
+    return ancestor
 
 
 def find_edges(names: List[str]) -> List[Tuple[str, str]]:
