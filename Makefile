@@ -9,6 +9,7 @@ install-nextalign:
 
 install-nextclade:
 	curl -fsSL "https://github.com/nextstrain/nextclade/releases/latest/download/nextclade-MacOS-x86_64" -o "nextclade" && chmod +x nextclade
+    
 install-nextalign-linux:
 	curl -fsSL "https://github.com/nextstrain/nextclade/releases/download/1.2.0/nextalign-Linux-x86_64" -o nextalign && chmod +x nextalign
 
@@ -33,7 +34,6 @@ update: FORCE
 	python git_pull.py cov-lineages/pango-designation
 	python git_pull.py CSSEGISandData/COVID-19
 	python git_pull.py nextstrain/nextclade
-	. pull_gisaid.sh
 	time nice python preprocess_gisaid.py
 	time python featurize_nextclade.py
 
