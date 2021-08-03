@@ -142,7 +142,6 @@ def fit_svi(
 def backtesting(args, default_config):
     configs = []
     empty_holdout = ()
-    empty_end_day = None
     for max_day in args.backtesting_max_day.split(","):
         max_day = int(max_day)
         configs.append(
