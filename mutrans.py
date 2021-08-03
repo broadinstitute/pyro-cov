@@ -12,7 +12,6 @@ import pyro
 import torch
 
 from pyrocov import mutrans, pangolin
-from pyrocov.sarscov2 import GENE_TO_POSITION
 from pyrocov.util import torch_map
 
 logger = logging.getLogger(__name__)
@@ -213,7 +212,8 @@ def vary_gene(args, default_config):
     """
     # Collect a set of genes.
     if args.vary_gene == "all":
-        genes = list(GENE_TO_POSITION)
+        mutations = load_data(args)["mutations"]
+        genes = sorted({m.split(":")[0] for m in mutations})
     else:
         genes = args.vary_gene.split(",")
     logger.info("Fitting to each of genes: {}".format(", ".join(genes)))
