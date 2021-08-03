@@ -138,6 +138,75 @@ def fit_svi(
     result["args"] = args
     return result
 
+def backtesting(args, default_config):
+    configs = []
+    empty_holdout = ()
+    empty_end_day = None
+    for max_day in args.backtesting_max_day.split(","):
+        max_day = int(max_day)
+        configs.append(
+            (
+                args.cond_data,
+                args.guide_type,
+                args.num_steps,
+                args.learning_rate,
+                args.learning_rate_decay,
+                args.clip_norm,
+                args.rank,
+                args.forecast_steps,
+                max_day,
+                empty_holdout,
+            )
+        )
+    # Sequentially fit models.
+    results = {}
+    for config in configs:
+        logger.info(f"Config: {config}")
+
+        # Holdout is the last in the config
+        holdout = hashable_to_holdout(config[-1])
+        # end_day is second from last
+        end_day = config[-2]
+
+        # load dataset
+        dataset = load_data(args, end_day=end_day, **holdout)
+
+        # Run SVI
+        result = fit_svi(args, dataset, *config)
+        mutrans.log_stats(dataset, result)
+
+        # Save the results for this config
+
+        # Augment gisaid dataset with JHU timeseries counts
+        dataset.update(mutrans.load_jhu_data(dataset))
+
+        # Generate results
+        result["mutations"] = dataset["mutations"]
+        result["weekly_strains"] = dataset["weekly_strains"]
+        result["weekly_cases"] = dataset["weekly_cases"]
+        result["weekly_strains_shape"] = tuple(dataset["weekly_strains"].shape)
+        result["location_id"] = dataset["location_id"]
+        result["lineage_id_inv"] = dataset["lineage_id_inv"]
+
+        result = torch_map(result, device="cpu", dtype=torch.float)  # to save space
+        results[config] = result
+
+        # Ensure number of regions match
+        assert dataset["weekly_strains"].shape[1] == result["mean"]["probs"].shape[1]
+        assert dataset["weekly_cases"].shape[1] == result["mean"]["probs"].shape[1]
+
+        # Cleanup
+        del dataset
+        pyro.clear_param_store()
+        gc.collect()
+
+    if args.vary_holdout:
+        mutrans.log_holdout_stats({k[-1]: v for k, v in results.items()})
+
+    if not args.test:
+        logger.info("saving results/mutrans.backtesting.pt")
+        torch.save(results, "results/mutrans.backtesting.pt")
+        
 
 def vary_leaves(args, default_config):
     """
@@ -338,22 +407,7 @@ def main(args):
                 )
             )
     elif args.backtesting_max_day:
-        for max_day in args.backtesting_max_day.split(","):
-            max_day = int(max_day)
-            configs.append(
-                (
-                    args.cond_data,
-                    args.guide_type,
-                    args.num_steps,
-                    args.learning_rate,
-                    args.learning_rate_decay,
-                    args.clip_norm,
-                    args.rank,
-                    args.forecast_steps,
-                    max_day,
-                    empty_holdout,
-                )
-            )
+        backtesting(args, default_config)
     else:
         configs.append(default_config)
 
