@@ -15,7 +15,7 @@ def plusminus(mean, std):
     return torch.stack([mean - p95, mean, mean + p95])
 
 
-def generate_forecast(fit, queries=None, num_strains=10, future_fit=None):
+def generate_forecast(fit, queries=None, future_fit=None):
     """Generate forecasts for specified fit
 
     :param dict fit: the model fit
@@ -66,7 +66,6 @@ def generate_forecast(fit, queries=None, num_strains=10, future_fit=None):
 
     # get the strain identifiers
     strain_ids = weekly_strains[:, ids].sum([0, 1]).sort(-1, descending=True).indices
-    strain_ids = strain_ids[:num_strains]
 
     # get date_range
     date_range = mutrans.date_range(len(fit["mean"]["probs"]))
@@ -89,138 +88,6 @@ def generate_forecast(fit, queries=None, num_strains=10, future_fit=None):
     }
 
     return forecast
-
-
-def plot_forecast(
-    forecast,
-    filename=None,
-    plot_relative_cases=True,
-    plot_relative_samples=True,
-    plot_observed=True,
-    plot_fit=True,
-    plot_fit_ci=True,
-):
-    """Plot a forecast generated from the model
-
-    :param forecast: forecast results from generate forecast function
-    :param filename: name of file to save output graphic
-    :param plot_relative_cases: flag for plotting relative cases
-    :param plot_relative_samples: flag for plotting relavtive saples
-    :param plot_observed: flag for plotting observed values
-    :param plot_fit: flag for plotting the fit
-    :param plot_fit_ci: flag for plotting the fit CIs
-    """
-
-    # get the data from the input forecast
-    queries = forecast["queries"]
-    #    date_range = forecast["date_range"]
-    strain_ids = forecast["strain_ids"]
-    predicted = forecast["predicted"]
-    location_id = forecast["location_id"]
-    weekly_cases = forecast["weekly_cases"]  # T x P
-    weekly_strains = forecast["weekly_strains"]  # T x P x S
-    lineage_id_inv = forecast["lineage_id_inv"]
-
-    num_strains = forecast["strain_ids"].shape[-1]
-
-    # generate figure and axes -- one axes per query
-    fig, axes = plt.subplots(
-        len(queries), figsize=(8, 1.5 + 2 * len(queries)), sharex=True
-    )
-    if not isinstance(axes, (list, np.ndarray)):
-        axes = [axes]
-
-    # construct date range for ploting
-    dates = matplotlib.dates.date2num(forecast["date_range"])
-
-    # generate colors
-    colors = [f"C{i}" for i in range(10)] + ["black"] * 90
-    assert len(colors) >= num_strains
-    light = "#bbbbbb"
-
-    for row, (query, ax) in enumerate(zip(queries, axes)):
-
-        ids = torch.tensor([i for name, i in location_id.items() if query in name])
-
-        print(f"{query} matched {len(ids)} regions")
-
-        # Plot relative numbers of cases
-        if plot_relative_cases:
-            # Sum over places and max normalize
-            counts = weekly_cases[:, ids].sum(1)
-            counts /= counts.max()
-            ax.plot(dates[: len(counts)], counts, "k-", color=light, lw=0.8, zorder=-20)
-
-        if plot_relative_samples:
-            # Plot relative numbers of samples
-            # Sum over places
-            counts = weekly_strains[:, ids].sum([1, 2])
-            counts /= counts.max()
-            ax.plot(dates[: len(counts)], counts, "k--", color=light, lw=1, zorder=-20)
-
-        # Calculate the predicted values for the specified regions
-        pred = predicted.index_select(-2, ids).sum(-2)
-        pred /= pred[1].sum(-1, True).clamp_(min=1e-8)
-
-        # Calculate the observed values
-        obs = weekly_strains[:, ids].sum(1)
-        obs /= obs.sum(-1, True).clamp_(min=1e-9)
-
-        # Plot individual strains
-        for s, color in zip(strain_ids, colors):
-            lb, mean, ub = pred[..., s]
-
-            if plot_fit:
-                if plot_fit_ci:
-                    ax.fill_between(dates, lb, ub, color=color, alpha=0.2, zorder=-10)
-                ax.plot(dates, mean, color=color, lw=1, zorder=-9)
-            strain = lineage_id_inv[s]
-
-            if plot_observed:
-                ax.plot(
-                    dates[: len(obs)],
-                    obs[:, s],
-                    color=color,
-                    lw=0,
-                    marker="o",
-                    markersize=3,
-                    label=strain if row == 0 else None,
-                )
-
-        # Set axis
-        ax.set_ylim(0, 1)
-        ax.set_yticks(())
-        ax.set_ylabel(query.replace(" / ", "\n"))
-        ax.set_xlim(dates.min(), dates.max())
-
-        # Add legends
-        if row == 0:
-            ax.legend(loc="upper left", fontsize=8)
-        elif row == 1:
-            if plot_relative_samples:
-                ax.plot([], "k--", color=light, lw=1, label="relative #samples")
-            if plot_relative_cases:
-                ax.plot([], "k-", color=light, lw=0.8, label="relative #cases")
-            ax.plot(
-                [],
-                lw=0,
-                marker="o",
-                markersize=3,
-                color="gray",
-                label="observed portion",
-            )
-            ax.fill_between([], [], [], color="gray", label="predicted portion")
-            ax.legend(loc="upper left", fontsize=8)
-
-    # x axis dates
-    ax.xaxis.set_major_locator(matplotlib.dates.MonthLocator())
-    ax.xaxis.set_major_formatter(matplotlib.dates.DateFormatter("%b %Y"))
-    plt.xticks(rotation=90)
-
-    plt.subplots_adjust(hspace=0)
-
-    if filename:
-        plt.savefig(filename)
 
 
 def get_forecast_values(forecast):
@@ -420,9 +287,17 @@ def evaluate_fit_forecast(
     perplexity = (perplexity * weight).sum(1)  # [T]
     kl = (kl * weight).sum(1)  # [T]
 
+    pred_sorted, indices_1 = pred.clone().sort(-1)
+    true_sorted, indices_2 = probs.clone().sort(-1)
+
+    # Wasterstein summed over place
+    p = 2
+    wasserstein = (pred_sorted - true_sorted).abs().pow(p).sum(2).div(p).sum(1)
+
     # Calculate error over time
     error = true - pred * true.sum(-1, True)
-    mae = error.abs().sum(-1).mean(1)
+    # mae = error.abs().sum(-1).mean(1)
+    mae = error.abs().mean(-1).sum(1)
     rmse = error.square().sum(-1).mean(0).sqrt()
 
     # return the calculated statistics, each batched over time
@@ -433,16 +308,30 @@ def evaluate_fit_forecast(
         "kl": kl,
         "mae": mae,
         "rmse": rmse,
+        "wasserstein": wasserstein,
     }
+
+
+def generate_strain_color_map_default(n_colors, n_colors_distinct=20):
+    n_color_black = n_colors - n_colors_distinct
+    colors = [f"C{i}" for i in range(n_colors)] + ["black"] * n_color_black
+    return colors
+
+
+def generate_strain_color_map_dict(strains, n_colors_distinct=20):
+    n_colors = len(strains)
+    n_color_black = n_colors - n_colors_distinct
+    c_tmp = [f"C{i}" for i in range(n_colors)] + ["black"] * n_color_black
+    color_map = {strains[i]: c_tmp[i] for i in range(len(strains))}
+    return color_map
 
 
 def plot_fit_forecasts(
     fit,
     queries=["England", "USA / California", "Brazil"],
-    strains_to_show=["B.1.1", "B.1", "B.40"],
+    strains_to_show=None,
     show_forecast=True,
     show_observed=True,
-    num_strains=100,
     future_fit=None,
     filename=None,
     forecast_periods_plot=None,
@@ -462,6 +351,8 @@ def plot_fit_forecasts(
 
     logging.debug("Entering plot_fit_forecast()")
 
+    assert strains_to_show is not None
+
     if isinstance(queries, str):
         logging.debug("queries was string; converting to array")
         queries = [queries]
@@ -470,11 +361,8 @@ def plot_fit_forecasts(
     fc1 = generate_forecast(
         fit=fit,
         queries=queries,
-        num_strains=num_strains,
         future_fit=future_fit,
     )
-
-    # return fc1
 
     # Check that all the strains to show are in the lineage_id_inv
     assert all([item in fc1["lineage_id_inv"] for item in strains_to_show])
@@ -496,9 +384,11 @@ def plot_fit_forecasts(
     if not isinstance(ax, (list, np.ndarray)):
         ax = [ax]
 
-    colors = [f"C{i}" for i in range(10)] + ["black"] * 90
+    colors = generate_strain_color_map_dict(strain_ids.numpy())
 
     for i, (k, ax_c, query) in enumerate(zip(range(n_queries), ax, queries)):
+        logging.debug(f"** Plotting {queries}")
+
         # 2nd dim is 1 because we want means only
         sel_forecast = forecast_values["predicted"][k, 1, :]
         sel_forecast_lb = forecast_values["predicted"][k, 0, :]
@@ -522,9 +412,13 @@ def plot_fit_forecasts(
         print(f"sel_forecast_lb shape {sel_forecast_lb.shape}")
 
         # Plot one strain at a time
-        for s, color in zip(strain_ids, colors):
+        # for s, color in zip(strain_ids, colors):
+        for s in strain_ids:
+            color = colors[s.item()]
+
             strain = lineage_id_inv[s]
             if strain in strains_to_show:
+                logging.debug(f"Drawing strain {s}, {strain}")
                 if show_forecast:
                     ax_c.fill_between(
                         dates[: len(sel_forecast)],
