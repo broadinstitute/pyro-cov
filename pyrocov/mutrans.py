@@ -767,8 +767,11 @@ def log_stats(dataset: dict, result: dict) -> dict:
     pred = result["median"]["init"] + rate * local_time
     pred -= pred.logsumexp(-1, True)  # apply log sigmoid function
     kl = true.mul(true_probs.log() - pred).sum(-1)
-    stats["naive KL"] = kl.sum() / true.sum()
-    logger.info("naive KL = {:0.4g}".format(stats["naive KL"]))
+    kl = stats["naive KL"] = kl.sum() / true.sum()  # in units of nats / observation
+    error = pred - true_probs
+    mae = stats["naive MAE"] = error.abs().sum(-1).mean()
+    rmse = stats["naive RMSE"] = error.square().sum(-1).mean().sqrt()
+    logger.info(f"naive KL = {kl:0.4g}, MAE = {mae:0.4g}, RMSE = {rmse:0.4g}")
 
     # Posterior predictive error.
     pred = result["median"]["probs"][: len(true)] + 1e-20  # truncate, avoid nans
