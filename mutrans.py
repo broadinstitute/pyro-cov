@@ -138,6 +138,7 @@ def fit_svi(
     result["args"] = args
     return result
 
+
 def backtesting(args, default_config):
     configs = []
     empty_holdout = ()
@@ -206,7 +207,7 @@ def backtesting(args, default_config):
     if not args.test:
         logger.info("saving results/mutrans.backtesting.pt")
         torch.save(results, "results/mutrans.backtesting.pt")
-        
+
 
 def vary_leaves(args, default_config):
     """
