@@ -95,7 +95,7 @@ def get_forecast_values(forecast):
 
     :param forecast: forecast return values from generate_forecast()
 
-    :return: Dictionary of queries and predicted tensor and observed tensor. Tensors have shape
+    :return: Dictionary of queries and predicted tensor and observed tensor. Tensors have shapes
         num_queries x 3 (stats) x T x S
     """
 
