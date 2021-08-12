@@ -4,6 +4,7 @@ import logging
 import math
 import pickle
 import re
+import warnings
 from collections import Counter, OrderedDict, defaultdict
 from timeit import default_timer
 from typing import List
@@ -162,8 +163,12 @@ def load_gisaid_data(
         re_gene = exclude.pop("gene")
         keep = [k and not re_gene.search(m) for k, m in zip(keep, mutations)]
     mutations = [m for k, m in zip(keep, mutations) if k]
-    assert mutations, "No mutations selected"
-    features = features[:, keep]
+    if mutations:
+        features = features[:, keep]
+    else:
+        warnings.warn("No mutations selected; using empty features")
+        mutations = ["S:D614G"]  # bogus
+        features = features[:, :1] * 0
     logger.info("Loaded {} feature matrix".format(" x ".join(map(str, features.shape))))
 
     # Aggregate regions
@@ -683,7 +688,7 @@ def fit_svi(
                     [f"step {step: >4d} L={loss / num_obs:0.6g}"]
                     + [
                         "{}={:0.3g}".format(
-                            "".join(p[0] for p in k.split("_")).upper(), v
+                            "".join(p[0] for p in k.split("_")).upper(), v.item()
                         )
                         for k, v in median.items()
                         if v.numel() == 1
