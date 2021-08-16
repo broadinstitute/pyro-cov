@@ -725,7 +725,7 @@ def log_stats(dataset: dict, result: dict) -> dict:
     :param dict result: The output of :func:`fit_svi`.
     :returns: A dictionary of statistics.
     """
-    stats = {}
+    stats = {k: float(v) for k, v in result["median"].items() if v.numel() == 1}
     stats["loss"] = float(np.median(result["losses"][-100:]))
     mutations = dataset["mutations"]
     mean = result["mean"]["coef"].cpu()
