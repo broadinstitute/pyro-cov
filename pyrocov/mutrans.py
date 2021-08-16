@@ -4,6 +4,7 @@ import logging
 import math
 import pickle
 import re
+import warnings
 from collections import Counter, OrderedDict, defaultdict
 from timeit import default_timer
 from typing import List
@@ -162,8 +163,12 @@ def load_gisaid_data(
         re_gene = exclude.pop("gene")
         keep = [k and not re_gene.search(m) for k, m in zip(keep, mutations)]
     mutations = [m for k, m in zip(keep, mutations) if k]
-    assert mutations, "No mutations selected"
-    features = features[:, keep]
+    if mutations:
+        features = features[:, keep]
+    else:
+        warnings.warn("No mutations selected; using empty features")
+        mutations = ["S:D614G"]  # bogus
+        features = features[:, :1] * 0
     logger.info("Loaded {} feature matrix".format(" x ".join(map(str, features.shape))))
 
     # Aggregate regions
@@ -683,7 +688,7 @@ def fit_svi(
                     [f"step {step: >4d} L={loss / num_obs:0.6g}"]
                     + [
                         "{}={:0.3g}".format(
-                            "".join(p[0] for p in k.split("_")).upper(), v
+                            "".join(p[0] for p in k.split("_")).upper(), v.item()
                         )
                         for k, v in median.items()
                         if v.numel() == 1
@@ -760,15 +765,16 @@ def log_stats(dataset: dict, result: dict) -> dict:
 
     # Accuracy of mutation-only model, ie without region-local effects.
     true = dataset["weekly_strains"] + 1e-20  # avoid nans
-    true_probs = true / true.sum(-1, True)
+    counts = true.sum(-1, True)
+    true_probs = true / counts
     local_time = dataset["local_time"][..., None]
     local_time = local_time + result["params"]["local_time"].to(local_time.device)
     rate = 0.01 * result["median"]["coef"] @ dataset["features"].T
     pred = result["median"]["init"] + rate * local_time
     pred -= pred.logsumexp(-1, True)  # apply log sigmoid function
     kl = true.mul(true_probs.log() - pred).sum(-1)
-    kl = stats["naive KL"] = kl.sum() / true.sum()  # in units of nats / observation
-    error = pred - true_probs
+    kl = stats["naive KL"] = kl.sum() / counts.sum()  # in units of nats / observation
+    error = (pred.exp() - true_probs) * counts ** 0.5  # scaled by Poisson stddev
     mae = stats["naive MAE"] = error.abs().sum(-1).mean()
     rmse = stats["naive RMSE"] = error.square().sum(-1).mean().sqrt()
     logger.info(f"naive KL = {kl:0.4g}, MAE = {mae:0.4g}, RMSE = {rmse:0.4g}")
@@ -776,12 +782,12 @@ def log_stats(dataset: dict, result: dict) -> dict:
     # Posterior predictive error.
     pred = result["median"]["probs"][: len(true)] + 1e-20  # truncate, avoid nans
     kl = true.mul(true_probs.log() - pred.log()).sum([0, -1])
-    error = pred - true_probs
+    error = (pred - true_probs) * counts ** 0.5  # scaled by Poisson stddev
     mae = error.abs().mean(0)  # average over time
     mse = error.square().mean(0)  # average over time
     stats["MAE"] = mae.sum(-1).mean()  # average over region
     stats["RMSE"] = mse.sum(-1).mean().sqrt()  # root average over region
-    stats["KL"] = kl.sum() / true.sum()  # in units of nats / observation
+    stats["KL"] = kl.sum() / counts.sum()  # in units of nats / observation
     logger.info("KL = {KL:0.4g}, MAE = {MAE:0.4g}, RMSE = {RMSE:0.4g}".format(**stats))
 
     # Examine the MSE and RMSE over a few regions of interest.

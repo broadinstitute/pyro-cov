@@ -288,7 +288,7 @@ def vary_gene(args, default_config):
     logger.info("Fitting to each of genes: {}".format(", ".join(genes)))
 
     # Construct a grid of holdouts.
-    grid = [{}]
+    grid = [{}, {"exclude": {"gene": ".*"}}]  # full and empty sets of genes
     for gene in genes:
         grid.append({"include": {"gene": f"^{gene}:"}})
         grid.append({"exclude": {"gene": f"^{gene}:"}})
