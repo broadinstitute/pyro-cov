@@ -335,6 +335,7 @@ def plot_fit_forecasts(
     future_fit=None,
     filename=None,
     forecast_periods_plot=None,
+    colors=None,
 ):
     """
     Function to plot forecasts of specific strains in specific regions
@@ -384,7 +385,8 @@ def plot_fit_forecasts(
     if not isinstance(ax, (list, np.ndarray)):
         ax = [ax]
 
-    colors = generate_strain_color_map_dict(strain_ids.numpy())
+    if colors is None:
+        colors = generate_strain_color_map_dict(strain_ids.numpy())
 
     for i, (k, ax_c, query) in enumerate(zip(range(n_queries), ax, queries)):
         logging.debug(f"** Plotting {queries}")
@@ -466,3 +468,5 @@ def plot_fit_forecasts(
 
     if filename:
         plt.savefig(filename)
+
+    return {"colors": colors}
