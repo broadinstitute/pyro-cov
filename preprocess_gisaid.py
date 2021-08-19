@@ -38,9 +38,7 @@ FIELDS = ["virus_name", "accession_id", "collection_date", "location", "add_loca
 def main(args):
     logger.info(f"Filtering {args.gisaid_file_in}")
     if not os.path.exists(args.gisaid_file_in):
-        raise OSError(
-            "Each user must independently request a data feed from gisaid.org"
-        )
+        raise OSError(f"Missing {args.gisaid_file_in}; you may need to request a feed")
     os.makedirs("results", exist_ok=True)
 
     columns = defaultdict(list)
@@ -136,7 +134,7 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Preprocess GISAID data")
     parser.add_argument(
-        "--gisaid-file-in", default=os.path.expanduser("data/gisaid.json")
+        "--gisaid-file-in", default=os.path.expanduser("results/gisaid.json")
     )
     parser.add_argument("--columns-file-out", default="results/gisaid.columns.pkl")
     parser.add_argument("--stats-file-out", default="results/gisaid.stats.pkl")
