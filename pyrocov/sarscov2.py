@@ -38,6 +38,21 @@ def _():
 
 GENE_TO_POSITION = _()
 
+GENE_STRUCTURE = {
+    # https://www.nature.com/articles/s41401-020-0485-4/figures/2
+    "S": {
+        "NTD": (13, 305),
+        "RBD": (319, 541),
+        "FC": (682, 685),
+        "FP": (788, 806),
+        "HR1": (912, 984),
+        "HR2": (1163, 1213),
+        "TM": (1213, 1237),
+        "CT": (1237, 1273),
+    },
+    "N": {"immunogenic": (133, 217)},
+}
+
 
 def aa_mutation_to_position(m):
     """
