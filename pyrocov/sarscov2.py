@@ -1,5 +1,6 @@
 import re
 from collections import OrderedDict
+from typing import Dict, Tuple
 
 # Adapted from https://github.com/nextstrain/ncov/blob/50ceffa/defaults/annotation.gff
 annotation_tsv = """\
@@ -36,9 +37,15 @@ def _():
     return OrderedDict((gene_name, pos) for pos, gene_name in genes)
 
 
-GENE_TO_POSITION = _()
+# This maps gene name to the nucleotide position in the genome,
+# as measured in the original Wuhan virus.
+GENE_TO_POSITION: Dict[str, Tuple[int, int]] = _()
 
-GENE_STRUCTURE = {
+# This maps gene name to a set of regions in that gene.
+# These regions may be used in plotting e.g. mutrans.ipynb.
+# Each region has a string label and an extent (start, end)
+# measured in amino acid positions relative to the start.
+GENE_STRUCTURE: Dict[str, Dict[str, Tuple[int, int]]] = {
     # https://www.nature.com/articles/s41401-020-0485-4/figures/2
     "S": {
         "NTD": (13, 305),
@@ -54,11 +61,13 @@ GENE_STRUCTURE = {
 }
 
 
-def aa_mutation_to_position(m):
+def aa_mutation_to_position(m: str) -> int:
     """
     E.g. map 'S:N501Y' to 21563 + (501 - 1) * 3 = 23063.
     """
     gene_name, subs = m.split(":")
     start, end = GENE_TO_POSITION[gene_name]
-    aa_offset = int(re.search(r"\d+", subs).group(0)) - 1
+    match = re.search(r"\d+", subs)
+    assert match is not None
+    aa_offset = int(match.group(0)) - 1
     return start + aa_offset * 3
