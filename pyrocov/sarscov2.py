@@ -46,7 +46,7 @@ GENE_TO_POSITION: Dict[str, Tuple[int, int]] = _()
 # Each region has a string label and an extent (start, end)
 # measured in amino acid positions relative to the start.
 GENE_STRUCTURE: Dict[str, Dict[str, Tuple[int, int]]] = {
-    # https://www.nature.com/articles/s41401-020-0485-4/figures/2
+    # Source: https://www.nature.com/articles/s41401-020-0485-4/figures/2
     "S": {
         "NTD": (13, 305),
         "RBD": (319, 541),
@@ -58,7 +58,94 @@ GENE_STRUCTURE: Dict[str, Dict[str, Tuple[int, int]]] = {
         "CT": (1237, 1273),
     },
     "N": {"immunogenic": (133, 217)},
+    # Source: https://www.ncbi.nlm.nih.gov/protein/YP_009725295.1
+    "ORF1a": {
+        "leader": (0, 180),
+        "nsp2": (180, 818),
+        "nsp3": (818, 2763),
+        "nsp4": (2763, 3263),
+        "proteinase": (3263, 3569),
+        "nsp6": (3569, 3859),
+        "nsp7": (3859, 3942),
+        "nsp8": (3942, 4140),
+        "nsp9": (4140, 4253),
+        "nsp10": (4253, 4392),
+        "nsp11": (4392, 4405),
+    },
+    # Source: https://www.ncbi.nlm.nih.gov/protein/1796318597
+    "ORF1ab": {
+        "leader protein": (0, 180),
+        "nsp2": (180, 818),
+        "nsp3": (818, 2763),
+        "nsp4": (2763, 3263),
+        "3C-like proteinase": (3263, 3569),
+        "nsp6": (3569, 3859),
+        "nsp7": (3859, 3942),
+        "nsp8": (3942, 4140),
+        "nsp9": (4140, 4253),
+        "nsp10": (4253, 4392),
+        "RNA-dependent RNA polymerase": (4392, 5324),
+        "helicase": (5324, 5925),
+        "3'-to-5' exonuclease": (5925, 6452),
+        "endoRNAse": (6452, 6798),
+        "2'-O-ribose methyltransferase": (6798, 7096),
+    },
+    # Source: see infer_ORF1b_structure() below.
+    "ORF1b": {
+        "RNA polymerase": (0, 924),
+        "helicase": (924, 1525),
+        "exonuclease": (1525, 2052),
+        "endoRNAse": (2052, 2398),
+        "methyltransferase": (2398, 2696),
+    },
 }
+
+
+def load_gene_structure(filename=None, gene_name=None):
+    """
+    Loads structure from a GenPept file for use in GENE_STRUCTURE.
+    This is used only when updating the static GENE_STRUCTURE dict.
+    """
+    from Bio import SeqIO
+
+    if filename is None:
+        assert gene_name is not None
+        filename = f"data/{gene_name}.gp"
+    result = {}
+    with open(filename) as f:
+        for record in SeqIO.parse(f, format="genbank"):
+            for feature in record.features:
+                if feature.type == "mat_peptide":
+                    product = feature.qualifiers["product"][0]
+                    assert isinstance(product, str)
+                    start = int(feature.location.start)
+                    end = int(feature.location.end)
+                    result[product] = start, end
+    return result
+
+
+def infer_ORF1b_structure():
+    """
+    Infers approximate ORF1b structure from ORF1ab.
+    This is used only when updating the static GENE_STRUCTURE dict.
+    """
+    abbreviate = {
+        "RNA-dependent RNA polymerase": "polymerase",
+        "3'-to-5' exonuclease": "exonuclease",
+        "2'-O-ribose methyltransferase": "methyltransferase",
+    }
+    ORF1a_start = GENE_TO_POSITION["ORF1a"][0]
+    ORF1b_start = GENE_TO_POSITION["ORF1b"][0]
+    shift = (ORF1b_start - ORF1a_start) // 3
+    result = {}
+    for name, (start, end) in GENE_STRUCTURE["ORF1ab"].items():
+        name = abbreviate.get(name, name)
+        start -= shift
+        end -= shift
+        if end > 0:
+            start = max(start, 0)
+            result[name] = start, end
+    return result
 
 
 def aa_mutation_to_position(m: str) -> int:
