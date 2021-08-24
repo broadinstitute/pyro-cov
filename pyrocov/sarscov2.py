@@ -60,11 +60,11 @@ GENE_STRUCTURE: Dict[str, Dict[str, Tuple[int, int]]] = {
     "N": {"immunogenic": (133, 217)},
     # Source: https://www.ncbi.nlm.nih.gov/protein/YP_009725295.1
     "ORF1a": {
-        "leader": (0, 180),
+        "nsp1": (0, 180),  # leader protein
         "nsp2": (180, 818),
         "nsp3": (818, 2763),
         "nsp4": (2763, 3263),
-        "proteinase": (3263, 3569),
+        "nsp5": (3263, 3569),  # 3C-like proteinase
         "nsp6": (3569, 3859),
         "nsp7": (3859, 3942),
         "nsp8": (3942, 4140),
@@ -74,29 +74,29 @@ GENE_STRUCTURE: Dict[str, Dict[str, Tuple[int, int]]] = {
     },
     # Source: https://www.ncbi.nlm.nih.gov/protein/1796318597
     "ORF1ab": {
-        "leader protein": (0, 180),
+        "nsp1": (0, 180),  # leader protein
         "nsp2": (180, 818),
         "nsp3": (818, 2763),
         "nsp4": (2763, 3263),
-        "3C-like proteinase": (3263, 3569),
+        "nsp5": (3263, 3569),  # 3C-like proteinase
         "nsp6": (3569, 3859),
         "nsp7": (3859, 3942),
         "nsp8": (3942, 4140),
         "nsp9": (4140, 4253),
         "nsp10": (4253, 4392),
-        "RNA-dependent RNA polymerase": (4392, 5324),
-        "helicase": (5324, 5925),
-        "3'-to-5' exonuclease": (5925, 6452),
-        "endoRNAse": (6452, 6798),
-        "2'-O-ribose methyltransferase": (6798, 7096),
+        "nsp12": (4392, 5324),  # RNA-dependent RNA polymerase
+        "nsp13": (5324, 5925),  # helicase
+        "nsp14": (5925, 6452),  # 3'-to-5' exonuclease
+        "nsp15": (6452, 6798),  # endoRNAse
+        "nsp16": (6798, 7096),  # 2'-O-ribose methyltransferase
     },
     # Source: see infer_ORF1b_structure() below.
     "ORF1b": {
-        "RNA polymerase": (0, 924),
-        "helicase": (924, 1525),
-        "exonuclease": (1525, 2052),
-        "endoRNAse": (2052, 2398),
-        "methyltransferase": (2398, 2696),
+        "nsp12": (0, 924),  # RNA-dependent RNA polymerase
+        "nsp13": (924, 1525),  # helicase
+        "nsp14": (1525, 2052),  # 3'-to-5' exonuclease
+        "nsp15": (2052, 2398),  # endoRNAse
+        "nsp16": (2398, 2696),  # 2'-O-ribose methyltransferase
     },
 }
 
@@ -129,17 +129,11 @@ def infer_ORF1b_structure():
     Infers approximate ORF1b structure from ORF1ab.
     This is used only when updating the static GENE_STRUCTURE dict.
     """
-    abbreviate = {
-        "RNA-dependent RNA polymerase": "polymerase",
-        "3'-to-5' exonuclease": "exonuclease",
-        "2'-O-ribose methyltransferase": "methyltransferase",
-    }
     ORF1a_start = GENE_TO_POSITION["ORF1a"][0]
     ORF1b_start = GENE_TO_POSITION["ORF1b"][0]
     shift = (ORF1b_start - ORF1a_start) // 3
     result = {}
     for name, (start, end) in GENE_STRUCTURE["ORF1ab"].items():
-        name = abbreviate.get(name, name)
         start -= shift
         end -= shift
         if end > 0:
