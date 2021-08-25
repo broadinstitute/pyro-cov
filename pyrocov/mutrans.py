@@ -27,8 +27,9 @@ from pyro.optim import ClippedAdam
 from pyro.poutine.util import site_is_subsample
 
 import pyrocov.geo
-from pyrocov import pangolin
-from pyrocov.util import pearson_correlation
+
+from . import pangolin, sarscov2
+from .util import pearson_correlation
 
 logger = logging.getLogger(__name__)
 
@@ -135,10 +136,6 @@ def load_gisaid_data(
     if end_day:
         logger.info(f"Load gisaid data end_day: {end_day}")
 
-    # Precompile regex for including/excluding
-    include = {k: re.compile(v) for k, v in include.items()}
-    exclude = {k: re.compile(v) for k, v in exclude.items()}
-
     # Load ``gisaid_columns_filename``
     with open(gisaid_columns_filename, "rb") as f:
         columns = pickle.load(f)
@@ -155,13 +152,26 @@ def load_gisaid_data(
     features = aa_features["features"].to(
         device=device, dtype=torch.get_default_dtype()
     )
-    keep = [m.count(",") == 0 for m in mutations]
+    keep = [m.count(",") == 0 for m in mutations]  # restrict to single mutations
     if include.get("gene"):
-        re_gene = include.pop("gene")
+        re_gene = re.compile(include.pop("gene"))
         keep = [k and bool(re_gene.search(m)) for k, m in zip(keep, mutations)]
     if exclude.get("gene"):
-        re_gene = exclude.pop("gene")
+        re_gene = re.compile(exclude.pop("gene"))
         keep = [k and not re_gene.search(m) for k, m in zip(keep, mutations)]
+    if include.get("region"):
+        gene, region = include.pop("region")
+        lb, ub = sarscov2.GENE_STRUCTURE[gene][region]
+        for i, m in enumerate(mutations):
+            g, m = m.split(":")
+            if g != gene:
+                keep[i] = False
+                continue
+            match = re.search("[0-9]+", m)
+            assert match is not None
+            pos = int(match.group())
+            if not (lb < pos <= ub):
+                keep[i] = False
     mutations = [m for k, m in zip(keep, mutations) if k]
     if mutations:
         features = features[:, keep]

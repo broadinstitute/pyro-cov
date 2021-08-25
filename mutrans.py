@@ -11,7 +11,7 @@ from typing import Callable, Union
 import pyro
 import torch
 
-from pyrocov import mutrans, pangolin
+from pyrocov import mutrans, pangolin, sarscov2
 from pyrocov.util import torch_map
 
 logger = logging.getLogger(__name__)
@@ -280,11 +280,8 @@ def vary_gene(args, default_config):
     ``results/mutrans.vary_gene.pt``.
     """
     # Collect a set of genes.
-    if args.vary_gene == "all":
-        mutations = load_data(args)["mutations"]
-        genes = sorted({m.split(":")[0] for m in mutations})
-    else:
-        genes = args.vary_gene.split(",")
+    mutations = load_data(args)["mutations"]
+    genes = sorted({m.split(":")[0] for m in mutations})
     logger.info("Fitting to each of genes: {}".format(", ".join(genes)))
 
     # Construct a grid of holdouts.
@@ -320,6 +317,44 @@ def vary_gene(args, default_config):
         torch.save(results, "results/mutrans.vary_gene.pt")
 
 
+def vary_nsp(args, default_config):
+    """
+    Train on ORF1 and on various single nsps, saving results to
+    ``results/mutrans.vary_nsp.pt``.
+    """
+    # Construct a grid of holdouts, including full ORF1, empty, and each nsp.
+    grid = [{"include": {"gene": "^ORF1[ab]:"}}, {"exclude": {"gene": ".*"}}]
+    for gene in ["ORF1a", "ORF1b"]:
+        for nsp in sarscov2.GENE_STRUCTURE[gene]:
+            grid.append({"include": {"region": (gene, nsp)}})
+
+    def make_config(**holdout):
+        config = list(default_config)
+        config[-1] = holdout_to_hashable(holdout)
+        config = tuple(config)
+        return config
+
+    results = {}
+    for holdout in grid:
+        # Fit a single model.
+        logger.info(f"Holdout: {holdout}")
+        dataset = load_data(args, **holdout)
+        result = fit_svi(args, dataset, *make_config(**holdout))
+
+        # Save metrics.
+        key = holdout_to_hashable(holdout)
+        results[key] = mutrans.log_stats(dataset, result)
+
+        # Clean up to save memory.
+        del dataset, result
+        pyro.clear_param_store()
+        gc.collect()
+
+    if not args.test:
+        logger.info("saving results/mutrans.vary_nsp.pt")
+        torch.save(results, "results/mutrans.vary_nsp.pt")
+
+
 def main(args):
     """Main Entry Point"""
 
@@ -353,6 +388,8 @@ def main(args):
         return vary_leaves(args, default_config)
     if args.vary_gene:
         return vary_gene(args, default_config)
+    if args.vary_nsp:
+        return vary_nsp(args, default_config)
 
     if args.vary_num_steps:
         grid = sorted(int(n) for n in args.vary_num_steps.split(","))
@@ -469,10 +506,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--vary-leaves", type=int, help="min number of samples per held out lineage"
     )
-    parser.add_argument(
-        "--vary-gene",
-        help="a comma-separated list of genes or multiple genes, e.g. S,N,S|N",
-    )
+    parser.add_argument("--vary-gene", action="store_true")
+    parser.add_argument("--vary-nsp", action="store_true")
     parser.add_argument("--only-gene")
     parser.add_argument("-cd", "--cond-data", default="coef_scale=0.5")
     parser.add_argument("-g", "--guide-type", default="custom")
