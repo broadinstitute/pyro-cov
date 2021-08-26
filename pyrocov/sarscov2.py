@@ -57,7 +57,15 @@ GENE_STRUCTURE: Dict[str, Dict[str, Tuple[int, int]]] = {
         "TM": (1213, 1237),
         "CT": (1237, 1273),
     },
-    "N": {"immunogenic": (133, 217)},
+    # Source https://www.nature.com/articles/s41467-021-21953-3
+    "N": {
+        "NTD": (1, 49),
+        "RNA binding": (50, 174),
+        "SR": (175, 215),
+        "dimerization": (246, 365),
+        "CTD": (365, 419),
+        # "immunogenic": (133, 217),
+    },
     # Source: https://www.ncbi.nlm.nih.gov/protein/YP_009725295.1
     "ORF1a": {
         "nsp1": (0, 180),  # leader protein
