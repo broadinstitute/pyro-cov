@@ -132,6 +132,8 @@ def load_gisaid_data(
     nextclade_features_filename --
     """
     logger.info("Loading data")
+    include = include.copy()
+    exclude = exclude.copy()
 
     if end_day:
         logger.info(f"Load gisaid data end_day: {end_day}")

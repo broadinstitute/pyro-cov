@@ -30,7 +30,7 @@ def cached(filename: Union[str, Callable]):
             if base_args.no_cache:
                 return fn(*args, **kwargs)
             f = filename(*args, **kwargs) if callable(filename) else filename
-            if os.path.exists(f):
+            if os.path.exists(f) and not base_args.force:
                 logger.info(f"loading cached {f}")
                 return torch.load(f, map_location=torch.empty(()).device)
             if base_args.no_new:
@@ -531,6 +531,7 @@ if __name__ == "__main__":
     parser.add_argument("-l", "--log-every", default=50, type=int)
     parser.add_argument("--no-new", action="store_true")
     parser.add_argument("--no-cache", action="store_true")
+    parser.add_argument("--force", action="store_true")
     parser.add_argument("--test", action="store_true")
     parser.add_argument("--debug", action="store_true")
     args = parser.parse_args()
