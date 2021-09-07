@@ -20,11 +20,13 @@ lint: FORCE
 	flake8
 	black --check .
 	isort --check .
+	python scripts/update_headers.py --check
 	mypy .
 
 format: FORCE
 	black .
 	isort .
+	python scripts/update_headers.py
 
 test: lint data FORCE
 	pytest -v -n auto test

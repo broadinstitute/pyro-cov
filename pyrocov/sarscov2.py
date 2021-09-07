@@ -1,3 +1,6 @@
+# Copyright Contributors to the Pyro-Cov project.
+# SPDX-License-Identifier: Apache-2.0
+
 import re
 from collections import OrderedDict
 from typing import Dict, Tuple

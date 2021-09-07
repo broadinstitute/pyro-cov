@@ -1,3 +1,6 @@
+# Copyright Contributors to the Pyro-Cov project.
+# SPDX-License-Identifier: Apache-2.0
+
 import numpy as np
 import torch
 from scipy.special import log_ndtr

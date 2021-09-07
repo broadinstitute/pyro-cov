@@ -1,3 +1,6 @@
+# Copyright Contributors to the Pyro-Cov project.
+# SPDX-License-Identifier: Apache-2.0
+
 import pytest
 
 from pyrocov.strains import TimeSpaceStrainModel, simulate

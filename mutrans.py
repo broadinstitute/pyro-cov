@@ -1,4 +1,5 @@
-#!/usr/bin/env python
+# Copyright Contributors to the Pyro-Cov project.
+# SPDX-License-Identifier: Apache-2.0
 
 import argparse
 import functools

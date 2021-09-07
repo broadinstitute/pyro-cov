@@ -1,3 +1,6 @@
+# Copyright Contributors to the Pyro-Cov project.
+# SPDX-License-Identifier: Apache-2.0
+
 # Adapted from @viswackftw
 # https://github.com/pytorch/pytorch/issues/52973#issuecomment-787587188
 

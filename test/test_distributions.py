@@ -1,3 +1,6 @@
+# Copyright Contributors to the Pyro-Cov project.
+# SPDX-License-Identifier: Apache-2.0
+
 import pytest
 import torch
 from pyro.distributions.testing.gof import auto_goodness_of_fit

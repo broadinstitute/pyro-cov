@@ -1,3 +1,6 @@
+// Copyright Contributors to the Pyro-Cov project.
+// SPDX-License-Identifier: Apache-2.0
+
 #include <string>
 #include <unordered_map>
 #include <vector>

@@ -1,3 +1,6 @@
+# Copyright Contributors to the Pyro-Cov project.
+# SPDX-License-Identifier: Apache-2.0
+
 import re
 import sys
 
@@ -19,7 +22,7 @@ except Exception as e:
 
 setup(
     name="pyrocov",
-    version="0.0.0",
+    version="0.1.0",
     description="Pyro tools for Sars-CoV-2 analysis",
     long_description=long_description,
     long_description_content_type="text/markdown",

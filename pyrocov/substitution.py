@@ -1,3 +1,6 @@
+# Copyright Contributors to the Pyro-Cov project.
+# SPDX-License-Identifier: Apache-2.0
+
 import pyro.distributions as dist
 import torch
 from pyro.nn import PyroModule, PyroSample, pyro_method
