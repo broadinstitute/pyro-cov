@@ -23,6 +23,7 @@ from pyro.infer.autoguide import (
     AutoGuideList,
     AutoLowRankMultivariateNormal,
     AutoNormal,
+    AutoStructured,
 )
 from pyro.infer.reparam import LocScaleReparam
 from pyro.ops.streaming import CountMeanVarianceStats, StatsOfDict
@@ -634,6 +635,15 @@ def fit_svi(
     elif guide_type == "full":
         guide = AutoLowRankMultivariateNormal(
             model_, init_loc_fn=init_loc_fn, init_scale=0.01, rank=rank
+        )
+    elif guide_type == "structured":
+        guide = AutoStructured(
+            model_,
+            init_loc_fn=init_loc_fn,
+            init_scale=0.01,
+            conditionals=defaultdict(
+                lambda: "normal", coef="mvn", coef_decentered="mvn"
+            ),
         )
     else:
         guide = Guide(model_, init_loc_fn=init_loc_fn, init_scale=0.01, rank=rank)
