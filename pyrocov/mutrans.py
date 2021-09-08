@@ -642,7 +642,12 @@ def fit_svi(
             init_loc_fn=init_loc_fn,
             init_scale=0.01,
             conditionals=defaultdict(
-                lambda: "normal", coef="mvn", coef_decentered="mvn"
+                lambda: "normal",
+                rate_scale="delta",
+                init_loc_scale="delta",
+                init_scale="delta",
+                coef="mvn",
+                coef_decentered="mvn",
             ),
         )
     else:
@@ -687,8 +692,10 @@ def fit_svi(
             config["lr"] *= 0.1
         elif "scale_tril" in param_name:
             config["lr"] *= 0.05
+        elif "weight_" in param_name:
+            config["lr"] *= 0.01
         elif "weight" in param_name:
-            config["lr"] *= 0.05
+            config["lr"] *= 0.03
         elif "_centered" in param_name:
             config["lr"] *= 0.1
         return config
