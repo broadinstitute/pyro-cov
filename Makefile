@@ -33,6 +33,7 @@ test: lint data FORCE
 	python mutrans.py --test -n 2 -s 4
 
 update: FORCE
+	./pull_gisaid.sh
 	python git_pull.py cov-lineages/pango-designation
 	python git_pull.py CSSEGISandData/COVID-19
 	python git_pull.py nextstrain/nextclade
