@@ -50,3 +50,14 @@ The following plots assess robustness via 2-fold crossvalidation, splitting data
 ## Misc plots
 
 ![Logistic distribution](logistic_distribution.png)
+
+## Acknowledgements
+
+We gratefully acknowledge all data contributors, i.e. the Authors and their Originating laboratories responsible for obtaining the specimens, and their Submitting laboratories for generating the genetic sequence and metadata and sharing via the GISAID initiative [1,2] on which this research is based. A total of 2,160,748 submissions are included in this study. A complete list of 2.1million accession numbers are available in [accession_ids.txt.zip](accession_ids.txt.zip).
+
+1.  GISAID Initiative and global contributors,
+    EpiCoV(TM) human coronavirus 2019 database.
+    GISAID (2020), (available at https://gisaid.org).
+2.  S. Elbe, G. Buckland-Merrett,
+    Data, disease and diplomacy: GISAID's innovative contribution to global health.
+    Glob Chall. 1, 33-46 (2017).
