@@ -95,7 +95,13 @@ GISAID_TO_JHU = {
     "usa? ohio": ("us", "ohio"),
     "union of the comoros": ("comoros",),
     "viet nam": ("vietnam",),
-    "wallis and futuna": ("france", "wallis and futuna"),
+    "wallis and futuna": ("france", "wallis and futuna islands"),
+    "slovak republic": ("slovakia",),
+    "the bahamas": ("bahamas",),
+    "rio de janeiro": ("brazil",),
+    "parana": ("brazil",),
+    "u.s. virgin islands": ("us", "us virgin islands"),
+    "wallis and futuna islands": ("france", "wallis and futuna islands"),
 }
 
 # To update see explore-jhu-time-series.ipynb
@@ -114,6 +120,7 @@ JHU_TO_UN = {
     "moldova": "republic of moldova",
     "ms zaandam": None,  # cruise ship
     "russia": "russian federation",
+    "summer olympics 2020": None,  # event
     "syria": "syrian arab republic",
     "taiwan*": "china, taiwan province of china",
     "tanzania": "united republic of tanzania",
@@ -121,6 +128,9 @@ JHU_TO_UN = {
     "venezuela": "venezuela (bolivarian republic of)",
     "vietnam": "viet nam",
     "west bank and gaza": "israel",
+    "slovak republic": "slovakia",
+    "the bahamas": "bahamas",
+    "parana": "brazil",
 }
 
 
