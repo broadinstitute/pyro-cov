@@ -217,9 +217,9 @@ def load_gisaid_data(
             "day": day,
             "lineage": pangolin.compress(lineage),
         }
-        if not all(v.search(row[k]) for k, v in include.items()):
+        if not all(re.search(v, row[k]) for k, v in include.items()):
             continue
-        if any(v.search(row[k]) for k, v in exclude.items()):
+        if any(re.search(v, row[k]) for k, v in exclude.items()):
             continue
 
         # Filter by day
