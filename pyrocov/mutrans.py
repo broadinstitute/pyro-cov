@@ -440,10 +440,10 @@ def model(dataset, *, forecast_steps=None):
     with poutine.reparam(config=reparam):
 
         # Sample global random variables.
-        coef_scale = pyro.sample("coef_scale", dist.LogNormal(-5, 2))
-        rate_loc_scale = pyro.sample("rate_loc_scale", dist.LogNormal(-5, 2))
+        coef_scale = pyro.sample("coef_scale", dist.LogNormal(-4, 2))
+        rate_loc_scale = pyro.sample("rate_loc_scale", dist.LogNormal(-4, 2))
         init_loc_scale = pyro.sample("init_loc_scale", dist.LogNormal(0, 2))
-        rate_scale = pyro.sample("rate_scale", dist.LogNormal(-5, 2))
+        rate_scale = pyro.sample("rate_scale", dist.LogNormal(-4, 2))
         init_scale = pyro.sample("init_scale", dist.LogNormal(0, 2))
 
         # Assume relative growth rate depends strongly on mutations and weakly
