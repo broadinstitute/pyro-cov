@@ -455,18 +455,14 @@ def model(dataset, *, forecast_steps=None):
             rate_loc = pyro.sample(
                 "rate_loc", dist.Normal(0.01 * coef @ features.T, rate_loc_scale)
             )  # [S]
-
-            init_loc = pyro.sample(
-                "init_loc", dist.Normal(torch.zeros(S), init_loc_scale)
-            )  # [S]
+            init_loc = pyro.sample("init_loc", dist.Normal(0, init_loc_scale))  # [S]
         with place_plate, strain_plate:
             rate = pyro.sample("rate", dist.Normal(rate_loc, rate_scale))  # [P, S]
             init = pyro.sample("init", dist.Normal(init_loc, init_scale))  # [P, S]
 
         # Finally observe counts.
         with time_plate, place_plate:
-            logits = (init + rate * local_time)  # [T, P, S]
-
+            logits = init + rate * local_time  # [T, P, S]
             if forecast_steps is None:  # During inference.
                 pyro.sample(
                     "obs",
