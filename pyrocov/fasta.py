@@ -25,11 +25,13 @@ class NextcladeDB:
     """
 
     def __init__(self, fileprefix="results/nextcladedb", max_fasta_count=4000):
+        fileprefix = os.path.realpath(fileprefix)
         self.header_filename = fileprefix + ".header.tsv"
         self.rows_filename = fileprefix + ".rows.tsv"
         self.rows_temp_filename = fileprefix + "rows.temp.tsv"
         self.fasta_filename = fileprefix + ".temp.fasta"
         self.tsv_filename = fileprefix + ".temp.tsv"
+        self.output_dir = os.path.dirname(self.tsv_filename)
 
         # Load hashes of already-aligned sequences.
         self._already_aligned = set()
@@ -105,7 +107,7 @@ class NextcladeDB:
             f"--input-pcr-primers={NEXTSTRAIN_DATA}/primers.csv",
             f"--input-fasta={self.fasta_filename}",
             f"--output-tsv={self.tsv_filename}",
-            "--output-dir=results",
+            f"--output-dir={self.output_dir}",
         ]
         logger.info(" ".join(cmd))
         check_call(cmd)
