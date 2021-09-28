@@ -2,7 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import argparse
+import json
 import logging
+import pickle
 import re
 from collections import Counter, defaultdict
 
@@ -41,23 +43,39 @@ def count_mutations(mutation_counts, status_counts, row):
 
 
 def main(args):
-    # Load the subsampled tsv file.
-    subsamples = defaultdict(dict)
-    with open(args.subset_file_in, "rt") as f:
-        for line in f:
-            line = line.strip()
-            lineage, accession_id, seq = line.split("\t")
-            subsamples[lineage][accession_id] = seq.replace("_", "\n")
+    # Load the filtered accession ids.
+    logger.info(f"Loading {args.columns_file_in}")
+    with open(args.columns_file_in, "rb") as f:
+        columns = pickle.load(f)
+        id_to_lineage = dict(zip(columns["accession_id"], columns["lineage"]))
+        del columns
 
     # Count mutations via nextclade.
+    # This is batched and cached under the hood.
+    logger.info(f"Loading {args.gisaid_file_in}")
     lineage_mutation_counts = defaultdict(Counter)
     lineage_status_counts = defaultdict(Counter)
     db = NextcladeDB()
-    for lineage, sequences in subsamples.items():
-        mutation_counts = lineage_mutation_counts[lineage]
-        status_counts = lineage_status_counts[lineage]
-        for seq in sequences.values():
+    with open(args.gisaid_file_in, "rt") as f:
+        for i, line in enumerate(f):
+            datum = json.loads(line)
+
+            # Filter to sequences with sufficient data.
+            lineage = id_to_lineage.get(datum["covv_accession_id"])
+            if lineage is None:
+                continue
+            nchars = sum(datum["sequence"].count(b) for b in "ACGT")
+            if not (args.min_nchars <= nchars <= args.max_nchars):
+                continue
+
+            # Schedule sequence for alignment.
+            seq = datum["sequence"].replace("\n", "")
+            mutation_counts = lineage_mutation_counts[lineage]
+            status_counts = lineage_status_counts[lineage]
             db.schedule(seq, count_mutations, mutation_counts, status_counts)
+
+            if i % args.log_every == 0:
+                print(".", end="", flush=True)
     db.wait(log_every=args.log_every)
 
     message = ["Total quality:"]
@@ -135,9 +153,12 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Featurize nextclade mutations")
-    parser.add_argument("--min-good-samples", default=5, type=float)
-    parser.add_argument("--subset-file-in", default="results/gisaid.subset.tsv")
+    parser.add_argument("--gisaid-file-in", default="results/gisaid.json")
+    parser.add_argument("--columns-file-in", default="results/gisaid.columns.pkl")
     parser.add_argument("--features-file-out", default="results/nextclade.features.pt")
+    parser.add_argument("--min-nchars", default=29000, type=int)
+    parser.add_argument("--max-nchars", default=31000, type=int)
+    parser.add_argument("--min-good-samples", default=5, type=float)
     parser.add_argument("-l", "--log-every", default=1000, type=int)
     args = parser.parse_args()
     main(args)
