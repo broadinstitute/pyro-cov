@@ -813,7 +813,8 @@ def log_stats(dataset: dict, result: dict) -> dict:
     counts = true.sum(-1, True)
     true_probs = true / counts
     local_time = dataset["local_time"][..., None]
-    local_time = local_time + result["params"]["local_time"].to(local_time.device)
+    if "local_time" in result["params"]:
+        local_time = local_time + result["params"]["local_time"].to(local_time.device)
     rate = 0.01 * result["median"]["coef"] @ dataset["features"].T
     pred = result["median"]["init"] + rate * local_time
     pred -= pred.logsumexp(-1, True)  # apply log sigmoid function
