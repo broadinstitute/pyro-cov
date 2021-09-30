@@ -525,15 +525,28 @@ class Guide(AutoGuideList):
     """
     Custom guide for large-scale inference.
 
-    This combines a low-rank multivariate normal guide over mutation
-    coefficients with a mean field guide over remaining latent variables.
+    This combines a low-rank multivariate normal guide over small variables
+    with a mean field guide over remaining latent variables.
     """
 
     def __init__(self, model, init_loc_fn, init_scale, rank):
         super().__init__(model)
 
-        # Jointly estimate mutation coefficients and shrinkage.
-        mvn = ["coef_scale", "coef", "coef_decentered"]
+        # Jointly estimate globals, mutation coefficients, and strain coefficients.
+        mvn = [
+            "coef_scale",
+            "rate_loc_scale",
+            "init_loc_scale",
+            "rate_scale",
+            "init_scale",
+            "coef",
+            "coef_decentered",
+            "rate_loc",
+            "rate_loc_decentered",
+            "init_loc",
+            "init_loc_decentered",
+        ]
+        # Low-rank estimate everything else.
         self.append(
             AutoLowRankMultivariateNormal(
                 poutine.block(model, expose=mvn),
