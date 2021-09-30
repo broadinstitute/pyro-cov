@@ -397,7 +397,7 @@ def load_jhu_data(gisaid_data: dict) -> dict:
     }
 
 
-def model(dataset, *, forecast_steps=None):
+def model(dataset, *, model_type="sparse-skip-reparam", forecast_steps=None):
     """
     Bayesian regression model of lineage portions as a function of mutation features.
 
@@ -429,19 +429,22 @@ def model(dataset, *, forecast_steps=None):
 
     # Configure reparametrization (which does not affect model density).
     reparam = {}
-    local_time = local_time + pyro.param(
-        "local_time", lambda: torch.zeros(P, S)
-    )  # [T, P, S]
-    reparam["coef"] = LocScaleReparam()
-    reparam["rate_loc"] = LocScaleReparam()
-    reparam["init_loc"] = LocScaleReparam()
-    reparam["rate"] = LocScaleReparam()
-    reparam["init"] = LocScaleReparam()
+    if "reparam" in model_type:
+        local_time = local_time + pyro.param(
+            "local_time", lambda: torch.zeros(P, S)
+        )  # [T, P, S]
+        reparam["coef"] = LocScaleReparam()
+        if "skip" not in model_type:
+            reparam["rate_loc"] = LocScaleReparam()
+        reparam["init_loc"] = LocScaleReparam()
+        reparam["rate"] = LocScaleReparam()
+        reparam["init"] = LocScaleReparam()
     with poutine.reparam(config=reparam):
 
         # Sample global random variables.
         coef_scale = pyro.sample("coef_scale", dist.LogNormal(-4, 2))
-        rate_loc_scale = pyro.sample("rate_loc_scale", dist.LogNormal(-4, 2))
+        if "skip" not in model_type:
+            rate_loc_scale = pyro.sample("rate_loc_scale", dist.LogNormal(-4, 2))
         init_loc_scale = pyro.sample("init_loc_scale", dist.LogNormal(0, 2))
         rate_scale = pyro.sample("rate_scale", dist.LogNormal(-4, 2))
         init_scale = pyro.sample("init_scale", dist.LogNormal(0, 2))
@@ -450,11 +453,16 @@ def model(dataset, *, forecast_steps=None):
         # on strain and place. Assume initial infections depend strongly on
         # strain and place.
         with feature_plate:
-            coef = pyro.sample("coef", dist.Logistic(0, coef_scale))  # [F]
+            Dist = dist.Logistic if "sparse" in model_type else dist.Normal
+            coef = pyro.sample("coef", Dist(0, coef_scale))  # [F]
         with strain_plate:
-            rate_loc = pyro.sample(
-                "rate_loc", dist.Normal(0.01 * coef @ features.T, rate_loc_scale)
-            )  # [S]
+            rate_loc_loc = 0.01 * coef @ features.T
+            if "skip" in model_type:
+                rate_loc = pyro.deterministic("rate_loc", rate_loc_loc)  # [S]
+            else:
+                rate_loc = pyro.sample(
+                    "rate_loc", dist.Normal(rate_loc_loc, rate_loc_scale)
+                )  # [S]
             init_loc = pyro.sample("init_loc", dist.Normal(0, init_loc_scale))  # [S]
         with place_plate, strain_plate:
             rate = pyro.sample("rate", dist.Normal(rate_loc, rate_scale))  # [P, S]
@@ -545,6 +553,7 @@ class Guide(AutoGuideList):
 def predict(
     guide,
     dataset,
+    model_type,
     *,
     num_samples=1000,
     vectorize=None,
@@ -555,7 +564,7 @@ def predict(
 
     def get_conditionals(data):
         trace = poutine.trace(poutine.condition(model, data)).get_trace(
-            dataset, forecast_steps=forecast_steps
+            dataset, model_type=model_type, forecast_steps=forecast_steps
         )
         return {
             name: site["value"].detach()
@@ -599,6 +608,7 @@ def predict(
 def fit_svi(
     dataset: dict,
     *,
+    model_type: str,
     guide_type: str,
     cond_data={},
     forecast_steps=0,
@@ -706,7 +716,7 @@ def fit_svi(
     losses = []
     num_obs = dataset["weekly_strains"].count_nonzero()
     for step in range(num_steps):
-        loss = svi.step(dataset=dataset)
+        loss = svi.step(model_type=model_type, dataset=dataset)
         assert not math.isnan(loss)
         losses.append(loss)
         median = guide.median()
@@ -732,7 +742,11 @@ def fit_svi(
             assert (curr - prev) < num_obs, "loss is increasing"
 
     result = predict(
-        guide, dataset, num_samples=num_samples, forecast_steps=forecast_steps
+        guide,
+        dataset,
+        model_type,
+        num_samples=num_samples,
+        forecast_steps=forecast_steps,
     )
     result["losses"] = losses
     series["loss"] = losses
