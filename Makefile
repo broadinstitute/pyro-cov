@@ -62,6 +62,13 @@ pull:
 	  pyro-cov-fritzo-vm:~/pyro-cov/results/mutrans.pt \
 	  results/
 
+# This data is needed for mutrans.ipynb
+pull-data:
+	gcloud compute scp --project pyro-284215 --zone us-central1-c \
+	  --recurse --compress \
+	  pyro-cov-fritzo-vm:~/pyro-cov/results/\{gisaid.columns.pkl,gisaid.stats.pkl,nextclade.features.pt,nextclade.counts.pkl\} \
+	  results/
+
 pull-grid:
 	gcloud compute scp --project pyro-284215 --zone us-central1-c \
           --recurse --compress \

@@ -92,13 +92,15 @@ def main(args):
     logger.info("\n\t".join(message))
 
     # Collect a set of all single mutations observed in this subsample.
-    all_mutations = {
-        m
-        for ms in lineage_mutation_counts.values()
-        for m in ms
-        if m is not None and "," not in m
-    }
-    all_mutations = sorted(all_mutations)
+    agg_counts = Counter()
+    for ms in lineage_mutation_counts.values():
+        for m, count in ms.items():
+            if m is not None and "," not in m:
+                agg_counts[m] += count
+    all_mutations = sorted(agg_counts)
+    logger.info(f"saving {args.counts_file_out}")
+    with open(args.counts_file_out, "wb") as f:
+        pickle.dump(dict(agg_counts), f)
 
     # Filter to lineages with at least a few good samples.
     for lineage, status_counts in list(lineage_status_counts.items()):
@@ -156,6 +158,7 @@ if __name__ == "__main__":
     parser.add_argument("--gisaid-file-in", default="results/gisaid.json")
     parser.add_argument("--columns-file-in", default="results/gisaid.columns.pkl")
     parser.add_argument("--features-file-out", default="results/nextclade.features.pt")
+    parser.add_argument("--counts-file-out", default="results/nextclade.counts.pkl")
     parser.add_argument("--min-nchars", default=29000, type=int)
     parser.add_argument("--max-nchars", default=31000, type=int)
     parser.add_argument("--min-good-samples", default=5, type=float)

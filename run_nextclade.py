@@ -35,13 +35,14 @@ def main(args):
     db = NextcladeDB()
     schedule = db.maybe_schedule if args.no_new else db.schedule
     mutation_counts = Counter()
-    with open(args.gisaid_file_in) as f:
+    with open(args.gisaid_file_in, "rt") as f:
         for i, line in enumerate(f):
             seq = json.loads(line)["sequence"]
 
             # Filter by length.
             nchars = sum(seq.count(b) for b in "ACGT")
             if args.min_nchars <= nchars <= args.max_nchars:
+                seq = seq.replace("\n", "")
                 schedule(seq, count_mutations, mutation_counts)
 
             if i % args.log_every == 0:
@@ -56,7 +57,7 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run NextClade on all sequences")
     parser.add_argument(
-        "--gisaid-file-in", default=os.path.expanduser("~/data/gisaid/provision.json")
+        "--gisaid-file-in", default=os.path.expanduser("results/gisaid.json")
     )
     parser.add_argument("--counts-file-out", default="results/nextclade.counts.pkl")
     parser.add_argument("--min-nchars", default=29000, type=int)
