@@ -397,7 +397,7 @@ def load_jhu_data(gisaid_data: dict) -> dict:
     }
 
 
-def model(dataset, *, forecast_steps=None):
+def model(dataset, *, model_type="sparse-skip-reparam", forecast_steps=None):
     """
     Bayesian regression model of lineage portions as a function of mutation features.
 
@@ -414,65 +414,72 @@ def model(dataset, *, forecast_steps=None):
     T, P, _ = local_time.shape
     S, F = features.shape
     if forecast_steps is None:  # During inference.
-        weekly_strains = dataset["weekly_strains"]
-        assert weekly_strains.shape == (T, P, S)
+        weekly_strains = dataset["weekly_strains"][..., None, :]
+        assert weekly_strains.shape == (T, P, 1, S)
     else:  # During prediction.
         T = T + forecast_steps
         t0 = local_time[0]
         dt = local_time[1] - local_time[0]
         local_time = t0 + dt * torch.arange(float(T))[:, None, None]
         assert local_time.shape == (T, P, 1)
+    feature_plate = pyro.plate("feature", F, dim=-1)
+    strain_plate = pyro.plate("strain", S, dim=-1)
+    place_plate = pyro.plate("place", P, dim=-2)
+    time_plate = pyro.plate("time", T, dim=-3)
 
     # Configure reparametrization (which does not affect model density).
     reparam = {}
-    local_time = local_time + pyro.param(
-        "local_time", lambda: torch.zeros(P, S)
-    )  # [T, P, S]
-    reparam["coef"] = LocScaleReparam()
-    reparam["rate"] = LocScaleReparam()
-    reparam["init_loc"] = LocScaleReparam()
-    reparam["init"] = LocScaleReparam()
+    if "reparam" in model_type:
+        local_time = local_time + pyro.param(
+            "local_time", lambda: torch.zeros(P, S)
+        )  # [T, P, S]
+        reparam["coef"] = LocScaleReparam()
+        if "skip" not in model_type:
+            reparam["rate_loc"] = LocScaleReparam()
+        reparam["init_loc"] = LocScaleReparam()
+        reparam["rate"] = LocScaleReparam()
+        reparam["init"] = LocScaleReparam()
     with poutine.reparam(config=reparam):
 
         # Sample global random variables.
-        coef_scale = pyro.sample("coef_scale", dist.InverseGamma(5e3, 1e2))[..., None]
-        rate_scale = pyro.sample("rate_scale", dist.LogNormal(-4, 2))[..., None]
-        init_loc_scale = pyro.sample("init_loc_scale", dist.LogNormal(0, 2))[..., None]
-        init_scale = pyro.sample("init_scale", dist.LogNormal(0, 2))[..., None]
+        coef_scale = pyro.sample("coef_scale", dist.LogNormal(-4, 2))
+        if "skip" not in model_type:
+            rate_loc_scale = pyro.sample("rate_loc_scale", dist.LogNormal(-4, 2))
+        init_loc_scale = pyro.sample("init_loc_scale", dist.LogNormal(0, 2))
+        rate_scale = pyro.sample("rate_scale", dist.LogNormal(-4, 2))
+        init_scale = pyro.sample("init_scale", dist.LogNormal(0, 2))
 
-        # Assume relative growth rate depends strongly on mutations and weakly on place.
-        coef_loc = torch.zeros(F)
-        coef = pyro.sample(
-            "coef", dist.Logistic(coef_loc, coef_scale).to_event(1)
-        )  # [F]
-        rate_loc = pyro.deterministic(
-            "rate_loc", 0.01 * coef @ features.T, event_dim=1
-        )  # [S]
+        # Assume relative growth rate depends strongly on mutations and weakly
+        # on strain and place. Assume initial infections depend strongly on
+        # strain and place.
+        with feature_plate:
+            Dist = dist.Logistic if "sparse" in model_type else dist.Normal
+            coef = pyro.sample("coef", Dist(0, coef_scale))  # [F]
+        with strain_plate:
+            rate_loc_loc = 0.01 * coef @ features.T
+            if "skip" in model_type:
+                rate_loc = pyro.deterministic("rate_loc", rate_loc_loc)  # [S]
+            else:
+                rate_loc = pyro.sample(
+                    "rate_loc", dist.Normal(rate_loc_loc, rate_loc_scale)
+                )  # [S]
+            init_loc = pyro.sample("init_loc", dist.Normal(0, init_loc_scale))  # [S]
+        with place_plate, strain_plate:
+            rate = pyro.sample("rate", dist.Normal(rate_loc, rate_scale))  # [P, S]
+            init = pyro.sample("init", dist.Normal(init_loc, init_scale))  # [P, S]
 
-        # Assume initial infections depend strongly on strain and place.
-        init_loc = pyro.sample(
-            "init_loc", dist.Normal(torch.zeros(S), init_loc_scale).to_event(1)
-        )  # [S]
-        with pyro.plate("place", P, dim=-1):
-            rate = pyro.sample(
-                "rate", dist.Normal(rate_loc, rate_scale).to_event(1)
-            )  # [P, S]
-            init = pyro.sample(
-                "init", dist.Normal(init_loc, init_scale).to_event(1)
-            )  # [P, S]
-
-            # Finally observe counts.
-            with pyro.plate("time", T, dim=-2):
-                logits = init + rate * local_time  # [T, P, S]
-
-                if forecast_steps is None:  # During inference.
-                    pyro.sample(
-                        "obs",
-                        dist.Multinomial(logits=logits, validate_args=False),
-                        obs=weekly_strains,
-                    )
-                else:  # During prediction.
-                    pyro.deterministic("probs", logits.softmax(-1), event_dim=1)
+        # Finally observe counts.
+        with time_plate, place_plate:
+            logits = init + rate * local_time  # [T, P, S]
+            if forecast_steps is None:  # During inference.
+                pyro.sample(
+                    "obs",
+                    dist.Multinomial(logits=logits[..., None, :], validate_args=False),
+                    obs=weekly_strains,
+                )  # [T, P, 1, S]
+            else:  # During prediction.
+                with strain_plate:
+                    pyro.deterministic("probs", logits.softmax(-1))
 
 
 class InitLocFn:
@@ -505,9 +512,9 @@ class InitLocFn:
             return torch.ones(shape)
         if name == "logits_scale":
             return torch.full(shape, 0.002)
-        if name in ("rate_scale", "place_scale", "strain_scale"):
+        if name in ("rate_loc_scale", "rate_scale", "place_scale", "strain_scale"):
             return torch.full(shape, 0.01)
-        if name in ("coef", "coef_decentered", "rate", "rate_decentered"):
+        if name in ("coef", "coef_decentered", "rate", "rate_loc", "rate_decentered"):
             return torch.rand(shape).sub_(0.5).mul_(0.01)
         if name == "coef_loc":
             return torch.rand(shape).sub_(0.5).mul_(0.01).add_(1.0)
@@ -546,6 +553,7 @@ class Guide(AutoGuideList):
 def predict(
     guide,
     dataset,
+    model_type,
     *,
     num_samples=1000,
     vectorize=None,
@@ -556,7 +564,7 @@ def predict(
 
     def get_conditionals(data):
         trace = poutine.trace(poutine.condition(model, data)).get_trace(
-            dataset, forecast_steps=forecast_steps
+            dataset, model_type=model_type, forecast_steps=forecast_steps
         )
         return {
             name: site["value"].detach()
@@ -578,7 +586,7 @@ def predict(
     if vectorize is None:
         vectorize = result["median"]["probs"].numel() < 1e6
     if vectorize:
-        with pyro.plate("particles", num_samples, dim=-3):
+        with pyro.plate("particles", num_samples, dim=-4):
             samples = get_conditionals(guide())
         for k, v in samples.items():
             if k in save_params:
@@ -600,6 +608,7 @@ def predict(
 def fit_svi(
     dataset: dict,
     *,
+    model_type: str,
     guide_type: str,
     cond_data={},
     forecast_steps=0,
@@ -702,12 +711,12 @@ def fit_svi(
 
     optim = ClippedAdam(optim_config)
     Elbo = JitTrace_ELBO if jit else Trace_ELBO
-    elbo = Elbo(max_plate_nesting=2, ignore_jit_warnings=True)
+    elbo = Elbo(max_plate_nesting=3, ignore_jit_warnings=True)
     svi = SVI(model_, guide, optim, elbo)
     losses = []
     num_obs = dataset["weekly_strains"].count_nonzero()
     for step in range(num_steps):
-        loss = svi.step(dataset=dataset)
+        loss = svi.step(model_type=model_type, dataset=dataset)
         assert not math.isnan(loss)
         losses.append(loss)
         median = guide.median()
@@ -733,7 +742,11 @@ def fit_svi(
             assert (curr - prev) < num_obs, "loss is increasing"
 
     result = predict(
-        guide, dataset, num_samples=num_samples, forecast_steps=forecast_steps
+        guide,
+        dataset,
+        model_type,
+        num_samples=num_samples,
+        forecast_steps=forecast_steps,
     )
     result["losses"] = losses
     series["loss"] = losses

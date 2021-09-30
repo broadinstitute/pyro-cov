@@ -94,6 +94,7 @@ def fit_svi(
     args,
     dataset,
     cond_data="",
+    model_type="sparse-skip-reparam",
     guide_type="mvn_dependent",
     n=1001,
     lr=0.01,
@@ -114,6 +115,7 @@ def fit_svi(
     result = mutrans.fit_svi(
         dataset,
         cond_data=cond_data,
+        model_type=model_type,
         guide_type=guide_type,
         num_steps=n,
         learning_rate=lr,
@@ -148,6 +150,7 @@ def backtesting(args, default_config):
         configs.append(
             (
                 args.cond_data,
+                args.model_type,
                 args.guide_type,
                 args.num_steps,
                 args.learning_rate,
@@ -374,6 +377,7 @@ def main(args):
     empty_end_day = None
     default_config = (
         args.cond_data,
+        args.model_type,
         args.guide_type,
         args.num_steps,
         args.learning_rate,
@@ -396,11 +400,29 @@ def main(args):
         grid = sorted(int(n) for n in args.vary_num_steps.split(","))
         for num_steps in grid:
             configs.append()
+    elif args.vary_model_type:
+        for model_type in args.vary_model_type.split(","):
+            configs.append(
+                (
+                    args.cond_data,
+                    model_type,
+                    args.guide_type,
+                    args.num_steps,
+                    args.learning_rate,
+                    args.learning_rate_decay,
+                    args.clip_norm,
+                    args.rank,
+                    args.forecast_steps,
+                    empty_end_day,
+                    empty_holdout,
+                )
+            )
     elif args.vary_guide_type:
         for guide_type in args.vary_guide_type.split(","):
             configs.append(
                 (
                     args.cond_data,
+                    args.model_type,
                     guide_type,
                     args.num_steps,
                     args.learning_rate,
@@ -433,6 +455,7 @@ def main(args):
             configs.append(
                 (
                     args.cond_data,
+                    args.model_type,
                     args.guide_type,
                     args.num_steps,
                     args.learning_rate,
@@ -501,6 +524,7 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Fit mutation-transmissibility models")
+    parser.add_argument("--vary-model-type", help="comma delimited list of model types")
     parser.add_argument("--vary-guide-type", help="comma delimited list of guide types")
     parser.add_argument("--vary-num-steps", help="comma delimited list of num_steps")
     parser.add_argument("--vary-holdout", action="store_true")
@@ -511,6 +535,7 @@ if __name__ == "__main__":
     parser.add_argument("--vary-nsp", action="store_true")
     parser.add_argument("--only-gene")
     parser.add_argument("-cd", "--cond-data", default="coef_scale=0.5")
+    parser.add_argument("-m", "--model-type", default="sparse-skip-reparam")
     parser.add_argument("-g", "--guide-type", default="custom")
     parser.add_argument("-n", "--num-steps", default=10001, type=int)
     parser.add_argument("-s", "--num-samples", default=1000, type=int)
