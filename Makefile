@@ -1,3 +1,5 @@
+SHELL := /bin/bash
+
 data:
 	ln -sf ~/Google\ Drive\ File\ Stream/Shared\ drives/Pyro\ CoV data
 

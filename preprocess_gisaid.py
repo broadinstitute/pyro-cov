@@ -9,11 +9,9 @@ import os
 import pickle
 import warnings
 from collections import Counter, defaultdict
-from subprocess import check_call
 
 from pyrocov import pangolin
 from pyrocov.geo import gisaid_normalize
-from pyrocov.hashsubset import RandomSubDict
 from pyrocov.mutrans import START_DATE
 
 logger = logging.getLogger(__name__)
@@ -45,10 +43,13 @@ def main(args):
     columns = defaultdict(list)
     stats = defaultdict(Counter)
     covv_fields = ["covv_" + key for key in FIELDS]
-    subsamples = defaultdict(lambda: RandomSubDict(args.samples_per_lineage))
 
     with open(args.gisaid_file_in) as f:
         for i, line in enumerate(f):
+            # Optimize for faster reading.
+            line, _ = line.split(', "sequence": ', 1)
+            line += "}"
+
             # Filter out bad data.
             datum = json.loads(line)
             if len(datum["covv_collection_date"]) < 7:
@@ -81,18 +82,13 @@ def main(args):
             stats["location"][datum["covv_location"]] += 1
             stats["lineage"][lineage] += 1
 
-            # Collect samples.
-            nchars = sum(datum["sequence"].count(b) for b in "ACGT")
-            if args.min_nchars <= nchars <= args.max_nchars:
-                subsamples[lineage][datum["covv_accession_id"]] = datum["sequence"]
-
             if i % args.log_every == 0:
                 print(".", end="", flush=True)
             if i >= args.truncate:
                 break
 
     num_dropped = i + 1 - len(columns["day"])
-    logger.info(f"dropped {num_dropped}/{i+1} = {num_dropped/(i+1):0.2g}% rows")
+    logger.info(f"dropped {num_dropped}/{i+1} = {num_dropped/(i+1)/100:0.2g}% rows")
 
     logger.info(f"saving {args.columns_file_out}")
     with open(args.columns_file_out, "wb") as f:
@@ -102,49 +98,15 @@ def main(args):
     with open(args.stats_file_out, "wb") as f:
         pickle.dump(dict(stats), f)
 
-    num_sequences = sum(len(v) for v in subsamples.values())
-    logger.info(f"saving {num_sequences} sequences to {args.subset_file_out}")
-    os.makedirs(args.subset_dir_out, exist_ok=True)
-    # This file is too large for pickle, so we save as tsv.
-    # See https://stackoverflow.com/questions/42653386
-    with open(args.subset_file_out, "wt") as tsv:
-        for lineage, samples in subsamples.items():
-            assert "\t" not in lineage
-            basename = pangolin.compress(lineage) + ".fasta"
-            with open(os.path.join(args.subset_dir_out, basename), "wt") as fasta:
-                for accession_id, seq in samples.items():
-                    assert "\t" not in accession_id
-                    assert "\t" not in seq
-                    # Write a tsv line in a single large file.
-                    tsv.write(lineage)
-                    tsv.write("\t")
-                    tsv.write(accession_id)
-                    tsv.write("\t")
-                    tsv.write(seq.replace("\n", "_"))
-                    tsv.write("\n")
-                    # Write a FASTA entry grouped by lineage.
-                    fasta.write(">")
-                    fasta.write(accession_id)
-                    fasta.write("\n")
-                    fasta.write(seq)
-                    fasta.write("\n")
-    logger.info(f"compressing {args.subset_dir_out}")
-    check_call(["zip", "-r", args.subset_dir_out + ".zip", args.subset_dir_out])
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Preprocess GISAID data")
-    parser.add_argument(
-        "--gisaid-file-in", default=os.path.expanduser("results/gisaid.json")
-    )
+    parser.add_argument("--gisaid-file-in", default="results/gisaid.json")
     parser.add_argument("--columns-file-out", default="results/gisaid.columns.pkl")
     parser.add_argument("--stats-file-out", default="results/gisaid.stats.pkl")
     parser.add_argument("--subset-file-out", default="results/gisaid.subset.tsv")
     parser.add_argument("--subset-dir-out", default="results/fasta")
     parser.add_argument("--start-date", default=START_DATE)
-    parser.add_argument("--min-nchars", default=29000, type=int)
-    parser.add_argument("--max-nchars", default=31000, type=int)
-    parser.add_argument("-s", "--samples-per-lineage", default=200, type=int)
     parser.add_argument("-l", "--log-every", default=1000, type=int)
     parser.add_argument("--truncate", default=int(1e10), type=int)
     args = parser.parse_args()
