@@ -397,7 +397,7 @@ def load_jhu_data(gisaid_data: dict) -> dict:
     }
 
 
-def model(dataset, *, model_type="sparse-skip-reparam", forecast_steps=None):
+def model(dataset, model_type, *, forecast_steps=None):
     """
     Bayesian regression model of lineage portions as a function of mutation features.
 
@@ -564,7 +564,7 @@ def predict(
 
     def get_conditionals(data):
         trace = poutine.trace(poutine.condition(model, data)).get_trace(
-            dataset, model_type=model_type, forecast_steps=forecast_steps
+            dataset, model_type, forecast_steps=forecast_steps
         )
         return {
             name: site["value"].detach()
@@ -662,7 +662,7 @@ def fit_svi(
     else:
         guide = Guide(model_, init_loc_fn=init_loc_fn, init_scale=0.01, rank=rank)
     # This initializes the guide:
-    latent_shapes = {k: v.shape for k, v in guide(dataset).items()}
+    latent_shapes = {k: v.shape for k, v in guide(dataset, model_type).items()}
     latent_numel = {k: v.numel() for k, v in latent_shapes.items()}
     logger.info(
         "\n".join(
@@ -716,7 +716,7 @@ def fit_svi(
     losses = []
     num_obs = dataset["weekly_strains"].count_nonzero()
     for step in range(num_steps):
-        loss = svi.step(model_type=model_type, dataset=dataset)
+        loss = svi.step(dataset=dataset, model_type=model_type)
         assert not math.isnan(loss)
         losses.append(loss)
         median = guide.median()
