@@ -66,18 +66,21 @@ PANGOLIN_ALIASES = {
 # From https://www.who.int/en/activities/tracking-SARS-CoV-2-variants/
 WHO_ALIASES = {
     # Variants of concern.
-    "Alpha": ["B.1.1.7"],
+    "Alpha": ["B.1.1.7", "Q"],
     "Beta": ["B.1.351", "B.1.351.2", "B.1.351.3"],
     "Gamma": ["P.1", "P.1.1", "P.1.2"],
-    "Delta": ["B.1.617.2", "AY.1", "AY.2", "AY.3"],
+    "Delta": ["B.1.617.2", "AY"],
     # Variants of interest.
+    "Lambda": ["C.37"],
+    "Mu": ["B.1.621"],
+    # Former variants of interest.
+    # Epsilon (B.1.427/B.1.429), Zeta (P.2), Theta (P.3)
     "Eta": ["B.1.525"],
     "Iota": ["B.1.526"],
     "Kappa": ["B.1.617.1"],
-    "Lambda": ["C.37"],
-    # Former variants of interest.
-    # Epsilon (B.1.427/B.1.429), Zeta (P.2), Theta (P.3)
 }
+WHO_VOC = ["Alpha", "Beta", "Gamma", "Delta"]
+WHO_VOI = ["Lambda", "Mu"]
 
 
 def update_aliases():
