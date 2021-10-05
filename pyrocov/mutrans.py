@@ -414,15 +414,14 @@ def model(dataset, model_type, *, forecast_steps=None):
     T, P, _ = local_time.shape
     S, F = features.shape
     if forecast_steps is None:  # During inference.
-        weekly_strains = dataset["weekly_strains"][..., None, :]
-        assert weekly_strains.shape == (T, P, 1, S)
+        weekly_strains = dataset["weekly_strains"]
+        assert weekly_strains.shape == (T, P, S)
     else:  # During prediction.
         T = T + forecast_steps
         t0 = local_time[0]
         dt = local_time[1] - local_time[0]
         local_time = t0 + dt * torch.arange(float(T))[:, None, None]
         assert local_time.shape == (T, P, 1)
-    feature_plate = pyro.plate("feature", F, dim=-1)
     strain_plate = pyro.plate("strain", S, dim=-1)
     place_plate = pyro.plate("place", P, dim=-2)
     time_plate = pyro.plate("time", T, dim=-3)
@@ -448,13 +447,15 @@ def model(dataset, model_type, *, forecast_steps=None):
         init_loc_scale = pyro.sample("init_loc_scale", dist.LogNormal(0, 2))
         rate_scale = pyro.sample("rate_scale", dist.LogNormal(-4, 2))
         init_scale = pyro.sample("init_scale", dist.LogNormal(0, 2))
+        if "poisson" in model_type:
+            pois_loc = pyro.sample("pois_loc", dist.Normal(0, 4))
+            pois_scale = pyro.sample("pois_scale", dist.LogNormal(0, 4))
 
         # Assume relative growth rate depends strongly on mutations and weakly
         # on strain and place. Assume initial infections depend strongly on
         # strain and place.
-        with feature_plate:
-            Dist = dist.Logistic if "sparse" in model_type else dist.Normal
-            coef = pyro.sample("coef", Dist(0, coef_scale))  # [F]
+        Dist = dist.Logistic if "sparse" in model_type else dist.Normal
+        coef = pyro.sample("coef", Dist(torch.zeros(F), coef_scale).to_event(1))  # [F]
         with strain_plate:
             rate_loc_loc = 0.01 * coef @ features.T
             if "skip" in model_type:
@@ -469,17 +470,32 @@ def model(dataset, model_type, *, forecast_steps=None):
             init = pyro.sample("init", dist.Normal(init_loc, init_scale))  # [P, S]
 
         # Finally observe counts.
-        with time_plate, place_plate:
-            logits = init + rate * local_time  # [T, P, S]
-            if forecast_steps is None:  # During inference.
-                pyro.sample(
-                    "obs",
-                    dist.Multinomial(logits=logits[..., None, :], validate_args=False),
-                    obs=weekly_strains,
-                )  # [T, P, 1, S]
-            else:  # During prediction.
-                with strain_plate:
-                    pyro.deterministic("probs", logits.softmax(-1))
+        logits = init + rate * local_time  # [T, P, S]
+        if forecast_steps is None:  # During inference.
+            if "poisson" in model_type:
+                with time_plate, place_plate:
+                    pois = pyro.sample("pois", dist.LogNormal(pois_loc, pois_scale))
+                # This softmax() breaks the strain_plate, but is more
+                # numerically stable than exp(). AutoGaussian inference will be
+                # approximate with softmax(), but would be intractable with
+                # exp() and a second_strain_plate.
+                lambda_ = (pois * logits.softmax(-1)).clamp_(min=1e-6)
+                with time_plate, place_plate, strain_plate:
+                    pyro.sample(
+                        "obs", dist.Poisson(lambda_), obs=weekly_strains
+                    )  # [T, P, S]
+            else:
+                with time_plate, place_plate:
+                    pyro.sample(
+                        "obs",
+                        dist.Multinomial(
+                            logits=logits[..., None, :], validate_args=False
+                        ),
+                        obs=weekly_strains[..., None, :],
+                    )  # [T, P, 1, S]
+        else:  # During prediction.
+            with time_plate, place_plate, strain_plate:
+                pyro.deterministic("probs", logits.softmax(-1))
 
 
 class InitLocFn:
@@ -491,7 +507,7 @@ class InitLocFn:
 
     def __init__(self, dataset):
         # Initialize init.
-        init = dataset["weekly_strains"].sum(0)
+        init = dataset["weekly_strains"].sum(0)  # [P, S]
         init.add_(1 / init.size(-1)).div_(init.sum(-1, True))
         init.log_().sub_(init.median(-1, True).values)
         self.init = init  # [P, S]
@@ -499,6 +515,7 @@ class InitLocFn:
         self.init_loc = init.mean(0)  # [S]
         self.init_loc_decentered = self.init_loc / 2
         assert not torch.isnan(self.init).any()
+        self.pois = dataset["weekly_strains"].sum(-1, True).clamp(min=0.1)  # [T, P, 1]
         logger.info(f"init stddev = {self.init.std():0.3g}")
 
     def __call__(self, site):
@@ -514,10 +531,23 @@ class InitLocFn:
             return torch.full(shape, 0.002)
         if name in ("rate_loc_scale", "rate_scale", "place_scale", "strain_scale"):
             return torch.full(shape, 0.01)
-        if name in ("coef", "coef_decentered", "rate", "rate_loc", "rate_decentered"):
+        if name in (
+            "rate_loc",
+            "rate_loc_decentered",
+            "coef",
+            "coef_decentered",
+            "rate",
+            "rate_decentered",
+        ):
             return torch.rand(shape).sub_(0.5).mul_(0.01)
         if name == "coef_loc":
             return torch.rand(shape).sub_(0.5).mul_(0.01).add_(1.0)
+        if name == "pois_loc":
+            return self.pois.log().mean()
+        if name == "pois_scale":
+            return self.pois.log().std()
+        if name == "pois":
+            return self.pois
         raise ValueError(f"InitLocFn found unhandled site {repr(name)}; please update.")
 
 
@@ -546,7 +576,6 @@ class Guide(AutoGuideList):
             "init_loc",
             "init_loc_decentered",
         ]
-        # Low-rank estimate everything else.
         self.append(
             AutoLowRankMultivariateNormal(
                 poutine.block(model, expose=mvn),
@@ -564,6 +593,7 @@ class Guide(AutoGuideList):
 @torch.no_grad()
 @poutine.mask(mask=False)
 def predict(
+    model,
     guide,
     dataset,
     model_type,
@@ -573,8 +603,6 @@ def predict(
     save_params=("rate", "init", "probs"),
     forecast_steps=0,
 ) -> dict:
-    model = guide.model
-
     def get_conditionals(data):
         trace = poutine.trace(poutine.condition(model, data)).get_trace(
             dataset, model_type, forecast_steps=forecast_steps
@@ -672,6 +700,12 @@ def fit_svi(
                 coef_decentered="mvn",
             ),
         )
+    elif guide_type == "gaussian":
+        from pyro.infer.autoguide import AutoGaussian
+
+        guide = AutoGaussian(
+            model_, init_loc_fn=init_loc_fn, init_scale=0.01, backend="funsor"
+        )
     else:
         guide = Guide(model_, init_loc_fn=init_loc_fn, init_scale=0.01, rank=rank)
     # This initializes the guide:
@@ -714,6 +748,8 @@ def fit_svi(
             config["lr"] *= 0.1
         elif "scale_tril" in param_name:
             config["lr"] *= 0.05
+        elif "factors" in param_name:
+            config["lr"] *= 0.05
         elif "weight_" in param_name:
             config["lr"] *= 0.01
         elif "weight" in param_name:
@@ -755,6 +791,7 @@ def fit_svi(
             assert (curr - prev) < num_obs, "loss is increasing"
 
     result = predict(
+        model_,
         guide,
         dataset,
         model_type,
