@@ -20,13 +20,13 @@ install-nextclade-linux:
 
 lint: FORCE
 	flake8
-	black --check .
+	black --extend-exclude=\.ipynb --check .
 	isort --check .
 	python scripts/update_headers.py --check
 	mypy .
 
 format: FORCE
-	black .
+	black --extend-exclude=\.ipynb .
 	isort .
 	python scripts/update_headers.py
 

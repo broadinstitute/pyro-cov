@@ -590,6 +590,36 @@ class Guide(AutoGuideList):
         self.append(AutoNormal(model, init_loc_fn=init_loc_fn, init_scale=init_scale))
 
 
+class GaussianGuide(AutoGuideList):
+    def __init__(self, model, init_loc_fn, init_scale):
+        super().__init__(model)
+        from pyro.infer.autoguide import AutoGaussian
+
+        self.append(
+            AutoGaussian(
+                poutine.block(model, hide_fn=self.hide_fn_1),
+                init_loc_fn=init_loc_fn,
+                init_scale=0.01,
+                backend="funsor",
+            )
+        )
+        self.append(
+            AutoNormal(
+                poutine.block(model, hide_fn=self.hide_fn_2),
+                init_loc_fn=init_loc_fn,
+                init_scale=0.01,
+            )
+        )
+
+    @staticmethod
+    def hide_fn_1(msg):
+        return msg["type"] == "sample" and "pois" in msg["name"]
+
+    @staticmethod
+    def hide_fn_2(msg):
+        return msg["type"] == "sample" and "pois" not in msg["name"]
+
+
 @torch.no_grad()
 @poutine.mask(mask=False)
 def predict(
@@ -701,11 +731,7 @@ def fit_svi(
             ),
         )
     elif guide_type == "gaussian":
-        from pyro.infer.autoguide import AutoGaussian
-
-        guide = AutoGaussian(
-            model_, init_loc_fn=init_loc_fn, init_scale=0.01, backend="funsor"
-        )
+        guide = GaussianGuide(model, init_loc_fn=init_loc_fn, init_scale=0.01)
     else:
         guide = Guide(model_, init_loc_fn=init_loc_fn, init_scale=0.01, rank=rank)
     # This initializes the guide:
@@ -748,7 +774,7 @@ def fit_svi(
             config["lr"] *= 0.1
         elif "scale_tril" in param_name:
             config["lr"] *= 0.05
-        elif "factors" in param_name:
+        elif "prec_sqrts" in param_name:
             config["lr"] *= 0.05
         elif "weight_" in param_name:
             config["lr"] *= 0.01
