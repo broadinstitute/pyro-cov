@@ -733,7 +733,7 @@ def fit_svi(
             ),
         )
     elif guide_type == "gaussian":
-        guide = GaussianGuide(model, init_loc_fn=init_loc_fn, init_scale=0.01)
+        guide = GaussianGuide(model_, init_loc_fn=init_loc_fn, init_scale=0.01)
     else:
         guide = Guide(model_, init_loc_fn=init_loc_fn, init_scale=0.01, rank=rank)
     # This initializes the guide:
