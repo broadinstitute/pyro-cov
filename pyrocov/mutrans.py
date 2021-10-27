@@ -482,7 +482,9 @@ def model(dataset, model_type, *, forecast_steps=None):
                 lambda_ = (pois * logits.softmax(-1)).clamp_(min=1e-6)
                 with time_plate, place_plate, strain_plate:
                     pyro.sample(
-                        "obs", dist.Poisson(lambda_), obs=weekly_strains
+                        "obs",
+                        dist.Poisson(lambda_, is_sparse=True),
+                        obs=weekly_strains,
                     )  # [T, P, S]
             else:
                 with time_plate, place_plate:
