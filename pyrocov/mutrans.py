@@ -774,7 +774,7 @@ def fit_svi(
             config["lr"] *= 0.1
         elif "scale_tril" in param_name:
             config["lr"] *= 0.05
-        elif "prec_sqrts" in param_name:
+        elif "factors" in param_name or "prec_sqrts" in param_name:
             config["lr"] *= 0.05
         elif "weight_" in param_name:
             config["lr"] *= 0.01
