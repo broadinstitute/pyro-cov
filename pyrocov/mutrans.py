@@ -26,14 +26,24 @@ from pyro.infer.autoguide import (
     AutoStructured,
 )
 from pyro.infer.reparam import LocScaleReparam
+from pyro.nn.module import PyroModule, PyroParam
 from pyro.ops.streaming import CountMeanVarianceStats, StatsOfDict
 from pyro.optim import ClippedAdam
 from pyro.poutine.util import site_is_subsample
+from torch.distributions import constraints
 
 import pyrocov.geo
 
 from . import pangolin, sarscov2
 from .util import pearson_correlation
+
+# Requires https://github.com/pyro-ppl/pyro/pull/2953
+try:
+    from pyro.infer import Effect_ELBO
+    from pyro.infer.autoguide.effect import AutoRegressiveMessenger
+except ImportError:
+    AutoRegressiveMessenger = object
+    EffectElbo = None
 
 logger = logging.getLogger(__name__)
 
@@ -622,6 +632,34 @@ class GaussianGuide(AutoGuideList):
         return msg["type"] == "sample" and "pois" not in msg["name"]
 
 
+class RegressiveGuide(AutoRegressiveMessenger):
+    def get_posterior(self, name, prior, upstream_values):
+        if name == "coef":
+            if not hasattr(self, "coef"):
+                # Initialize.
+                self.coef = PyroModule()
+                n = prior.shape()[-1]
+                rank = 100
+                assert n > 1
+                init_loc = self.init_loc_fn({"name": name, "fn": prior})
+                self.coef.loc = PyroParam(init_loc, event_dim=1)
+                self.coef.scale = PyroParam(
+                    torch.full((n,), self._init_scale),
+                    event_dim=1,
+                    constraint=constraints.positive,
+                )
+                self.coef.cov_factor = PyroParam(
+                    torch.empty(n, rank).normal_(0, 1 / rank ** 0.5),
+                    event_dim=2,
+                )
+            scale = self.coef.scale
+            cov_factor = self.coef.cov_factor * scale.unsqueeze(-1)
+            cov_diag = scale * scale
+            return dist.LowRankMultivariateNormal(self.coef.loc, cov_factor, cov_diag)
+
+        return super().get_posterior(name, prior, upstream_values)
+
+
 @torch.no_grad()
 @poutine.mask(mask=False)
 def predict(
@@ -710,6 +748,7 @@ def fit_svi(
     cond_data = {k: torch.as_tensor(v) for k, v in cond_data.items()}
     model_ = poutine.condition(model, cond_data)
     init_loc_fn = InitLocFn(dataset)
+    Elbo = JitTrace_ELBO if jit else Trace_ELBO
     if guide_type == "map":
         guide = AutoDelta(model_, init_loc_fn=init_loc_fn)
     elif guide_type == "normal":
@@ -734,6 +773,9 @@ def fit_svi(
         )
     elif guide_type == "gaussian":
         guide = GaussianGuide(model_, init_loc_fn=init_loc_fn, init_scale=0.01)
+    elif guide_type == "regressive":
+        guide = RegressiveGuide(model_, init_loc_fn=init_loc_fn, init_scale=0.01)
+        Elbo = Effect_ELBO
     else:
         guide = Guide(model_, init_loc_fn=init_loc_fn, init_scale=0.01, rank=rank)
     # This initializes the guide:
@@ -787,7 +829,6 @@ def fit_svi(
         return config
 
     optim = ClippedAdam(optim_config)
-    Elbo = JitTrace_ELBO if jit else Trace_ELBO
     elbo = Elbo(max_plate_nesting=3, ignore_jit_warnings=True)
     svi = SVI(model_, guide, optim, elbo)
     losses = []
