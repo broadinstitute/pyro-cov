@@ -39,11 +39,9 @@ from .util import pearson_correlation
 
 # Requires https://github.com/pyro-ppl/pyro/pull/2953
 try:
-    from pyro.infer import Effect_ELBO
     from pyro.infer.autoguide.effect import AutoRegressiveMessenger
 except ImportError:
     AutoRegressiveMessenger = object
-    EffectElbo = None
 
 logger = logging.getLogger(__name__)
 
@@ -633,7 +631,7 @@ class GaussianGuide(AutoGuideList):
 
 
 class RegressiveGuide(AutoRegressiveMessenger):
-    def get_posterior(self, name, prior, upstream_values):
+    def get_posterior(self, name, prior):
         if name == "coef":
             if not hasattr(self, "coef"):
                 # Initialize.
@@ -657,7 +655,7 @@ class RegressiveGuide(AutoRegressiveMessenger):
             cov_diag = scale * scale
             return dist.LowRankMultivariateNormal(self.coef.loc, cov_factor, cov_diag)
 
-        return super().get_posterior(name, prior, upstream_values)
+        return super().get_posterior(name, prior)
 
 
 @torch.no_grad()
@@ -775,7 +773,6 @@ def fit_svi(
         guide = GaussianGuide(model_, init_loc_fn=init_loc_fn, init_scale=0.01)
     elif guide_type == "regressive":
         guide = RegressiveGuide(model_, init_loc_fn=init_loc_fn, init_scale=0.01)
-        Elbo = Effect_ELBO
     else:
         guide = Guide(model_, init_loc_fn=init_loc_fn, init_scale=0.01, rank=rank)
     # This initializes the guide:
