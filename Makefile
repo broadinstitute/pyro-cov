@@ -7,10 +7,10 @@ install: install-nextalign install-usher FORCE
 	pip install -e .[test]
 
 install-pangolin:
-	conda install -c bioconda -c conda-forge -c defaults pangolin
+	conda install -y -c bioconda -c conda-forge -c defaults pangolin
 
 install-usher:
-	conda install -c bioconda -c conda-forge -c defaults install usher
+	conda install -y -c bioconda -c conda-forge -c defaults usher
 
 install-nextalign:
 	curl -fsSL "https://github.com/nextstrain/nextclade/releases/latest/download/nextalign-MacOS-x86_64" -o "nextalign" && chmod +x nextalign
@@ -43,6 +43,7 @@ test: lint data FORCE
 update: FORCE
 	./pull_gisaid.sh
 	python git_pull.py cov-lineages/pango-designation
+	python git_pull.py cov-lineages/pangoLEARN
 	python git_pull.py CSSEGISandData/COVID-19
 	python git_pull.py nextstrain/nextclade
 	time nice python preprocess_gisaid.py
