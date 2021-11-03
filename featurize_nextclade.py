@@ -4,6 +4,7 @@
 import argparse
 import json
 import logging
+import os
 import pickle
 import re
 from collections import Counter, defaultdict
@@ -16,13 +17,27 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(format="%(relativeCreated) 9d %(message)s", level=logging.INFO)
 
 
-def count_mutations(mutation_counts, status_counts, row):
+def process_row(
+    id_to_lineage,
+    mutation_counts,
+    status_counts,
+    accession_id,
+    row,
+):
     # Check whether row is valid
     status = row["qc.overallStatus"]
     status_counts[status] += 1
     if status != "good":
+        id_to_lineage[accession_id] = None
         return
+
+    # Collect stats on a single lineage.
+    lineage = row["lineage"]
+    id_to_lineage[accession_id] = lineage
+    mutation_counts = mutation_counts[lineage]
+    status_counts = status_counts[lineage]
     mutation_counts[None] += 1  # hack to count number of lineages
+
     for col in ["aaSubstitutions", "aaDeletions"]:
         ms = row[col]
         if not ms:
@@ -53,47 +68,58 @@ def main(args):
     # Count mutations via nextclade.
     # This is batched and cached under the hood.
     logger.info(f"Loading {args.gisaid_file_in}")
-    lineage_mutation_counts = defaultdict(Counter)
-    lineage_status_counts = defaultdict(Counter)
-    db = NextcladeDB()
+    mutation_counts = defaultdict(Counter)
+    status_counts = defaultdict(Counter)
+    db = NextcladeDB(max_fasta_count=args.max_fasta_count)
     with open(args.gisaid_file_in, "rt") as f:
         for i, line in enumerate(f):
             datum = json.loads(line)
 
-            # Filter to sequences with sufficient data.
-            lineage = id_to_lineage.get(datum["covv_accession_id"])
-            if lineage is None:
-                continue
-            nchars = sum(datum["sequence"].count(b) for b in "ACGT")
-            if not (args.min_nchars <= nchars <= args.max_nchars):
+            # Filter to desired sequences.
+            accession_id = datum["covv_accession_id"]
+            if accession_id not in id_to_lineage:
                 continue
 
             # Schedule sequence for alignment.
             seq = datum["sequence"].replace("\n", "")
-            mutation_counts = lineage_mutation_counts[lineage]
-            status_counts = lineage_status_counts[lineage]
-            db.schedule(seq, count_mutations, mutation_counts, status_counts)
+            db.schedule(
+                seq,
+                process_row,
+                id_to_lineage,
+                mutation_counts,
+                status_counts,
+                accession_id,
+            )
 
             if i % args.log_every == 0:
                 print(".", end="", flush=True)
     db.wait(log_every=args.log_every)
 
     message = ["Total quality:"]
-    status_counts = Counter()
-    for c in lineage_status_counts.values():
-        status_counts.update(c)
-    for s, c in status_counts.most_common():
+    counts = Counter()
+    for c in status_counts.values():
+        counts.update(c)
+    for s, c in counts.most_common():
         message.append(f"{s}: {c}")
     logger.info("\n\t".join(message))
 
     message = ["Lineages with fewest good samples:"]
-    for c, l in sorted((c["good"], l) for l, c in lineage_status_counts.items())[:20]:
+    for c, l in sorted((c["good"], l) for l, c in status_counts.items())[:20]:
         message.append(f"{l}: {c}")
     logger.info("\n\t".join(message))
 
+    # Update columns file with usher-computed lineages.
+    with open(args.columns_file_in, "rb") as f:
+        columns = pickle.load(f)
+    columns["lineage"] = [id_to_lineage[i] for i in columns["accession_id"]]
+    with open(args.columns_file_in + ".temp", "wb") as f:
+        pickle.dump(columns, f)
+    os.rename(args.columns_file_in + ".temp", args.columns_file_in)  # atomic
+    del columns
+
     # Collect a set of all single mutations observed in this subsample.
     agg_counts = Counter()
-    for ms in lineage_mutation_counts.values():
+    for ms in mutation_counts.values():
         for m, count in ms.items():
             if m is not None and "," not in m:
                 agg_counts[m] += count
@@ -103,23 +129,21 @@ def main(args):
         pickle.dump(dict(agg_counts), f)
 
     # Filter to lineages with at least a few good samples.
-    for lineage, status_counts in list(lineage_status_counts.items()):
-        if status_counts["good"] < args.min_good_samples:
+    for lineage, counts in list(status_counts.items()):
+        if counts["good"] < args.min_good_samples:
             logger.info(f"Dropping {lineage} with {status_counts}")
-            del lineage_mutation_counts[lineage]
-            del lineage_status_counts[lineage]
+            del mutation_counts[lineage]
+            del status_counts[lineage]
 
     # Filter to features that occur in the majority of at least one lineage.
-    lineage_counts = {
-        k: v.pop(None) for k, v in lineage_mutation_counts.items() if None in v
-    }
+    lineage_counts = {k: v.pop(None) for k, v in mutation_counts.items() if None in v}
     mutations = set()
-    for lineage, mutation_counts in list(lineage_mutation_counts.items()):
-        if not mutation_counts:
-            lineage_mutation_counts.pop(lineage)
+    for lineage, counts in list(mutation_counts.items()):
+        if not counts:
+            mutation_counts.pop(lineage)
             continue
         denominator = lineage_counts[lineage]
-        for m, count in mutation_counts.items():
+        for m, count in counts.items():
             if count / denominator >= 0.5:
                 mutations.add(m)
     by_num = Counter(m.count(",") for m in mutations)
@@ -135,7 +159,7 @@ def main(args):
     lineage_ids = {k: i for i, k in enumerate(lineages)}
     mutation_ids = {k: i for i, k in enumerate(mutations)}
     features = torch.zeros(len(lineage_ids), len(mutation_ids))
-    for lineage, counts in lineage_mutation_counts.items():
+    for lineage, counts in mutation_counts.items():
         i = lineage_ids[lineage]
         denominator = lineage_counts[lineage]
         for mutation, count in counts.items():
@@ -162,6 +186,7 @@ if __name__ == "__main__":
     parser.add_argument("--min-nchars", default=29000, type=int)
     parser.add_argument("--max-nchars", default=31000, type=int)
     parser.add_argument("--min-good-samples", default=5, type=float)
+    parser.add_argument("--max-fasta-count", default=4000, type=int)
     parser.add_argument("-l", "--log-every", default=1000, type=int)
     args = parser.parse_args()
     main(args)

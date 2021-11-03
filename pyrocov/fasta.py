@@ -4,12 +4,21 @@
 import hashlib
 import logging
 import os
+import re
 import shutil
 from collections import defaultdict
 from subprocess import check_call
 
+from pyrocov import pangolin
+
 logger = logging.getLogger(__name__)
 NEXTSTRAIN_DATA = os.path.expanduser("~/github/nextstrain/nextclade/data/sars-cov-2")
+PANGOLEARN_DATA = os.path.expanduser("~/github/cov-lineages/pangoLEARN/pangoLEARN/data")
+
+
+def log_call(*args):
+    logger.info(" ".join(args))
+    return check_call(args)
 
 
 def hash_sequence(seq):
@@ -18,20 +27,48 @@ def hash_sequence(seq):
     return hasher.hexdigest()
 
 
+def load_usher_clades(filename):
+    with open(filename) as f:
+        clades = dict(line.strip().split("\t") for line in f)
+
+    # Disambiguate histograms like B.1.1.161*|B.1.1(2/3),B.1.1.161(1/3)
+    # by choosing the most ancestral plurality.
+    for name, lineage in list(clades.items()):
+        if "|" in lineage:
+            weights = {}
+            for entry in lineage.split("|")[1].split(","):
+                match = re.match(r"(.*)\((\d+)/\d+\)", entry)
+                weights[pangolin.decompress(match.group(1))] = int(match.group(2))
+            lineage = min(weights, key=lambda k: (-weights[k], k.count("."), k))
+        clades[name] = pangolin.compress(lineage)
+    return clades
+
+
 class NextcladeDB:
     """
-    Database to store nextclade results through time, so that only new samples
-    need to be sequenced.
+    Database to cache results of nextclade and usher, so that only new samples
+    need to be aligned.
     """
 
     def __init__(self, fileprefix="results/nextcladedb", max_fasta_count=4000):
+        self.max_fasta_count = max_fasta_count
         fileprefix = os.path.realpath(fileprefix)
+        self.fasta_filename = fileprefix + ".temp.fasta"
+        self.output_dir = os.path.dirname(self.fasta_filename)
+        self.rows_temp_filename = fileprefix + "rows.temp.tsv"
+        self.usher_fasta_filename = self.fasta_filename.replace(
+            ".fasta", ".usher.fasta"
+        )
+        self.vcf_filename = fileprefix + ".temp.vcf"
+        self.usher_proto = f"{PANGOLEARN_DATA}/lineageTree.pb"
+        self.clades_filename = os.path.join(self.output_dir, "clades.txt")
+        self.tsv_filename = fileprefix + ".temp.tsv"
         self.header_filename = fileprefix + ".header.tsv"
         self.rows_filename = fileprefix + ".rows.tsv"
-        self.rows_temp_filename = fileprefix + "rows.temp.tsv"
-        self.fasta_filename = fileprefix + ".temp.fasta"
-        self.tsv_filename = fileprefix + ".temp.tsv"
-        self.output_dir = os.path.dirname(self.tsv_filename)
+
+        self._fasta_file = open(self.fasta_filename, "wt")
+        self._pending = set()
+        self._tasks = defaultdict(list)
 
         # Load hashes of already-aligned sequences.
         self._already_aligned = set()
@@ -40,12 +77,6 @@ class NextcladeDB:
                 for line in f:
                     key = line.split("\t", 1)[0]
                     self._already_aligned.add(key)
-
-        self.max_fasta_count = max_fasta_count
-        self._fasta_file = open(self.fasta_filename, "wt")
-        self._pending = set()
-
-        self._tasks = defaultdict(list)
 
     def schedule(self, sequence, *fn_args):
         """
@@ -84,6 +115,8 @@ class NextcladeDB:
                     print(".", end="", flush=True)
 
     def _schedule_alignment(self, key, sequence):
+        if key in self._pending:
+            return
         self._fasta_file.write(">")
         self._fasta_file.write(key)
         self._fasta_file.write("\n")
@@ -97,7 +130,9 @@ class NextcladeDB:
         if not self._pending:
             return
         self._fasta_file.close()
-        cmd = [
+
+        # Align via nextclade.
+        log_call(
             "./nextclade",
             f"--input-root-seq={NEXTSTRAIN_DATA}/reference.fasta",
             "--genes=E,M,N,ORF1a,ORF1b,ORF3a,ORF6,ORF7a,ORF7b,ORF8,ORF9b,S",
@@ -108,9 +143,31 @@ class NextcladeDB:
             f"--input-fasta={self.fasta_filename}",
             f"--output-tsv={self.tsv_filename}",
             f"--output-dir={self.output_dir}",
-        ]
-        logger.info(" ".join(cmd))
-        check_call(cmd)
+        )
+
+        # Concatenate reference to aligned sequences.
+        with open(self.usher_fasta_filename, "wt") as fout:
+            with open(f"{NEXTSTRAIN_DATA}/reference.fasta") as fin:
+                shutil.copyfileobj(fin, fout)
+            with open(self.fasta_filename.replace(".fasta", ".aligned.fasta")) as fin:
+                shutil.copyfileobj(fin, fout)
+
+        # Convert aligned fasta to vcf for usher.
+        log_call("faToVcf", self.usher_fasta_filename, self.vcf_filename)
+
+        # Run Usher.
+        log_call(
+            "usher",
+            "-n",
+            "-D",
+            "-i",
+            self.usher_proto,
+            "-v",
+            self.vcf_filename,
+            "-d",
+            self.output_dir,
+        )
+        fingerprint_to_lineage = load_usher_clades(self.clades_filename)
 
         # Append to a copy to ensure atomicity.
         if os.path.exists(self.rows_filename):
@@ -119,10 +176,17 @@ class NextcladeDB:
             with open(self.rows_temp_filename, "a") as frows:
                 for i, line in enumerate(f):
                     if i:
+                        fingerprint = line.split("\t", 1)[0]
+                        assert " " not in fingerprint
+                        lineage = fingerprint_to_lineage[fingerprint]
                         frows.write(line)
+                        frows.write("\t")
+                        frows.write(lineage)
                     else:
                         with open(self.header_filename, "w") as fheader:
                             fheader.write(line)
+                            fheader.write("\t")
+                            fheader.write("lineage")
         os.rename(self.rows_temp_filename, self.rows_filename)
         os.remove(self.fasta_filename)
         os.remove(self.tsv_filename)

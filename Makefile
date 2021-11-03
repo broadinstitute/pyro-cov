@@ -3,8 +3,14 @@ SHELL := /bin/bash
 data:
 	ln -sf ~/Google\ Drive\ File\ Stream/Shared\ drives/Pyro\ CoV data
 
-install: install-nextalign FORCE
+install: install-nextalign install-usher FORCE
 	pip install -e .[test]
+
+install-pangolin:
+	conda install -c bioconda -c conda-forge -c defaults pangolin
+
+install-usher:
+	conda install -c bioconda -c conda-forge -c defaults install usher
 
 install-nextalign:
 	curl -fsSL "https://github.com/nextstrain/nextclade/releases/latest/download/nextalign-MacOS-x86_64" -o "nextalign" && chmod +x nextalign

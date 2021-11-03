@@ -15,7 +15,7 @@ PANGOLIN_REPO = os.path.expanduser(
 )
 
 # See https://cov-lineages.org/lineages.html or
-# https://github.com/cov-lineages/pango-designation/blob/master/alias_key.json
+# https://github.com/cov-lineages/pango-designation/blob/master/pango_designation/alias_key.json
 # This list can be updated via update_aliases() below.
 PANGOLIN_ALIASES = {
     "AA": "B.1.177.15",
