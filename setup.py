@@ -38,6 +38,7 @@ setup(
         "scikit-learn",
         "umap-learn",
         "mappy",
+        "protobuf",
     ],
     extras_require={
         "test": [

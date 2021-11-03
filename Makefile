@@ -25,15 +25,15 @@ install-nextclade-linux:
 	curl -fsSL "https://github.com/nextstrain/nextclade/releases/download/1.2.0/nextclade-Linux-x86_64" -o nextclade && chmod +x nextclade
 
 lint: FORCE
-	flake8
-	black --extend-exclude=\.ipynb --check .
-	isort --check .
+	flake8 --extend-exclude=pyrocov/external
+	black --extend-exclude=\.ipynb --extend-exclude=pyrocov/external --check .
+	isort --check --skip=pyrocov/external .
 	python scripts/update_headers.py --check
 	mypy .
 
 format: FORCE
-	black --extend-exclude=\.ipynb .
-	isort .
+	black --extend-exclude=\.ipynb --extend-exclude=pyrocov/external .
+	isort --skip=pyrocov/external .
 	python scripts/update_headers.py
 
 test: lint data FORCE
