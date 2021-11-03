@@ -114,6 +114,10 @@ class NextcladeDB:
                 if log_every and i % log_every == 0:
                     print(".", end="", flush=True)
 
+        num_skipped = sum(map(len, self._tasks.values()))
+        logger.info(f"Skipped {num_skipped} sequences")
+        self._tasks.clear()
+
     def _schedule_alignment(self, key, sequence):
         if key in self._pending:
             return
@@ -178,7 +182,9 @@ class NextcladeDB:
                     if i:
                         fingerprint = line.split("\t", 1)[0]
                         assert " " not in fingerprint
-                        lineage = fingerprint_to_lineage[fingerprint]
+                        lineage = fingerprint_to_lineage.get(fingerprint)
+                        if lineage is None:
+                            continue  # skip row
                         frows.write(line)
                         frows.write("\t")
                         frows.write(lineage)
