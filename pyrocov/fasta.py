@@ -185,14 +185,16 @@ class NextcladeDB:
                         lineage = fingerprint_to_lineage.get(fingerprint)
                         if lineage is None:
                             continue  # skip row
-                        frows.write(line)
+                        frows.write(line.rstrip("\n"))
                         frows.write("\t")
                         frows.write(lineage)
+                        frows.write("\n")
                     else:
                         with open(self.header_filename, "w") as fheader:
-                            fheader.write(line)
+                            fheader.write(line.rstrip("\n"))
                             fheader.write("\t")
                             fheader.write("lineage")
+                            fheader.write("\n")
         os.rename(self.rows_temp_filename, self.rows_filename)
         os.remove(self.fasta_filename)
         os.remove(self.tsv_filename)
