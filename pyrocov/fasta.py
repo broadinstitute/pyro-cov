@@ -12,6 +12,7 @@ from subprocess import check_call
 from pyrocov import pangolin
 
 logger = logging.getLogger(__name__)
+
 NEXTSTRAIN_DATA = os.path.expanduser("~/github/nextstrain/nextclade/data/sars-cov-2")
 PANGOLEARN_DATA = os.path.expanduser("~/github/cov-lineages/pangoLEARN/pangoLEARN/data")
 
@@ -38,9 +39,19 @@ def load_usher_clades(filename):
             weights = {}
             for entry in lineage.split("|")[1].split(","):
                 match = re.match(r"(.*)\((\d+)/\d+\)", entry)
-                weights[pangolin.decompress(match.group(1))] = int(match.group(2))
-            lineage = min(weights, key=lambda k: (-weights[k], k.count("."), k))
-        clades[name] = pangolin.compress(lineage)
+                try:
+                    lineage = pangolin.decompress(match.group(1))
+                except ValueError:  # e.g. XA lineage
+                    continue
+                weights[lineage] = int(match.group(2))
+            if weights:
+                lineage = min(weights, key=lambda k: (-weights[k], k.count("."), k))
+            else:  # e.g. XA lineage
+                lineage = None
+        if lineage:
+            clades[name] = pangolin.compress(lineage)
+        else:
+            del clades[name]
     return clades
 
 

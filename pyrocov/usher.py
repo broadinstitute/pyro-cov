@@ -1,6 +1,7 @@
 # Copyright Contributors to the Pyro-Cov project.
 # SPDX-License-Identifier: Apache-2.0
 
+import warnings
 from collections import defaultdict, namedtuple
 from typing import Dict, FrozenSet
 
@@ -8,7 +9,7 @@ from Bio.Phylo.NewickIO import Parser
 
 from .external.usher import parsimony_pb2
 
-Mutation = namedtuple("Mutation", ["position", "ref_nuc", "mut_nuc"])
+Mutation = namedtuple("Mutation", ["position", "ref", "mut"])
 
 NUCLEOTIDE = "ACGT"
 
@@ -44,3 +45,17 @@ def load_mutation_tree(filename: str) -> Dict[str, FrozenSet[Mutation]]:
         k: frozenset(clade_to_muts[v].values()) for k, v in lineage_to_clade.items()
     }
     return mutations_by_lineage
+
+
+def apply_mutations(ref: str, mutations: FrozenSet[Mutation]) -> str:
+    """
+    Applies a set of mutations to a reference sequence.
+    """
+    seq = list(ref)
+    for m in mutations:
+        if m.mut == m.ref:
+            continue
+        if m.ref != seq[m.position - 1]:
+            warnings.warn(f"invalid reference: {m.ref} vs {seq[m.position - 1]}")
+        seq[m.position - 1] = m.mut
+    return "".join(seq)
