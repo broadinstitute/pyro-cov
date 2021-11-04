@@ -111,7 +111,9 @@ def main(args):
     # Update columns file with usher-computed lineages.
     with open(args.columns_file_in, "rb") as f:
         columns = pickle.load(f)
-    columns["lineage"] = [id_to_lineage[i] for i in columns["accession_id"]]
+    columns["gisaid_lineage"] = columns["lineage"]  # save backup
+    columns["usher_lineage"] = [id_to_lineage.get(i) for i in columns["accession_id"]]
+    columns["lineage"] = columns["usher_lineage"]
     with open(args.columns_file_in + ".temp", "wb") as f:
         pickle.dump(columns, f)
     os.rename(args.columns_file_in + ".temp", args.columns_file_in)  # atomic
