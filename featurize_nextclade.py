@@ -25,17 +25,16 @@ def process_row(
     row,
 ):
     # Check whether row is valid
+    lineage = row["lineage"]
     status = row["qc.overallStatus"]
-    status_counts[status] += 1
+    status_counts[lineage][status] += 1
     if status != "good":
         id_to_lineage[accession_id] = None
         return
 
     # Collect stats on a single lineage.
-    lineage = row["lineage"]
     id_to_lineage[accession_id] = lineage
     mutation_counts = mutation_counts[lineage]
-    status_counts = status_counts[lineage]
     mutation_counts[None] += 1  # hack to count number of lineages
 
     for col in ["aaSubstitutions", "aaDeletions"]:
@@ -58,6 +57,10 @@ def process_row(
 
 
 def main(args):
+    db = NextcladeDB(max_fasta_count=args.max_fasta_count)
+    if args.repair:
+        return db.repair()
+
     # Load the filtered accession ids.
     logger.info(f"Loading {args.columns_file_in}")
     with open(args.columns_file_in, "rb") as f:
@@ -70,7 +73,6 @@ def main(args):
     logger.info(f"Loading {args.gisaid_file_in}")
     mutation_counts = defaultdict(Counter)
     status_counts = defaultdict(Counter)
-    db = NextcladeDB(max_fasta_count=args.max_fasta_count)
     with open(args.gisaid_file_in, "rt") as f:
         for i, line in enumerate(f):
             datum = json.loads(line)
@@ -185,6 +187,7 @@ if __name__ == "__main__":
     parser.add_argument("--columns-file-in", default="results/gisaid.columns.pkl")
     parser.add_argument("--features-file-out", default="results/nextclade.features.pt")
     parser.add_argument("--counts-file-out", default="results/nextclade.counts.pkl")
+    parser.add_argument("--repair", action="store_true")
     parser.add_argument("--min-nchars", default=29000, type=int)
     parser.add_argument("--max-nchars", default=31000, type=int)
     parser.add_argument("--min-good-samples", default=5, type=float)

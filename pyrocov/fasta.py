@@ -6,7 +6,7 @@ import logging
 import os
 import re
 import shutil
-from collections import defaultdict
+from collections import Counter, defaultdict
 from subprocess import check_call
 
 from pyrocov import pangolin
@@ -118,6 +118,7 @@ class NextcladeDB:
             for i, row in enumerate(f):
                 row = row.strip().split("\t")
                 key = row[0]
+                assert len(row) == len(header)
                 row = dict(zip(header, row))
                 for fn_args in self._tasks.pop(key, []):
                     fn, args = fn_args[0], fn_args[1:]
@@ -128,6 +129,28 @@ class NextcladeDB:
         num_skipped = sum(map(len, self._tasks.values()))
         logger.info(f"Skipped {num_skipped} sequences")
         self._tasks.clear()
+
+    def repair(self, log_every=10000):
+        logger.info(f"Repairing {self.rows_filename}")
+        with open(self.header_filename) as f:
+            header = f.read().strip().split("\t")
+        bad = Counter()
+        temp_filename = self.rows_filename + ".temp"
+        with open(self.rows_filename) as fin, open(temp_filename, "wt") as fout:
+            for i, line in enumerate(fin):
+                if i % log_every == 0:
+                    print(".", end="", flush=True)
+                row = line.strip().split("\t")
+                if len(row) < len(header):
+                    bad[f"invalid length {len(header)} vs {len(row)}"] += 1
+                    row = row[:-1] + [""] * (len(header) - len(row)) + row[-1:]
+                    line = "\t".join(row) + "\n"
+                fout.write(line)
+        logger.info(f"Fixed {sum(bad.values())} errors:")
+        if bad:
+            for k, v in bad.most_common():
+                logger.info(f"{v}\t{k}")
+            logger.info(f"Next mv {temp_filename} {self.rows_filename}")
 
     def _schedule_alignment(self, key, sequence):
         if key in self._pending:
@@ -189,23 +212,21 @@ class NextcladeDB:
             shutil.copyfile(self.rows_filename, self.rows_temp_filename)
         with open(self.tsv_filename) as f:
             with open(self.rows_temp_filename, "a") as frows:
+                num_cols = 0  # defined below
                 for i, line in enumerate(f):
+                    line = line.rstrip("\n")
                     if i:
                         fingerprint = line.split("\t", 1)[0]
                         assert " " not in fingerprint
                         lineage = fingerprint_to_lineage.get(fingerprint)
                         if lineage is None:
                             continue  # skip row
-                        frows.write(line.rstrip("\n"))
-                        frows.write("\t")
-                        frows.write(lineage)
-                        frows.write("\n")
+                        tab = "\t" * (num_cols - line.count("\t"))
+                        frows.write(f"{line}{tab}{lineage}\n")
                     else:
                         with open(self.header_filename, "w") as fheader:
-                            fheader.write(line.rstrip("\n"))
-                            fheader.write("\t")
-                            fheader.write("lineage")
-                            fheader.write("\n")
+                            fheader.write(f"{line}\tlineage\n")
+                            num_cols = line.count("\t") + 1
         os.rename(self.rows_temp_filename, self.rows_filename)
         os.remove(self.fasta_filename)
         os.remove(self.tsv_filename)
