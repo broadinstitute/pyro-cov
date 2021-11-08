@@ -460,8 +460,9 @@ def model(dataset, model_type, *, forecast_steps=None):
         # Assume relative growth rate depends strongly on mutations and weakly
         # on strain and place. Assume initial infections depend strongly on
         # strain and place.
-        Dist = dist.Logistic if "sparse" in model_type else dist.Normal
-        coef = pyro.sample("coef", Dist(torch.zeros(F), coef_scale).to_event(1))  # [F]
+        coef = pyro.sample(
+            "coef", dist.Logistic(torch.zeros(F), coef_scale).to_event(1)
+        )  # [F]
         with strain_plate:
             rate_loc_loc = 0.01 * coef @ features.T
             rate_loc = pyro.sample(
