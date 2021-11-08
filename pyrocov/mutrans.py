@@ -429,8 +429,12 @@ def model(dataset, model_type, *, forecast_steps=None):
     T, P = local_time.shape
     S, F = features.shape
     if forecast_steps is None:  # During inference.
-        sparse_counts = dataset["sparse_counts"]
-        data_plate = pyro.plate("data", len(sparse_counts["value"]), dim=-1)
+        if "sparse" in model_type:
+            sparse_counts = dataset["sparse_counts"]
+            data_plate = pyro.plate("data", len(sparse_counts["value"]), dim=-1)
+        else:
+            weekly_strains = dataset["weekly_strains"]
+            assert weekly_strains.shape == (T, P, S)
     else:  # During prediction.
         T = T + forecast_steps
         t0 = local_time[0]
@@ -478,36 +482,46 @@ def model(dataset, model_type, *, forecast_steps=None):
             rate = pyro.sample("rate", dist.Normal(rate_loc, rate_scale))  # [P, S]
             init = pyro.sample("init", dist.Normal(init_loc, init_scale))  # [P, S]
 
-        # Finally observe counts.
-        if forecast_steps is None:  # During inference.
-            # This implements a sparse Poisson likelihood.
-            with time_plate, place_plate:
-                pois = pyro.sample("pois", dist.LogNormal(pois_loc, pois_scale))
-                pyro.factor("unobserved", poisson_logprob_zero(pois))
-            t, p, s = sparse_counts["index"]
-            logp = (
-                init[p, s] + rate[p, s] * local_time[t, p] + (rate * time_shift)[p, s]
-            )
-            logq = (
-                init.sum(-1) + rate.sum(-1) * local_time + (rate * time_shift).sum(-1)
-            )
-            log_rate = pois.log()[t, p, 0] + (logp - logq[t, p])
-            with data_plate:
-                pyro.factor(
-                    "observed",
-                    poisson_logprob_ratio(log_rate, sparse_counts["value"]),
-                )
-
-        else:  # During prediction.
+        # Optionally predict probabilities (during prediction).
+        if forecast_steps is not None:
             logits = init + rate * (local_time[..., None] + time_shift)  # [T, P, S]
             with time_plate, place_plate, strain_plate:
                 pyro.deterministic("probs", logits.softmax(-1))
+            return
+
+        # Finally observe counts (during inference).
+        with time_plate, place_plate:
+            pois = pyro.sample("pois", dist.LogNormal(pois_loc, pois_scale))  # [P, S]
+        if "sparse" not in model_type:  # equivalent either way
+            # Compute a dense likelihood.
+            logits = init + rate * (local_time[..., None] + time_shift)  # [T, P, S]
+            pois_rate = (pois * logits.softmax(-1)).clamp_(min=1e-6)  # [T, P, S]
+            with time_plate, place_plate, strain_plate:
+                pyro.sample(
+                    "obs", dist.Poisson(pois_rate, is_sparse=True), obs=weekly_strains
+                )  # [T, P, S]
+        # Compute a cheap sparse likelihood.
+        pyro.factor("obs_zero", poisson_logprob_zero(pois.sum()))
+        t, p, s = sparse_counts["index"]
+        logp = init[p, s] + rate[p, s] * local_time[t, p] + (rate * time_shift)[p, s]
+        logq = init.sum(-1) + rate.sum(-1) * local_time + (rate * time_shift).sum(-1)
+        log_rate = pois.log()[t, p, 0] + (logp - logq[t, p])
+        with data_plate:
+            pyro.factor(
+                "obs_ratio", poisson_logprob_ratio(log_rate, sparse_counts["value"])
+            )
 
 
 def poisson_logprob_zero(rate):
     """
     Returns ``p.log_prob(0)`` where ``p = Poisson(log_rate.exp())``
     """
+    # Let p = Poisson(log_rate.exp()). Then
+    # p.log_prob(value)
+    #   = (rate.log() * value) - rate - (value + 1).lgamma()
+    # p.log_prob(0)
+    #   = (rate.log() * 0) - rate - (0 + 1).lgamma()
+    #   = 0 - rate - 0 = -rate
     return -rate
 
 
@@ -516,6 +530,13 @@ def poisson_logprob_ratio(log_rate, value):
     Returns ``p.log_prob(value) - p.log_prob(0)`` where
     ``p = Poisson(log_rate.exp())``
     """
+    # Let p = Poisson(log_rate.exp()). Then
+    # p.log_prob(value)
+    #   = log_rate * value - log_rate.exp() - (value + 1).lgamma()
+    # p.log_prob(0) = -log_rate.exp()
+    # p.log_prob(value) - p.log_prob(0)
+    #   = log_rate * value - log_rate.exp() - (value + 1).lgamma() + log_rate.exp()
+    #   = log_rate * value - (value + 1).lgamma()
     return log_rate * value - (value + 1).lgamma()
 
 
@@ -660,7 +681,7 @@ def predict(
             name: site["value"].detach()
             for name, site in trace.nodes.items()
             if site["type"] == "sample" and not site_is_subsample(site)
-            if name not in ("observed", "unobserved")
+            if not name.startswith("obs")
         }
 
     # Compute median point estimate.
