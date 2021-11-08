@@ -453,9 +453,8 @@ def model(dataset, model_type, *, forecast_steps=None):
         init_loc_scale = pyro.sample("init_loc_scale", dist.LogNormal(0, 2))
         rate_scale = pyro.sample("rate_scale", dist.LogNormal(-4, 2))
         init_scale = pyro.sample("init_scale", dist.LogNormal(0, 2))
-        if "poisson" in model_type:
-            pois_loc = pyro.sample("pois_loc", dist.Normal(0, 4))
-            pois_scale = pyro.sample("pois_scale", dist.LogNormal(0, 4))
+        pois_loc = pyro.sample("pois_loc", dist.Normal(0, 4))
+        pois_scale = pyro.sample("pois_scale", dist.LogNormal(0, 4))
 
         # Assume relative growth rate depends strongly on mutations and weakly
         # on strain and place. Assume initial infections depend strongly on
@@ -472,33 +471,20 @@ def model(dataset, model_type, *, forecast_steps=None):
         with place_plate, strain_plate:
             rate = pyro.sample("rate", dist.Normal(rate_loc, rate_scale))  # [P, S]
             init = pyro.sample("init", dist.Normal(init_loc, init_scale))  # [P, S]
+            pois = pyro.sample("pois", dist.LogNormal(pois_loc, pois_scale))  # [P, S]
 
         # Finally observe counts.
         logits = init + rate * local_time  # [T, P, S]
         if forecast_steps is None:  # During inference.
-            if "poisson" in model_type:
-                with time_plate, place_plate:
-                    pois = pyro.sample("pois", dist.LogNormal(pois_loc, pois_scale))
-                # This softmax() breaks the strain_plate, but is more
-                # numerically stable than exp(). AutoGaussian inference will be
-                # approximate with softmax(), but would be intractable with
-                # exp() and a second_strain_plate.
-                lambda_ = (pois * logits.softmax(-1)).clamp_(min=1e-6)
-                with time_plate, place_plate, strain_plate:
-                    pyro.sample(
-                        "obs",
-                        dist.Poisson(lambda_, is_sparse=True),
-                        obs=weekly_strains,
-                    )  # [T, P, S]
-            else:
-                with time_plate, place_plate:
-                    pyro.sample(
-                        "obs",
-                        dist.Multinomial(
-                            logits=logits[..., None, :], validate_args=False
-                        ),
-                        obs=weekly_strains[..., None, :],
-                    )  # [T, P, 1, S]
+            # This softmax() breaks the strain_plate, but is more
+            # numerically stable than exp().
+            lambda_ = (pois * logits.softmax(-1)).clamp_(min=1e-6)
+            with time_plate, place_plate, strain_plate:
+                pyro.sample(
+                    "obs",
+                    dist.Poisson(lambda_, is_sparse=True),
+                    obs=weekly_strains,
+                )  # [T, P, S]
         else:  # During prediction.
             with time_plate, place_plate, strain_plate:
                 pyro.deterministic("probs", logits.softmax(-1))
@@ -594,36 +580,6 @@ class Guide(AutoGuideList):
 
         # Mean-field estimate all remaining latent variables.
         self.append(AutoNormal(model, init_loc_fn=init_loc_fn, init_scale=init_scale))
-
-
-class GaussianGuide(AutoGuideList):
-    def __init__(self, model, init_loc_fn, init_scale):
-        super().__init__(model)
-        from pyro.infer.autoguide import AutoGaussian
-
-        self.append(
-            AutoGaussian(
-                poutine.block(model, hide_fn=self.hide_fn_1),
-                init_loc_fn=init_loc_fn,
-                init_scale=0.01,
-                backend="funsor",
-            )
-        )
-        self.append(
-            AutoNormal(
-                poutine.block(model, hide_fn=self.hide_fn_2),
-                init_loc_fn=init_loc_fn,
-                init_scale=0.01,
-            )
-        )
-
-    @staticmethod
-    def hide_fn_1(msg):
-        return msg["type"] == "sample" and "pois" in msg["name"]
-
-    @staticmethod
-    def hide_fn_2(msg):
-        return msg["type"] == "sample" and "pois" not in msg["name"]
 
 
 class RegressiveGuide(AutoRegressiveMessenger):
@@ -765,8 +721,6 @@ def fit_svi(
                 coef_decentered="mvn",
             ),
         )
-    elif guide_type == "gaussian":
-        guide = GaussianGuide(model_, init_loc_fn=init_loc_fn, init_scale=0.01)
     elif guide_type == "regressive":
         guide = RegressiveGuide(model_, init_loc_fn=init_loc_fn, init_scale=0.01)
     else:
