@@ -159,7 +159,17 @@ def load_gisaid_data(
 
     # Load ``gisaid_columns_filename``
     with open(gisaid_columns_filename, "rb") as f:
-        columns = pickle.load(f)
+        raw_columns = pickle.load(f)
+    # Filter to known lineages.
+    columns = defaultdict(list)
+    for row in zip(*raw_columns.values()):
+        row = dict(zip(raw_columns, row))
+        if row["lineage"] is None:
+            continue
+        for k, v in row.items():
+            columns[k].append(v)
+    del raw_columns
+    columns = dict(columns)
 
     logger.info("Training on {} rows with columns:".format(len(columns["day"])))
     logger.info(", ".join(columns.keys()))
