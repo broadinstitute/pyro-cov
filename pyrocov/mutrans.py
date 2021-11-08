@@ -25,6 +25,7 @@ from pyro.infer.autoguide import (
     AutoNormal,
     AutoStructured,
 )
+from pyro.infer.autoguide.initialization import InitMessenger
 from pyro.infer.reparam import LocScaleReparam
 from pyro.nn.module import PyroModule, PyroParam
 from pyro.ops.streaming import CountMeanVarianceStats, StatsOfDict
@@ -425,31 +426,31 @@ def model(dataset, model_type, *, forecast_steps=None):
     """
     # Tensor shapes are commented at at the end of some lines.
     features = dataset["features"]
-    local_time = dataset["local_time"]  # [T, P]
-    T, P = local_time.shape
+    local_time = dataset["local_time"][..., None]  # [1, T, P]
+    T, P, _ = local_time.shape
     S, F = features.shape
     if forecast_steps is None:  # During inference.
-        if "sparse" in model_type:
-            sparse_counts = dataset["sparse_counts"]
-            data_plate = pyro.plate("data", len(sparse_counts["value"]), dim=-1)
-        else:
+        if "dense" in model_type:
             weekly_strains = dataset["weekly_strains"]
             assert weekly_strains.shape == (T, P, S)
+        else:
+            sparse_counts = dataset["sparse_counts"]
     else:  # During prediction.
         T = T + forecast_steps
         t0 = local_time[0]
         dt = local_time[1] - local_time[0]
-        local_time = t0 + dt * torch.arange(float(T))[:, None]
-        assert local_time.shape == (T, P)
+        local_time = t0 + dt * torch.arange(float(T))[:, None, None]
+        assert local_time.shape == (T, P, 1)
     strain_plate = pyro.plate("strain", S, dim=-1)
     place_plate = pyro.plate("place", P, dim=-2)
     time_plate = pyro.plate("time", T, dim=-3)
 
     # Configure reparametrization (which does not affect model density).
-    time_shift = 0
     reparam = {}
     if "reparam" in model_type:
-        time_shift = pyro.param("time_shift", lambda: torch.zeros(P, S))
+        local_time = local_time + pyro.param(
+            "local_time", lambda: torch.zeros(P, S)
+        )  # [T, P, S]
         reparam["coef"] = LocScaleReparam()
         reparam["rate_loc"] = LocScaleReparam()
         reparam["init_loc"] = LocScaleReparam()
@@ -481,55 +482,34 @@ def model(dataset, model_type, *, forecast_steps=None):
         with place_plate, strain_plate:
             rate = pyro.sample("rate", dist.Normal(rate_loc, rate_scale))  # [P, S]
             init = pyro.sample("init", dist.Normal(init_loc, init_scale))  # [P, S]
+        logits = init + rate * local_time  # [T, P, S]
 
         # Optionally predict probabilities (during prediction).
         if forecast_steps is not None:
-            logits = init + rate * (local_time[..., None] + time_shift)  # [T, P, S]
             with time_plate, place_plate, strain_plate:
                 pyro.deterministic("probs", logits.softmax(-1))
             return
 
         # Finally observe counts (during inference).
         with time_plate, place_plate:
-            pois = pyro.sample("pois", dist.LogNormal(pois_loc, pois_scale))  # [P, S]
-        if "sparse" not in model_type:  # equivalent either way
+            pois = pyro.sample("pois", dist.Normal(pois_loc, pois_scale))  # [P, S]
+        if "dense" in model_type:  # equivalent either way
             # Compute a dense likelihood.
-            logits = init + rate * (local_time[..., None] + time_shift)  # [T, P, S]
-            pois_rate = (pois * logits.softmax(-1)).clamp_(min=1e-6)  # [T, P, S]
+            pois_rate = (pois.exp() * logits.softmax(-1)).clamp_(min=1e-6)  # [T, P, S]
             with time_plate, place_plate, strain_plate:
                 pyro.sample(
                     "obs", dist.Poisson(pois_rate, is_sparse=True), obs=weekly_strains
                 )  # [T, P, S]
+            return
         # Compute a cheap sparse likelihood.
-        pyro.factor("obs_zero", poisson_logprob_zero(pois.sum()))
         t, p, s = sparse_counts["index"]
-        logp = init[p, s] + rate[p, s] * local_time[t, p] + (rate * time_shift)[p, s]
-        logq = init.sum(-1) + rate.sum(-1) * local_time + (rate * time_shift).sum(-1)
-        log_rate = pois.log()[t, p, 0] + (logp - logq[t, p])
-        with data_plate:
-            pyro.factor(
-                "obs_ratio", poisson_logprob_ratio(log_rate, sparse_counts["value"])
-            )
+        log_rate = pois[t, p, 0] + logits.log_softmax(-1)[t, p, s]
+        pyro.factor(
+            "obs", sparse_poisson_likelihood(pois, log_rate, sparse_counts["value"])
+        )
 
 
-def poisson_logprob_zero(rate):
-    """
-    Returns ``p.log_prob(0)`` where ``p = Poisson(log_rate.exp())``
-    """
-    # Let p = Poisson(log_rate.exp()). Then
-    # p.log_prob(value)
-    #   = (rate.log() * value) - rate - (value + 1).lgamma()
-    # p.log_prob(0)
-    #   = (rate.log() * 0) - rate - (0 + 1).lgamma()
-    #   = 0 - rate - 0 = -rate
-    return -rate
-
-
-def poisson_logprob_ratio(log_rate, value):
-    """
-    Returns ``p.log_prob(value) - p.log_prob(0)`` where
-    ``p = Poisson(log_rate.exp())``
-    """
+def sparse_poisson_likelihood(full_log_rate, nonzero_log_rate, nonzero_value):
     # Let p = Poisson(log_rate.exp()). Then
     # p.log_prob(value)
     #   = log_rate * value - log_rate.exp() - (value + 1).lgamma()
@@ -537,7 +517,11 @@ def poisson_logprob_ratio(log_rate, value):
     # p.log_prob(value) - p.log_prob(0)
     #   = log_rate * value - log_rate.exp() - (value + 1).lgamma() + log_rate.exp()
     #   = log_rate * value - (value + 1).lgamma()
-    return log_rate * value - (value + 1).lgamma()
+    return (
+        torch.dot(nonzero_log_rate, nonzero_value)
+        - (nonzero_value + 1).lgamma().sum()
+        - full_log_rate.exp().sum()
+    )
 
 
 class InitLocFn:
@@ -557,7 +541,8 @@ class InitLocFn:
         self.init_loc = init.mean(0)  # [S]
         self.init_loc_decentered = self.init_loc / 2
         assert not torch.isnan(self.init).any()
-        self.pois = dataset["weekly_strains"].sum(-1, True).clamp(min=0.1)  # [T, P, 1]
+        self.pois = dataset["weekly_strains"].sum(-1, True).clamp(min=0.1).log()
+        # self.pois [T, P, 1]
         logger.info(f"init stddev = {self.init.std():0.3g}")
 
     def __call__(self, site):
@@ -585,11 +570,9 @@ class InitLocFn:
         if name == "coef_loc":
             return torch.rand(shape).sub_(0.5).mul_(0.01).add_(1.0)
         if name == "pois_loc":
-            return self.pois.log().mean()
+            return self.pois.mean()
         if name == "pois_scale":
-            return self.pois.log().std()
-        if name == "pois":
-            return self.pois
+            return self.pois.std()
         raise ValueError(f"InitLocFn found unhandled site {repr(name)}; please update.")
 
 
@@ -602,7 +585,7 @@ class Guide(AutoGuideList):
     """
 
     def __init__(self, model, init_loc_fn, init_scale, rank):
-        super().__init__(model)
+        super().__init__(InitMessenger(init_loc_fn)(model))
 
         # Jointly estimate globals, mutation coefficients, and strain coefficients.
         mvn = [
