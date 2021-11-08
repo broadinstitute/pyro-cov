@@ -418,7 +418,7 @@ def model(dataset, model_type, *, forecast_steps=None):
     """
     # Tensor shapes are commented at at the end of some lines.
     features = dataset["features"]
-    local_time = dataset["local_time"][..., None]  # [T, P, 1]
+    local_time = dataset["local_time"]  # [T, P]
     T, P, _ = local_time.shape
     S, F = features.shape
     if forecast_steps is None:  # During inference.
@@ -428,18 +428,17 @@ def model(dataset, model_type, *, forecast_steps=None):
         T = T + forecast_steps
         t0 = local_time[0]
         dt = local_time[1] - local_time[0]
-        local_time = t0 + dt * torch.arange(float(T))[:, None, None]
-        assert local_time.shape == (T, P, 1)
+        local_time = t0 + dt * torch.arange(float(T))[:, None]
+        assert local_time.shape == (T, P)
     strain_plate = pyro.plate("strain", S, dim=-1)
     place_plate = pyro.plate("place", P, dim=-2)
     time_plate = pyro.plate("time", T, dim=-3)
 
     # Configure reparametrization (which does not affect model density).
+    time_shift = 0
     reparam = {}
     if "reparam" in model_type:
-        local_time = local_time + pyro.param(
-            "local_time", lambda: torch.zeros(P, S)
-        )  # [T, P, S]
+        time_shift = pyro.param("time_shift", lambda: torch.zeros(P, S))
         reparam["coef"] = LocScaleReparam()
         reparam["rate_loc"] = LocScaleReparam()
         reparam["init_loc"] = LocScaleReparam()
@@ -474,7 +473,7 @@ def model(dataset, model_type, *, forecast_steps=None):
             pois = pyro.sample("pois", dist.LogNormal(pois_loc, pois_scale))  # [P, S]
 
         # Finally observe counts.
-        logits = init + rate * local_time  # [T, P, S]
+        logits = init + rate * (local_time[..., None] + time_shift)  # [T, P, S]
         if forecast_steps is None:  # During inference.
             # This softmax() breaks the strain_plate, but is more
             # numerically stable than exp().
