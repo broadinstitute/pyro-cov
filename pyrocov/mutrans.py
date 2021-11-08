@@ -419,7 +419,7 @@ def model(dataset, model_type, *, forecast_steps=None):
     # Tensor shapes are commented at at the end of some lines.
     features = dataset["features"]
     local_time = dataset["local_time"]  # [T, P]
-    T, P, _ = local_time.shape
+    T, P = local_time.shape
     S, F = features.shape
     if forecast_steps is None:  # During inference.
         weekly_strains = dataset["weekly_strains"]
@@ -470,11 +470,14 @@ def model(dataset, model_type, *, forecast_steps=None):
         with place_plate, strain_plate:
             rate = pyro.sample("rate", dist.Normal(rate_loc, rate_scale))  # [P, S]
             init = pyro.sample("init", dist.Normal(init_loc, init_scale))  # [P, S]
-            pois = pyro.sample("pois", dist.LogNormal(pois_loc, pois_scale))  # [P, S]
 
         # Finally observe counts.
         logits = init + rate * (local_time[..., None] + time_shift)  # [T, P, S]
         if forecast_steps is None:  # During inference.
+            with time_plate, place_plate:
+                pois = pyro.sample(
+                    "pois", dist.LogNormal(pois_loc, pois_scale)
+                )  # [P, S]
             # This softmax() breaks the strain_plate, but is more
             # numerically stable than exp().
             lambda_ = (pois * logits.softmax(-1)).clamp_(min=1e-6)
