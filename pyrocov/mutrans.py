@@ -441,8 +441,7 @@ def model(dataset, model_type, *, forecast_steps=None):
             "local_time", lambda: torch.zeros(P, S)
         )  # [T, P, S]
         reparam["coef"] = LocScaleReparam()
-        if "skip" not in model_type:
-            reparam["rate_loc"] = LocScaleReparam()
+        reparam["rate_loc"] = LocScaleReparam()
         reparam["init_loc"] = LocScaleReparam()
         reparam["rate"] = LocScaleReparam()
         reparam["init"] = LocScaleReparam()
@@ -450,8 +449,7 @@ def model(dataset, model_type, *, forecast_steps=None):
 
         # Sample global random variables.
         coef_scale = pyro.sample("coef_scale", dist.LogNormal(-4, 2))
-        if "skip" not in model_type:
-            rate_loc_scale = pyro.sample("rate_loc_scale", dist.LogNormal(-4, 2))
+        rate_loc_scale = pyro.sample("rate_loc_scale", dist.LogNormal(-4, 2))
         init_loc_scale = pyro.sample("init_loc_scale", dist.LogNormal(0, 2))
         rate_scale = pyro.sample("rate_scale", dist.LogNormal(-4, 2))
         init_scale = pyro.sample("init_scale", dist.LogNormal(0, 2))
@@ -466,12 +464,9 @@ def model(dataset, model_type, *, forecast_steps=None):
         coef = pyro.sample("coef", Dist(torch.zeros(F), coef_scale).to_event(1))  # [F]
         with strain_plate:
             rate_loc_loc = 0.01 * coef @ features.T
-            if "skip" in model_type:
-                rate_loc = pyro.deterministic("rate_loc", rate_loc_loc)  # [S]
-            else:
-                rate_loc = pyro.sample(
-                    "rate_loc", dist.Normal(rate_loc_loc, rate_loc_scale)
-                )  # [S]
+            rate_loc = pyro.sample(
+                "rate_loc", dist.Normal(rate_loc_loc, rate_loc_scale)
+            )  # [S]
             init_loc = pyro.sample("init_loc", dist.Normal(0, init_loc_scale))  # [S]
         with place_plate, strain_plate:
             rate = pyro.sample("rate", dist.Normal(rate_loc, rate_scale))  # [P, S]

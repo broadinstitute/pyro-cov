@@ -94,7 +94,7 @@ def fit_svi(
     args,
     dataset,
     cond_data="",
-    model_type="sparse-skip-reparam",
+    model_type="sparse-reparam",
     guide_type="mvn_dependent",
     n=1001,
     lr=0.01,
@@ -535,7 +535,7 @@ if __name__ == "__main__":
     parser.add_argument("--vary-nsp", action="store_true")
     parser.add_argument("--only-gene")
     parser.add_argument("-cd", "--cond-data", default="coef_scale=0.5")
-    parser.add_argument("-m", "--model-type", default="sparse-skip-reparam")
+    parser.add_argument("-m", "--model-type", default="sparse-reparam")
     parser.add_argument("-g", "--guide-type", default="custom")
     parser.add_argument("-n", "--num-steps", default=10001, type=int)
     parser.add_argument("-s", "--num-samples", default=1000, type=int)
