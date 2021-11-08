@@ -183,29 +183,35 @@ class NextcladeDB:
             f"--output-dir={self.output_dir}",
         )
 
-        # Concatenate reference to aligned sequences.
-        with open(self.usher_fasta_filename, "wt") as fout:
-            with open(f"{NEXTSTRAIN_DATA}/reference.fasta") as fin:
-                shutil.copyfileobj(fin, fout)
-            with open(self.fasta_filename.replace(".fasta", ".aligned.fasta")) as fin:
-                shutil.copyfileobj(fin, fout)
+        # Classify pango lineages.
+        aligned_filename = self.fasta_filename.replace(".fasta", ".aligned.fasta")
+        if os.stat(aligned_filename).st_size == 0:
+            # No sequences could be aligned; skip.
+            fingerprint_to_lineage = {}
+        else:
+            # Concatenate reference to aligned sequences.
+            with open(self.usher_fasta_filename, "wt") as fout:
+                with open(f"{NEXTSTRAIN_DATA}/reference.fasta") as fin:
+                    shutil.copyfileobj(fin, fout)
+                with open(aligned_filename) as fin:
+                    shutil.copyfileobj(fin, fout)
 
-        # Convert aligned fasta to vcf for usher.
-        log_call("faToVcf", self.usher_fasta_filename, self.vcf_filename)
+            # Convert aligned fasta to vcf for usher.
+            log_call("faToVcf", self.usher_fasta_filename, self.vcf_filename)
 
-        # Run Usher.
-        log_call(
-            "usher",
-            "-n",
-            "-D",
-            "-i",
-            self.usher_proto,
-            "-v",
-            self.vcf_filename,
-            "-d",
-            self.output_dir,
-        )
-        fingerprint_to_lineage = load_usher_clades(self.clades_filename)
+            # Run Usher.
+            log_call(
+                "usher",
+                "-n",
+                "-D",
+                "-i",
+                self.usher_proto,
+                "-v",
+                self.vcf_filename,
+                "-d",
+                self.output_dir,
+            )
+            fingerprint_to_lineage = load_usher_clades(self.clades_filename)
 
         # Append to a copy to ensure atomicity.
         if os.path.exists(self.rows_filename):

@@ -136,8 +136,8 @@ def main(args):
     for lineage, counts in list(status_counts.items()):
         if counts["good"] < args.min_good_samples:
             logger.info(f"Dropping {lineage} with {status_counts}")
-            del mutation_counts[lineage]
-            del status_counts[lineage]
+            mutation_counts.pop(lineage, None)
+            status_counts.pop(lineage, None)
 
     # Filter to features that occur in the majority of at least one lineage.
     lineage_counts = {k: v.pop(None) for k, v in mutation_counts.items() if None in v}
