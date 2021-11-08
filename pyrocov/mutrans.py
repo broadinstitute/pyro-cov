@@ -121,6 +121,12 @@ def rank_loo_lineages(
     return [pangolin.compress(name) for gap, name in ranked_lineages]
 
 
+def _make_sparse(x):
+    index = x.nonzero(as_tuple=False).T.contiguous()
+    value = x[tuple(index)]
+    return {"index": index, "value": value}
+
+
 def load_gisaid_data(
     *,
     device="cpu",
@@ -254,13 +260,11 @@ def load_gisaid_data(
         T = 1 + end_day // TIMESTEP
     else:
         T = 1 + max(columns["day"]) // TIMESTEP
-
     P = len(location_id)
     S = len(lineage_id)
     weekly_strains = torch.zeros(T, P, S)
-    for (t, p, s), n in sparse_data.items():
-        weekly_strains[t, p, s] = n
-
+    for tps, n in sparse_data.items():
+        weekly_strains[tps] = n
     logger.info(f"Dataset size [T x P x S] {T} x {P} x {S}")
 
     logger.info(
@@ -276,6 +280,7 @@ def load_gisaid_data(
     weekly_strains = weekly_strains.index_select(1, ok_regions)
     locations = [k for k, v in location_id.items() if v in ok_region_set]
     location_id = OrderedDict(zip(locations, range(len(locations))))
+    sparse_counts = _make_sparse(weekly_strains)
 
     # Construct region-local time scales centered around observations.
     num_obs = weekly_strains.sum(-1)
@@ -291,6 +296,7 @@ def load_gisaid_data(
         "lineage_id": lineage_id,
         "lineage_id_inv": lineage_id_inv,
         "local_time": local_time,
+        "sparse_counts": sparse_counts,
     }
 
 
@@ -332,6 +338,7 @@ def subset_gisaid_data(
         new["features"] = new["features"].index_select(0, ids)
         new["lineage_id_inv"] = [new["lineage_id_inv"][i] for i in ids.tolist()]
         new["lineage_id"] = {name: i for i, name in enumerate(new["lineage_id_inv"])}
+        new["sparse_counts"] = _make_sparse(new["weekly_strains"])
 
     # Select mutations.
     gaps = new["features"].max(0).values - new["features"].min(0).values
@@ -419,11 +426,11 @@ def model(dataset, model_type, *, forecast_steps=None):
     # Tensor shapes are commented at at the end of some lines.
     features = dataset["features"]
     local_time = dataset["local_time"]  # [T, P]
-    T, P, _ = local_time.shape
+    T, P = local_time.shape
     S, F = features.shape
     if forecast_steps is None:  # During inference.
-        weekly_strains = dataset["weekly_strains"]
-        assert weekly_strains.shape == (T, P, S)
+        sparse_counts = dataset["sparse_counts"]
+        data_plate = pyro.plate("data", len(sparse_counts["value"]), dim=-1)
     else:  # During prediction.
         T = T + forecast_steps
         t0 = local_time[0]
@@ -470,23 +477,46 @@ def model(dataset, model_type, *, forecast_steps=None):
         with place_plate, strain_plate:
             rate = pyro.sample("rate", dist.Normal(rate_loc, rate_scale))  # [P, S]
             init = pyro.sample("init", dist.Normal(init_loc, init_scale))  # [P, S]
-            pois = pyro.sample("pois", dist.LogNormal(pois_loc, pois_scale))  # [P, S]
 
         # Finally observe counts.
-        logits = init + rate * (local_time[..., None] + time_shift)  # [T, P, S]
         if forecast_steps is None:  # During inference.
-            # This softmax() breaks the strain_plate, but is more
-            # numerically stable than exp().
-            lambda_ = (pois * logits.softmax(-1)).clamp_(min=1e-6)
-            with time_plate, place_plate, strain_plate:
-                pyro.sample(
-                    "obs",
-                    dist.Poisson(lambda_, is_sparse=True),
-                    obs=weekly_strains,
-                )  # [T, P, S]
+            # This implements a sparse Poisson likelihood.
+            with time_plate, place_plate:
+                pois = pyro.sample("pois", dist.LogNormal(pois_loc, pois_scale))
+                pyro.factor("unobserved", poisson_logprob_zero(pois))
+            t, p, s = sparse_counts["index"]
+            logp = (
+                init[p, s] + rate[p, s] * local_time[t, p] + (rate * time_shift)[p, s]
+            )
+            logq = (
+                init.sum(-1) + rate.sum(-1) * local_time + (rate * time_shift).sum(-1)
+            )
+            log_rate = pois.log()[t, p, 0] + (logp - logq[t, p])
+            with data_plate:
+                pyro.factor(
+                    "observed",
+                    poisson_logprob_ratio(log_rate, sparse_counts["value"]),
+                )
+
         else:  # During prediction.
+            logits = init + rate * (local_time[..., None] + time_shift)  # [T, P, S]
             with time_plate, place_plate, strain_plate:
                 pyro.deterministic("probs", logits.softmax(-1))
+
+
+def poisson_logprob_zero(rate):
+    """
+    Returns ``p.log_prob(0)`` where ``p = Poisson(log_rate.exp())``
+    """
+    return -rate
+
+
+def poisson_logprob_ratio(log_rate, value):
+    """
+    Returns ``p.log_prob(value) - p.log_prob(0)`` where
+    ``p = Poisson(log_rate.exp())``
+    """
+    return log_rate * value - (value + 1).lgamma()
 
 
 class InitLocFn:
@@ -630,7 +660,7 @@ def predict(
             name: site["value"].detach()
             for name, site in trace.nodes.items()
             if site["type"] == "sample" and not site_is_subsample(site)
-            if name != "obs"
+            if name not in ("observed", "unobserved")
         }
 
     # Compute median point estimate.
