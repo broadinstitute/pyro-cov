@@ -92,6 +92,12 @@ pull-grid:
 	  pyro-fritzo-vm-gpu:~/pyro-cov/results/mutrans.grid.pt \
 	  results/
 
+pull-gene:
+	gcloud compute scp --project pyro-284215 --zone us-central1-c \
+	  --recurse --compress \
+	  pyro-fritzo-vm-gpu:~/pyro-cov/results/{mutrans.vary_gene.pt,mutrans.vary_nsp.pt} \
+	  results/
+
 pull-leaves:
 	gcloud compute scp --project pyro-284215 --zone us-central1-c \
 	  --recurse --compress \
