@@ -134,7 +134,7 @@ def load_gisaid_data(
     include={},
     exclude={},
     end_day=None,
-    columns_filename="results/gisaid.columns.pkl",
+    columns_filename="results/usher.columns.pkl",
     features_filename="results/usher.features.pt",
     feature_type="aa",
 ) -> dict:

@@ -75,16 +75,6 @@ ssh:
 	gcloud compute ssh --project pyro-284215 --zone us-central1-c \
 	  pyro-fritzo-vm-gpu -- -AX
 
-push:
-	gcloud compute scp --project pyro-284215 --zone us-central1-c \
-	  --recurse --compress \
-	  results/gisaid.columns.pkl  \
-	  pyro-fritzo-vm-gpu:~/pyro-cov/results/
-	gcloud compute scp --project pyro-284215 --zone us-central1-c \
-	  --recurse --compress \
-	  results/nextclade.features.pt \
-	  pyro-fritzo-vm-gpu:~/pyro-cov/results/
-
 pull:
 	gcloud compute scp --project pyro-284215 --zone us-central1-c \
 	  --recurse --compress \
@@ -95,7 +85,7 @@ pull:
 pull-data:
 	gcloud compute scp --project pyro-284215 --zone us-central1-c \
 	  --recurse --compress \
-	  pyro-fritzo-vm-gpu:~/pyro-cov/results/\{gisaid.columns.pkl,gisaid.stats.pkl,nextclade.features.pt,nextclade.counts.pkl\} \
+	  pyro-fritzo-vm-gpu:~/pyro-cov/results/\{usher.columns.pkl,gisaid.stats.pkl,usher.features.pt,nextclade.counts.pkl\} \
 	  results/
 
 pull-grid:
