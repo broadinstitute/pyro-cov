@@ -134,21 +134,25 @@ def load_gisaid_data(
     include={},
     exclude={},
     end_day=None,
-    gisaid_columns_filename="results/gisaid.columns.pkl",
-    nextclade_features_filename="results/nextclade.features.pt",
+    columns_filename="results/gisaid.columns.pkl",
+    features_filename="results/usher.features.pt",
+    feature_type="aa",
 ) -> dict:
     """
-    Loads the two files gisaid_columns_filename and nextclade_features_filename,
+    Loads the two files columns_filename and features_filename,
     converts teh input to PyTorch tensors and truncates the data according to
     ``include`` and ``exclude``.
 
-    Keyword arguments:
-    device -- torch device to use
-    include --
-    exclude --
-    end_day -- last day to include
-    gisaid_columns_filename --
-    nextclade_features_filename --
+    :param str device: torch device to use
+    :param dict include: filters of data to include
+    :param dict exclude: filters of data to exclude
+    :param end_day: last day to include
+    :param str columns_filename:
+    :param str features_filename:
+    :param str feature_type: Either "aa" for amino acid features or "nuc" for
+        nucleotide features.
+    :returns: A dataset dict
+    :rtype: dict
     """
     logger.info("Loading data")
     include = include.copy()
@@ -157,8 +161,8 @@ def load_gisaid_data(
     if end_day:
         logger.info(f"Load gisaid data end_day: {end_day}")
 
-    # Load ``gisaid_columns_filename``
-    with open(gisaid_columns_filename, "rb") as f:
+    # Load column data.
+    with open(columns_filename, "rb") as f:
         raw_columns = pickle.load(f)
     # Filter to known lineages.
     columns = defaultdict(list)
@@ -174,13 +178,13 @@ def load_gisaid_data(
     logger.info("Training on {} rows with columns:".format(len(columns["day"])))
     logger.info(", ".join(columns.keys()))
 
-    # Filter regions to at least 50 sample and aggregate rest to country level
+    # Filter regions to at least 50 samples and aggregate rest to country level.
     fine_regions = get_fine_regions(columns)
 
     # Filter features into numbers of mutations and possibly genes.
-    aa_features = torch.load(nextclade_features_filename)
-    mutations = aa_features["mutations"]
-    features = aa_features["features"].to(
+    usher_features = torch.load(features_filename)
+    mutations = usher_features[f"{feature_type}_mutations"]
+    features = usher_features[f"{feature_type}_features"].to(
         device=device, dtype=torch.get_default_dtype()
     )
     keep = [m.count(",") == 0 for m in mutations]  # restrict to single mutations
@@ -212,26 +216,21 @@ def load_gisaid_data(
         features = features[:, :1] * 0
     logger.info("Loaded {} feature matrix".format(" x ".join(map(str, features.shape))))
 
-    # Aggregate regions
-
     # Get lineages
     lineages = list(map(pangolin.compress, columns["lineage"]))
-    lineage_id_inv = list(map(pangolin.compress, aa_features["lineages"]))
+    lineage_id_inv = list(map(pangolin.compress, usher_features["lineages"]))
     lineage_id = {k: i for i, k in enumerate(lineage_id_inv)}
 
+    # Generate sparse_data.
     sparse_data: dict = Counter()
     location_id: dict = OrderedDict()
-
-    # Set of lineages that are skipped
-    skipped = set()
-
-    # Generate sparse_data
+    skipped_lineages = set()
     for virus_name, day, location, lineage in zip(
         columns["virus_name"], columns["day"], columns["location"], lineages
     ):
         if lineage not in lineage_id:
-            if lineage not in skipped:
-                skipped.add(lineage)
+            if lineage not in skipped_lineages:
+                skipped_lineages.add(lineage)
                 logger.warning(f"WARNING skipping unsampled lineage {lineage}")
             continue
 
@@ -266,7 +265,7 @@ def load_gisaid_data(
         t = day // TIMESTEP
         sparse_data[t, p, s] += 1
 
-    # Generate weekly_strains tensor from sparse_data
+    # Generate weekly_strains tensor from sparse_data.
     if end_day is not None:
         T = 1 + end_day // TIMESTEP
     else:

@@ -4,7 +4,6 @@
 import argparse
 import json
 import logging
-import os
 import pickle
 import re
 from collections import Counter, defaultdict
@@ -110,16 +109,23 @@ def main(args):
         message.append(f"{l}: {c}")
     logger.info("\n\t".join(message))
 
-    # Update columns file with usher-computed lineages.
+    # Update columns with usher-computed lineages.
     with open(args.columns_file_in, "rb") as f:
-        columns = pickle.load(f)
-    columns["gisaid_lineage"] = columns["lineage"]  # save backup
-    columns["usher_lineage"] = [id_to_lineage.get(i) for i in columns["accession_id"]]
-    columns["lineage"] = columns["usher_lineage"]
-    with open(args.columns_file_in + ".temp", "wb") as f:
+        old_columns = pickle.load(f)
+    del old_columns["lineage"]
+    columns = defaultdict(list)
+    for row in zip(*old_columns.values()):
+        row = dict(zip(old_columns, row))
+        lineage = id_to_lineage.get(row["accession_id"])
+        if lineage is None:
+            continue  # drop the row
+        columns["lineage"] = lineage
+        for k, v in row.items():
+            columns[k].append(v)
+    del old_columns
+    columns = dict(columns)
+    with open(args.columns_file_out, "wb") as f:
         pickle.dump(columns, f)
-    os.rename(args.columns_file_in + ".temp", args.columns_file_in)  # atomic
-    del columns
 
     # Collect a set of all single mutations observed in this subsample.
     agg_counts = Counter()
@@ -185,6 +191,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Featurize nextclade mutations")
     parser.add_argument("--gisaid-file-in", default="results/gisaid.json")
     parser.add_argument("--columns-file-in", default="results/gisaid.columns.pkl")
+    parser.add_argument("--columns-file-out", default="results/usher.columns.pkl")
     parser.add_argument("--features-file-out", default="results/nextclade.features.pt")
     parser.add_argument("--counts-file-out", default="results/nextclade.counts.pkl")
     parser.add_argument("--repair", action="store_true")

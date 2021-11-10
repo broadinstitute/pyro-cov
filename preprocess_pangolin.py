@@ -76,6 +76,8 @@ def main(args):
             j = mutation_ids[m]
             nuc_features[i, j] = True
 
+    # TODO create pairwise features.
+
     result = {
         "lineages": lineages,
         "aa_mutations": aa_mutations,

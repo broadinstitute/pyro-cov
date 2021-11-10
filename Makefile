@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 
-data:
-	ln -sf ~/Google\ Drive\ File\ Stream/Shared\ drives/Pyro\ CoV data
+###########################################################################
+# installation
 
 install: install-nextalign install-usher FORCE
 	pip install -e .[test]
@@ -24,6 +24,9 @@ install-nextalign-linux:
 install-nextclade-linux:
 	curl -fsSL "https://github.com/nextstrain/nextclade/releases/download/1.2.0/nextclade-Linux-x86_64" -o nextclade && chmod +x nextclade
 
+###########################################################################
+# ci tasks
+
 lint: FORCE
 	flake8 --extend-exclude=pyrocov/external
 	black --extend-exclude=\.ipynb --extend-exclude=pyrocov/external --check .
@@ -40,20 +43,33 @@ test: lint data FORCE
 	pytest -v -n auto test
 	python mutrans.py --test -n 2 -s 4
 
+###########################################################################
+# Main processing workflow
+# TODO convert this to a wdl pipeline
+
 update: FORCE
 	./pull_gisaid.sh
 	python git_pull.py cov-lineages/pango-designation
 	python git_pull.py cov-lineages/pangoLEARN
 	python git_pull.py CSSEGISandData/COVID-19
 	python git_pull.py nextstrain/nextclade
-	time nice python preprocess_gisaid.py
-	time python featurize_nextclade.py
 
-analyze:
+preprocess: FORCE
+	time nice python preprocess_gisaid.py
+	time nice python preprocess_nextclade.py
+	time nice python preprocess_pangolin.py
+
+analyze: FORCE
 	python mutrans.py --vary-holdout
 	python mutrans.py --vary-gene
 	python mutrans.py --vary-nsp
 	python mutrans.py --vary-leaves=9999
+
+###########################################################################
+# TODO remove these user-specific targets
+
+data:
+	ln -sf ~/Google\ Drive\ File\ Stream/Shared\ drives/Pyro\ CoV data
 
 ssh:
 	gcloud compute ssh --project pyro-284215 --zone us-central1-c \
