@@ -36,7 +36,7 @@ from torch.distributions import constraints
 import pyrocov.geo
 
 from . import pangolin, sarscov2
-from .ops import logistic_logsumexp
+from .ops import logistic_logsumexp, sparse_poisson_likelihood
 from .util import pearson_correlation
 
 # Requires https://github.com/pyro-ppl/pyro/pull/2953
@@ -514,27 +514,16 @@ def model(dataset, model_type, *, forecast_steps=None):
             return
         # Compute a cheap sparse likelihood.
         t, p, s = sparse_counts["index"]
-        logits = init[p, s] + rate[p, s] * (time_shift[p, s] + local_time[t, p])
-        log_total = logistic_logsumexp(init, rate, time_shift, local_time)  # [T, S]
-        log_rate = pois[t, p, 0] + (logits - log_total[t, p])
+        if "sparse" in model_type:  # equivalent either way
+            logits = init[p, s] + rate[p, s] * (time_shift[p, s] + local_time[t, p])
+            log_total = logistic_logsumexp(init, rate, time_shift, local_time)  # [T, P]
+            log_rate = pois[t, p, 0] + (logits - log_total[t, p])
+        else:  # in between sparse and dense
+            logits = init + rate * (time_shift + local_time[..., None])  # [T, P, S]
+            log_rate = pois[t, p, 0] + logits.log_softmax(-1)[t, p, s]
         pyro.factor(
             "obs", sparse_poisson_likelihood(pois, log_rate, sparse_counts["value"])
         )
-
-
-def sparse_poisson_likelihood(full_log_rate, nonzero_log_rate, nonzero_value):
-    # Let p = Poisson(log_rate.exp()). Then
-    # p.log_prob(value)
-    #   = log_rate * value - log_rate.exp() - (value + 1).lgamma()
-    # p.log_prob(0) = -log_rate.exp()
-    # p.log_prob(value) - p.log_prob(0)
-    #   = log_rate * value - log_rate.exp() - (value + 1).lgamma() + log_rate.exp()
-    #   = log_rate * value - (value + 1).lgamma()
-    return (
-        torch.dot(nonzero_log_rate, nonzero_value)
-        - (nonzero_value + 1).lgamma().sum()
-        - full_log_rate.exp().sum()
-    )
 
 
 class InitLocFn:

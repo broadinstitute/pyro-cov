@@ -61,3 +61,32 @@ class LogisticLogsumexp(torch.autograd.Function):
 
         grad_delta = beta * grad_alpha  # [P, S]
         return grad_alpha, grad_beta, grad_delta, None
+
+
+def sparse_poisson_likelihood(full_log_rate, nonzero_log_rate, nonzero_value):
+    """
+    The following are equivalent::
+
+        # Version 1. dense
+        log_prob = Poisson(log_rate.exp()).log_prob(value).sum()
+
+        # Version 2. sparse
+        nnz = value.nonzero(as_tuple=True)
+        log_prob = sparse_poisson_likelihood(
+            log_rate.logsumexp(-1),
+            log_rate[nnz],
+            value[nnz],
+        )
+    """
+    # Let p = Poisson(log_rate.exp()). Then
+    # p.log_prob(value)
+    #   = log_rate * value - log_rate.exp() - (value + 1).lgamma()
+    # p.log_prob(0) = -log_rate.exp()
+    # p.log_prob(value) - p.log_prob(0)
+    #   = log_rate * value - log_rate.exp() - (value + 1).lgamma() + log_rate.exp()
+    #   = log_rate * value - (value + 1).lgamma()
+    return (
+        torch.dot(nonzero_log_rate, nonzero_value)
+        - (nonzero_value + 1).lgamma().sum()
+        - full_log_rate.exp().sum()
+    )
