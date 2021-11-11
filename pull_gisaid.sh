@@ -3,7 +3,10 @@
 # Ensure data directory (or a link) exists.
 test -e results || mkdir results
 
-# Download and decompress data.
+# Download.
 curl -u $GISAID_USERNAME:$GISAID_PASSWORD --retry 4 \
   https://www.epicov.org/epi3/3p/$GISAID_FEED/export/provision.json.xz \
-  | xz -d -T8 > results/gisaid.json
+  > results/gisaid.json.xz
+
+# Decompress, keeping the original.
+xz -d -k -f -T0 results/gisaid.json.xz
