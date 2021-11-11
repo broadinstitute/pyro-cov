@@ -63,6 +63,7 @@ def hashable_to_holdout(holdout):
 
 def _load_data_filename(args, **kwargs):
     parts = ["data", "double" if args.double else "single"]
+    parts.append(str(args.min_region_size))
     for k, v in sorted(kwargs.get("include", {}).items()):
         parts.append(f"I{k}={_safe_str(v)}")
     for k, v in sorted(kwargs.get("exclude", {}).items()):
@@ -76,7 +77,9 @@ def load_data(args, **kwargs):
     """
     Cached wrapper to load GISAID data.
     """
-    return mutrans.load_gisaid_data(device=args.device, **kwargs)
+    return mutrans.load_gisaid_data(
+        device=args.device, min_region_size=args.min_region_size, **kwargs
+    )
 
 
 def _fit_filename(name, *args):
@@ -534,6 +537,7 @@ if __name__ == "__main__":
     parser.add_argument("--vary-gene", action="store_true")
     parser.add_argument("--vary-nsp", action="store_true")
     parser.add_argument("--only-gene")
+    parser.add_argument("--min-region-size", default=50, type=int)
     parser.add_argument("-cd", "--cond-data", default="coef_scale=0.5")
     parser.add_argument("-m", "--model-type", default="reparam")
     parser.add_argument("-g", "--guide-type", default="custom")

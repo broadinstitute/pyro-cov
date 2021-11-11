@@ -59,7 +59,7 @@ def date_range(stop):
     return np.array([start + step * t for t in range(stop)])
 
 
-def get_fine_regions(columns, min_samples=50):
+def get_fine_regions(columns, min_samples):
     """
     Select regions that have at least ``min_samples`` samples.
     Remaining regions will be coarsely aggregated up to country level.
@@ -132,6 +132,7 @@ def _make_sparse(x):
 def load_gisaid_data(
     *,
     device="cpu",
+    min_region_size=50,
     include={},
     exclude={},
     end_day=None,
@@ -179,8 +180,8 @@ def load_gisaid_data(
     logger.info("Training on {} rows with columns:".format(len(columns["day"])))
     logger.info(", ".join(columns.keys()))
 
-    # Filter regions to at least 50 samples and aggregate rest to country level.
-    fine_regions = get_fine_regions(columns)
+    # Aggregate regions smaller than min_region_size to country level.
+    fine_regions = get_fine_regions(columns, min_region_size)
 
     # Filter features into numbers of mutations and possibly genes.
     usher_features = torch.load(features_filename)
@@ -258,6 +259,7 @@ def load_gisaid_data(
             continue
         parts = tuple(p.strip() for p in parts[:3])
         if len(parts) == 3 and parts not in fine_regions:
+            assert min_region_size
             parts = parts[:2]
         location = " / ".join(parts)
 
