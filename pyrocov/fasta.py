@@ -69,6 +69,7 @@ class NextcladeDB:
         self.fasta_filename = fileprefix + ".temp.fasta"
         self.output_dir = os.path.dirname(self.fasta_filename)
         self.rows_temp_filename = fileprefix + "rows.temp.tsv"
+        self.bad_temp_filename = fileprefix + "bad.temp.tsv"
         self.usher_fasta_filename = self.fasta_filename.replace(
             ".fasta", ".usher.fasta"
         )
@@ -76,8 +77,10 @@ class NextcladeDB:
         self.usher_proto = f"{PANGOLEARN_DATA}/lineageTree.pb"
         self.clades_filename = os.path.join(self.output_dir, "clades.txt")
         self.tsv_filename = fileprefix + ".temp.tsv"
+        # The following three files contain the cached state.
         self.header_filename = fileprefix + ".header.tsv"
         self.rows_filename = fileprefix + ".rows.tsv"
+        self.bad_filename = fileprefix + ".bad.tsv"
 
         self._fasta_file = open(self.fasta_filename, "wt")
         self._pending = set()
@@ -90,6 +93,12 @@ class NextcladeDB:
                 for line in f:
                     key = line.split("\t", 1)[0]
                     self._already_aligned.add(key)
+        if os.path.exists(self.bad_filename):
+            with open(self.bad_filename) as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        self._already_aligned.add(line)
 
     def schedule(self, sequence, *fn_args):
         """
@@ -216,6 +225,7 @@ class NextcladeDB:
             fingerprint_to_lineage = load_usher_clades(self.clades_filename)
 
         # Append to a copy to ensure atomicity.
+        self._already_aligned.update(self._pending)
         if os.path.exists(self.rows_filename):
             shutil.copyfile(self.rows_filename, self.rows_temp_filename)
         with open(self.tsv_filename) as f:
@@ -225,6 +235,7 @@ class NextcladeDB:
                     line = line.rstrip("\n")
                     if i:
                         fingerprint = line.split("\t", 1)[0]
+                        self._pending.remove(fingerprint)
                         assert " " not in fingerprint
                         lineage = fingerprint_to_lineage.get(fingerprint)
                         if lineage is None:
@@ -235,11 +246,18 @@ class NextcladeDB:
                         with open(self.header_filename, "w") as fheader:
                             fheader.write(f"{line}\tlineage\n")
                             num_cols = line.count("\t") + 1
-        os.rename(self.rows_temp_filename, self.rows_filename)
+        os.rename(self.rows_temp_filename, self.rows_filename)  # atomic
+        if self._pending:
+            logger.info(f"Failed to align {len(self._pending)} sequences")
+            if os.path.exists(self.bad_filename):
+                shutil.copyfile(self.bad_filename, self.bad_temp_filename)
+            with open(self.bad_temp_filename, "a") as f:
+                for fingerprint in self._pending():
+                    f.write(fingerprint + "\n")
+        os.rename(self.bad_temp_filename, self.bad_filename)  # atomic
         os.remove(self.fasta_filename)
         os.remove(self.tsv_filename)
         self._fasta_file = open(self.fasta_filename, "w")
-        self._already_aligned.update(self._pending)
         self._pending.clear()
 
 
