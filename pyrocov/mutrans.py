@@ -36,6 +36,7 @@ from torch.distributions import constraints
 import pyrocov.geo
 
 from . import pangolin, sarscov2
+from .ops import logistic_logsumexp
 from .util import pearson_correlation
 
 # Requires https://github.com/pyro-ppl/pyro/pull/2953
@@ -435,8 +436,8 @@ def model(dataset, model_type, *, forecast_steps=None):
     """
     # Tensor shapes are commented at at the end of some lines.
     features = dataset["features"]
-    local_time = dataset["local_time"][..., None]  # [1, T, P]
-    T, P, _ = local_time.shape
+    local_time = dataset["local_time"]  # [T, P]
+    T, P = local_time.shape
     S, F = features.shape
     if forecast_steps is None:  # During inference.
         if "dense" in model_type:
@@ -448,8 +449,8 @@ def model(dataset, model_type, *, forecast_steps=None):
         T = T + forecast_steps
         t0 = local_time[0]
         dt = local_time[1] - local_time[0]
-        local_time = t0 + dt * torch.arange(float(T))[:, None, None]
-        assert local_time.shape == (T, P, 1)
+        local_time = t0 + dt * torch.arange(float(T))[:, None]
+        assert local_time.shape == (T, P)
     strain_plate = pyro.plate("strain", S, dim=-1)
     place_plate = pyro.plate("place", P, dim=-2)
     time_plate = pyro.plate("time", T, dim=-3)
@@ -457,14 +458,14 @@ def model(dataset, model_type, *, forecast_steps=None):
     # Configure reparametrization (which does not affect model density).
     reparam = {}
     if "reparam" in model_type:
-        local_time = local_time + pyro.param(
-            "local_time", lambda: torch.zeros(P, S)
-        )  # [T, P, S]
+        time_shift = pyro.param("time_shift", lambda: torch.zeros(P, S))  # [P, S]
         reparam["coef"] = LocScaleReparam()
         reparam["rate_loc"] = LocScaleReparam()
         reparam["init_loc"] = LocScaleReparam()
         reparam["rate"] = LocScaleReparam()
         reparam["init"] = LocScaleReparam()
+    else:
+        time_shift = torch.zeros(P, S)
     with poutine.reparam(config=reparam):
 
         # Sample global random variables.
@@ -491,19 +492,20 @@ def model(dataset, model_type, *, forecast_steps=None):
         with place_plate, strain_plate:
             rate = pyro.sample("rate", dist.Normal(rate_loc, rate_scale))  # [P, S]
             init = pyro.sample("init", dist.Normal(init_loc, init_scale))  # [P, S]
-        logits = init + rate * local_time  # [T, P, S]
 
         # Optionally predict probabilities (during prediction).
         if forecast_steps is not None:
+            logits = init + rate * (time_shift + local_time[..., None])  # [T, P, S]
             with time_plate, place_plate, strain_plate:
                 pyro.deterministic("probs", logits.softmax(-1))
             return
 
         # Finally observe counts (during inference).
         with time_plate, place_plate:
-            pois = pyro.sample("pois", dist.Normal(pois_loc, pois_scale))  # [P, S]
+            pois = pyro.sample("pois", dist.Normal(pois_loc, pois_scale))  # [T, P]
         if "dense" in model_type:  # equivalent either way
             # Compute a dense likelihood.
+            logits = init + rate * (time_shift + local_time[..., None])  # [T, P, S]
             pois_rate = (pois.exp() * logits.softmax(-1)).clamp_(min=1e-6)  # [T, P, S]
             with time_plate, place_plate, strain_plate:
                 pyro.sample(
@@ -512,7 +514,9 @@ def model(dataset, model_type, *, forecast_steps=None):
             return
         # Compute a cheap sparse likelihood.
         t, p, s = sparse_counts["index"]
-        log_rate = pois[t, p, 0] + logits.log_softmax(-1)[t, p, s]
+        logits = init[p, s] + rate[p, s] * (time_shift[p, s] + local_time[t, p])
+        log_total = logistic_logsumexp(init, rate, time_shift, local_time)  # [T, S]
+        log_rate = pois[t, p, 0] + (logits - log_total[t, p])
         pyro.factor(
             "obs", sparse_poisson_likelihood(pois, log_rate, sparse_counts["value"])
         )

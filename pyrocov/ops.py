@@ -4,7 +4,7 @@
 import torch
 
 
-def logsumexp_logistic(alpha, beta, delta, tau, *, backend="naive"):
+def logistic_logsumexp(alpha, beta, delta, tau, *, backend="sequential"):
     """
     Computes::
 

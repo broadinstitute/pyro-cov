@@ -5,19 +5,19 @@ import pytest
 import torch
 from torch.autograd import grad
 
-from pyrocov.ops import logsumexp_logistic
+from pyrocov.ops import logistic_logsumexp
 
 
 @pytest.mark.parametrize("T,P,S", [(5, 6, 7)])
 @pytest.mark.parametrize("backend", ["sequential"])
-def test_logsumexp_logistic(T, P, S, backend):
+def test_logistic_logsumexp(T, P, S, backend):
     alpha = torch.randn(P, S, requires_grad=True)
     beta = torch.randn(P, S, requires_grad=True)
     delta = torch.randn(P, S, requires_grad=True)
     tau = torch.randn(T, P)
 
-    expected = logsumexp_logistic(alpha, beta, delta, tau, backend="naive")
-    actual = logsumexp_logistic(alpha, beta, delta, tau, backend=backend)
+    expected = logistic_logsumexp(alpha, beta, delta, tau, backend="naive")
+    actual = logistic_logsumexp(alpha, beta, delta, tau, backend=backend)
     assert torch.allclose(actual, expected)
 
     probe = torch.randn(expected.shape)
