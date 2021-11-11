@@ -45,7 +45,9 @@ def load_usher_clades(filename):
                     continue
                 weights[lineage] = int(match.group(2))
             if weights:
-                lineage = min(weights, key=lambda k: (-weights[k], k.count("."), k))
+                lineage = min(
+                    weights, key=lambda k: (-weights[k], k.count("."), k.count(":"), k)
+                )
             else:  # e.g. XA lineage
                 lineage = None
         if lineage:
