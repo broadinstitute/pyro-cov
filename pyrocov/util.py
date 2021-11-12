@@ -4,11 +4,13 @@
 import functools
 import itertools
 import operator
+import os
 import weakref
 from typing import Dict
 
 import pyro
 import torch
+import tqdm
 from torch.distributions import constraints, transform_to
 
 
@@ -120,3 +122,11 @@ def pretty_print(x, *, name="", max_items=10):
                 pretty_print(v, name=f"{name}[{repr(k)}]", max_items=max_items)
     else:
         print(f"{name}: {type(x).__name__}")
+
+
+def open_tqdm(*args, **kwargs):
+    with open(*args, **kwargs) as f:
+        with tqdm.tqdm(total=os.stat(f.fileno()).st_size) as pbar:
+            for line in f:
+                pbar.update(len(line))
+                yield line

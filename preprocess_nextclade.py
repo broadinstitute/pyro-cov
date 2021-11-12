@@ -11,6 +11,7 @@ from collections import Counter, defaultdict
 import torch
 
 from pyrocov.fasta import NextcladeDB
+from pyrocov.util import open_tqdm
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(format="%(relativeCreated) 9d %(message)s", level=logging.INFO)
@@ -72,28 +73,24 @@ def main(args):
     logger.info(f"Loading {args.gisaid_file_in}")
     mutation_counts = defaultdict(Counter)
     status_counts = defaultdict(Counter)
-    with open(args.gisaid_file_in, "rt") as f:
-        for i, line in enumerate(f):
-            datum = json.loads(line)
+    for line in open_tqdm(args.gisaid_file_in, "rt"):
+        datum = json.loads(line)
 
-            # Filter to desired sequences.
-            accession_id = datum["covv_accession_id"]
-            if accession_id not in id_to_lineage:
-                continue
+        # Filter to desired sequences.
+        accession_id = datum["covv_accession_id"]
+        if accession_id not in id_to_lineage:
+            continue
 
-            # Schedule sequence for alignment.
-            seq = datum["sequence"].replace("\n", "")
-            db.schedule(
-                seq,
-                process_row,
-                id_to_lineage,
-                mutation_counts,
-                status_counts,
-                accession_id,
-            )
-
-            if i % args.log_every == 0:
-                print(".", end="", flush=True)
+        # Schedule sequence for alignment.
+        seq = datum["sequence"].replace("\n", "")
+        db.schedule(
+            seq,
+            process_row,
+            id_to_lineage,
+            mutation_counts,
+            status_counts,
+            accession_id,
+        )
     db.wait(log_every=args.log_every)
 
     message = ["Total quality:"]

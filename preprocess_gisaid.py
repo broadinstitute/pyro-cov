@@ -13,6 +13,7 @@ from collections import Counter, defaultdict
 from pyrocov import pangolin
 from pyrocov.geo import gisaid_normalize
 from pyrocov.mutrans import START_DATE
+from pyrocov.util import open_tqdm
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(format="%(relativeCreated) 9d %(message)s", level=logging.INFO)
@@ -44,48 +45,45 @@ def main(args):
     stats = defaultdict(Counter)
     covv_fields = ["covv_" + key for key in FIELDS]
 
-    with open(args.gisaid_file_in) as f:
-        for i, line in enumerate(f):
-            # Optimize for faster reading.
-            line, _ = line.split(', "sequence": ', 1)
-            line += "}"
+    for i, line in enumerate(open_tqdm(args.gisaid_file_in)):
+        # Optimize for faster reading.
+        line, _ = line.split(', "sequence": ', 1)
+        line += "}"
 
-            # Filter out bad data.
-            datum = json.loads(line)
-            if len(datum["covv_collection_date"]) < 7:
-                continue  # Drop rows with no month information.
-            date = parse_date(datum["covv_collection_date"])
-            if date < args.start_date:
-                date = args.start_date  # Clip rows before start date.
-            lineage = datum["covv_lineage"]
-            if lineage in (None, "None", "", "XA"):
-                continue  # Drop rows with unknown or ambiguous lineage.
-            try:
-                lineage = pangolin.compress(lineage)
-                lineage = pangolin.decompress(lineage)
-                assert lineage
-            except (ValueError, AssertionError) as e:
-                warnings.warn(str(e))
-                continue
+        # Filter out bad data.
+        datum = json.loads(line)
+        if len(datum["covv_collection_date"]) < 7:
+            continue  # Drop rows with no month information.
+        date = parse_date(datum["covv_collection_date"])
+        if date < args.start_date:
+            date = args.start_date  # Clip rows before start date.
+        lineage = datum["covv_lineage"]
+        if lineage in (None, "None", "", "XA"):
+            continue  # Drop rows with unknown or ambiguous lineage.
+        try:
+            lineage = pangolin.compress(lineage)
+            lineage = pangolin.decompress(lineage)
+            assert lineage
+        except (ValueError, AssertionError) as e:
+            warnings.warn(str(e))
+            continue
 
-            # Fix duplicate locations.
-            datum["covv_location"] = gisaid_normalize(datum["covv_location"])
+        # Fix duplicate locations.
+        datum["covv_location"] = gisaid_normalize(datum["covv_location"])
 
-            # Collate.
-            columns["lineage"].append(lineage)
-            for covv_key, key in zip(covv_fields, FIELDS):
-                columns[key].append(datum[covv_key])
-            columns["day"].append((date - args.start_date).days)
+        # Collate.
+        columns["lineage"].append(lineage)
+        for covv_key, key in zip(covv_fields, FIELDS):
+            columns[key].append(datum[covv_key])
+        columns["day"].append((date - args.start_date).days)
 
-            # Aggregate statistics.
-            stats["date"][datum["covv_collection_date"]] += 1
-            stats["location"][datum["covv_location"]] += 1
-            stats["lineage"][lineage] += 1
+        # Aggregate statistics.
+        stats["date"][datum["covv_collection_date"]] += 1
+        stats["location"][datum["covv_location"]] += 1
+        stats["lineage"][lineage] += 1
 
-            if i % args.log_every == 0:
-                print(".", end="", flush=True)
-            if i >= args.truncate:
-                break
+        if i >= args.truncate:
+            break
 
     num_dropped = i + 1 - len(columns["day"])
     logger.info(f"dropped {num_dropped}/{i+1} = {num_dropped*100/(i+1):0.2g}% rows")

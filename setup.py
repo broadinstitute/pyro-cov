@@ -39,6 +39,7 @@ setup(
         "umap-learn",
         "mappy",
         "protobuf",
+        "tqdm",
     ],
     extras_require={
         "test": [
