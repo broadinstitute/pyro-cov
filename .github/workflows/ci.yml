@@ -28,7 +28,7 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip wheel setuptools
-        pip install flake8 black isort>=5.0 mypy
+        pip install flake8 black isort>=5.0 mypy types-protobuf
     - name: Lint
       run: |
         make lint
