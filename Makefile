@@ -48,7 +48,7 @@ test: lint data FORCE
 # TODO convert this to a wdl pipeline
 
 update: FORCE
-	./pull_gisaid.sh
+	scripts/pull_gisaid.sh
 	python scripts/git_pull.py cov-lineages/pango-designation
 	python scripts/git_pull.py cov-lineages/pangoLEARN
 	python scripts/git_pull.py CSSEGISandData/COVID-19

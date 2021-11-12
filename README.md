@@ -1,4 +1,5 @@
 [![Build Status](https://github.com/broadinstitute/pyro-cov/workflows/CI/badge.svg)](https://github.com/broadinstitute/pyro-cov/actions)
+[![DOI](https://img.shields.io/badge/DOI-10.1101%2F2021.09.07.21263228-green)](https://www.medrxiv.org/content/10.1101/2021.09.07.21263228v1)
 
 # Pyro models for SARS-CoV-2 analysis
 
