@@ -105,7 +105,6 @@ if __name__ == "__main__":
     parser.add_argument("--subset-file-out", default="results/gisaid.subset.tsv")
     parser.add_argument("--subset-dir-out", default="results/fasta")
     parser.add_argument("--start-date", default=START_DATE)
-    parser.add_argument("-l", "--log-every", default=10000, type=int)
     parser.add_argument("--truncate", default=int(1e10), type=int)
     args = parser.parse_args()
     args.start_date = parse_date(args.start_date)

@@ -91,7 +91,7 @@ def main(args):
             status_counts,
             accession_id,
         )
-    db.wait(log_every=args.log_every)
+    db.wait()
 
     message = ["Total quality:"]
     counts = Counter()
@@ -138,7 +138,7 @@ def main(args):
     # Filter to lineages with at least a few good samples.
     for lineage, counts in list(status_counts.items()):
         if counts["good"] < args.min_good_samples:
-            logger.info(f"Dropping {lineage} with {status_counts}")
+            logger.info(f"Dropping {lineage} with {counts}")
             mutation_counts.pop(lineage, None)
             status_counts.pop(lineage, None)
 
@@ -196,6 +196,5 @@ if __name__ == "__main__":
     parser.add_argument("--max-nchars", default=31000, type=int)
     parser.add_argument("--min-good-samples", default=5, type=float)
     parser.add_argument("--max-fasta-count", default=4000, type=int)
-    parser.add_argument("-l", "--log-every", default=10000, type=int)
     args = parser.parse_args()
     main(args)

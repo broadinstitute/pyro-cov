@@ -11,6 +11,8 @@ from subprocess import check_call
 
 from pyrocov import pangolin
 
+from .util import open_tqdm
+
 logger = logging.getLogger(__name__)
 
 NEXTSTRAIN_DATA = os.path.expanduser("~/github/nextstrain/nextclade/data/sars-cov-2")
@@ -118,39 +120,35 @@ class NextcladeDB:
         if key in self._already_aligned:
             self._tasks[key].append(fn_args)
 
-    def wait(self, log_every=1000):
+    def wait(self):
         """
         Wait for all scheduled or maybe_scheduled tasks to complete.
         """
         self._flush()
         with open(self.header_filename) as f:
             header = f.read().strip().split("\t")
-        with open(self.rows_filename) as f:
-            for i, row in enumerate(f):
-                row = row.strip().split("\t")
-                key = row[0]
-                assert len(row) == len(header)
-                row = dict(zip(header, row))
-                for fn_args in self._tasks.pop(key, []):
-                    fn, args = fn_args[0], fn_args[1:]
-                    fn(*args, row)
-                if log_every and i % log_every == 0:
-                    print(".", end="", flush=True)
+        logger.info(f"Processing {len(self._tasks)} sequences")
+        for row in open_tqdm(self.rows_filename):
+            row = row.strip().split("\t")
+            key = row[0]
+            assert len(row) == len(header)
+            row = dict(zip(header, row))
+            for fn_args in self._tasks.pop(key, []):
+                fn, args = fn_args[0], fn_args[1:]
+                fn(*args, row)
 
         num_skipped = sum(map(len, self._tasks.values()))
         logger.info(f"Skipped {num_skipped} sequences")
         self._tasks.clear()
 
-    def repair(self, log_every=10000):
+    def repair(self):
         logger.info(f"Repairing {self.rows_filename}")
         with open(self.header_filename) as f:
             header = f.read().strip().split("\t")
         bad = Counter()
         temp_filename = self.rows_filename + ".temp"
-        with open(self.rows_filename) as fin, open(temp_filename, "wt") as fout:
-            for i, line in enumerate(fin):
-                if i % log_every == 0:
-                    print(".", end="", flush=True)
+        with open(temp_filename, "wt") as fout:
+            for line in open_tqdm(self.rows_filename):
                 row = line.strip().split("\t")
                 if len(row) < len(header):
                     bad[f"invalid length {len(header)} vs {len(row)}"] += 1
