@@ -16,6 +16,7 @@ import numpy as np
 import pyro
 import pyro.distributions as dist
 import torch
+import tqdm
 from pyro import poutine
 from pyro.infer import SVI, JitTrace_ELBO, Trace_ELBO
 from pyro.infer.autoguide import (
@@ -692,9 +693,8 @@ def predict(
                 result["std"][k] = v.std(0).squeeze()
     else:
         stats = StatsOfDict({k: CountMeanVarianceStats for k in save_params})
-        for _ in range(num_samples):
+        for _ in tqdm.tqdm(range(num_samples)):
             stats.update(get_conditionals(guide()))
-            print(".", end="", flush=True)
         for name, stats_ in stats.get().items():
             if "mean" in stats_:
                 result["mean"][name] = stats_["mean"]
