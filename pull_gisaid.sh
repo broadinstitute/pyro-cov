@@ -9,4 +9,4 @@ curl -u $GISAID_USERNAME:$GISAID_PASSWORD --retry 4 \
   > results/gisaid.json.xz
 
 # Decompress, keeping the original.
-xz -d -k -f -T0 results/gisaid.json.xz
+xz -d -k -f -T0 -v results/gisaid.json.xz

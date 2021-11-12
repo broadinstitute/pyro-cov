@@ -558,7 +558,7 @@ if __name__ == "__main__":
     parser.add_argument("--jit", action="store_true", default=False)
     parser.add_argument("--no-jit", dest="jit", action="store_false")
     parser.add_argument("--seed", default=20210319, type=int)
-    parser.add_argument("-l", "--log-every", default=50, type=int)
+    parser.add_argument("-l", "--log-every", default=100, type=int)
     parser.add_argument("--no-new", action="store_true")
     parser.add_argument("--no-cache", action="store_true")
     parser.add_argument("--force", action="store_true")

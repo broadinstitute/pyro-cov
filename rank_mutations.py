@@ -248,7 +248,7 @@ if __name__ == "__main__":
     parser.add_argument("--cpu", dest="cuda", action="store_false")
     parser.add_argument("--seed", default=20210319, type=int)
     parser.add_argument("-f", "--force", action="store_true")
-    parser.add_argument("-l", "--log-every", default=50, type=int)
+    parser.add_argument("-l", "--log-every", default=100, type=int)
     args = parser.parse_args()
     args.device = "cuda" if args.cuda else "cpu"
     main(args)

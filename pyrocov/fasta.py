@@ -254,7 +254,7 @@ class NextcladeDB:
             with open(self.bad_temp_filename, "a") as f:
                 for fingerprint in self._pending():
                     f.write(fingerprint + "\n")
-        os.rename(self.bad_temp_filename, self.bad_filename)  # atomic
+            os.rename(self.bad_temp_filename, self.bad_filename)  # atomic
         os.remove(self.fasta_filename)
         os.remove(self.tsv_filename)
         self._fasta_file = open(self.fasta_filename, "w")
