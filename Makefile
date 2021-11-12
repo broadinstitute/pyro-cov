@@ -49,10 +49,10 @@ test: lint data FORCE
 
 update: FORCE
 	./pull_gisaid.sh
-	python git_pull.py cov-lineages/pango-designation
-	python git_pull.py cov-lineages/pangoLEARN
-	python git_pull.py CSSEGISandData/COVID-19
-	python git_pull.py nextstrain/nextclade
+	python scripts/git_pull.py cov-lineages/pango-designation
+	python scripts/git_pull.py cov-lineages/pangoLEARN
+	python scripts/git_pull.py CSSEGISandData/COVID-19
+	python scripts/git_pull.py nextstrain/nextclade
 
 preprocess: FORCE
 	time nice python preprocess_gisaid.py
