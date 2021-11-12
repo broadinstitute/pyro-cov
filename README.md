@@ -5,19 +5,17 @@
 
 This repository is described in the paper ["Analysis of 2.1 million SARS-CoV-2 genomes identifies mutations associated with transmissibility"](https://www.medrxiv.org/content/10.1101/2021.09.07.21263228v1). Figures and supplementary data for that paper are in the [paper/](paper/) directory.
 
-## Installation
+## Reproducing
 
-### Clone this repository
+### Install software
 
+Clone this repository:
 ```sh
 git clone git@github.com:broadinstitute/pyro-cov
 cd pyro-cov
 ```
 
-### Install dependencies
-
 Install nextclade, depending on your platform:
-
 ```sh
 make install-nextalign-linux
 make install-nextclade-linux
@@ -27,10 +25,15 @@ or
 make install-nextalign
 make install-nextclade
 ```
-
+or
 ```sh
 conda install nodejs
 npm install --global @nextstrain/nextclade
+```
+
+Install this python package:
+```py
+pip install -e .
 ```
 
 ### Get access to GISAID data
@@ -63,6 +66,7 @@ make preprocess
 python mutrans.py --vary-holdout 
 python mutrans.py --vary-gene
 python mutrans.py --vary-nsp
+python mutrans.py --vary-leaves=9999
 ./run_backtesting.sh
 ```
 
