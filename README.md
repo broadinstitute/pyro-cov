@@ -63,11 +63,11 @@ make preprocess
 
 ### Analyze data
 ```sh
-python mutrans.py --vary-holdout 
-python mutrans.py --vary-gene
-python mutrans.py --vary-nsp
-python mutrans.py --vary-leaves=9999
-./run_backtesting.sh
+python scriptsmutrans.py --vary-holdout 
+python scriptsmutrans.py --vary-gene
+python scriptsmutrans.py --vary-nsp
+python scriptsmutrans.py --vary-leaves=9999
+scripts/run_backtesting.sh
 ```
 
 ### Generate plots and tables

@@ -55,15 +55,15 @@ update: FORCE
 	python scripts/git_pull.py nextstrain/nextclade
 
 preprocess: FORCE
-	time nice python preprocess_gisaid.py
-	time nice python preprocess_nextclade.py
-	time nice python preprocess_pangolin.py
+	time nice python scripts/preprocess_gisaid.py
+	time nice python scripts/preprocess_nextclade.py
+	time nice python scripts/preprocess_pangolin.py
 
 analyze: FORCE
-	python mutrans.py --vary-holdout
-	python mutrans.py --vary-gene
-	python mutrans.py --vary-nsp
-	python mutrans.py --vary-leaves=9999
+	python scripts/mutrans.py --vary-holdout
+	python scripts/mutrans.py --vary-gene
+	python scripts/mutrans.py --vary-nsp
+	python scripts/mutrans.py --vary-leaves=9999
 
 ###########################################################################
 # TODO remove these user-specific targets
