@@ -119,7 +119,7 @@ def main(args):
         lineage = id_to_lineage.get(row["accession_id"])
         if lineage is None:
             continue  # drop the row
-        columns["lineage"] = lineage
+        columns["lineage"].append(lineage)
         for k, v in row.items():
             columns[k].append(v)
     del old_columns
