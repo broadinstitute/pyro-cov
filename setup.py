@@ -48,6 +48,7 @@ setup(
             "flake8",
             "pytest>=5.0",
             "mypy>=0.812",
+            "types-protobuf",
         ],
     },
     python_requires=">=3.6",
