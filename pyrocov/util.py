@@ -126,7 +126,12 @@ def pretty_print(x, *, name="", max_items=10):
 
 def open_tqdm(*args, **kwargs):
     with open(*args, **kwargs) as f:
-        with tqdm.tqdm(total=os.stat(f.fileno()).st_size) as pbar:
+        with tqdm.tqdm(
+            total=os.stat(f.fileno()).st_size,
+            unit="B",
+            unit_scale=True,
+            unit_divisor=1024,
+        ) as pbar:
             for line in f:
                 pbar.update(len(line))
                 yield line
