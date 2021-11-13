@@ -33,7 +33,9 @@ def process_row(
         return
 
     # Collect stats on a single lineage.
-    id_to_lineage[accession_id] = lineage
+    clade = row["clade"]
+    clades = row["clades"]
+    id_to_lineage[accession_id] = lineage, clade, clades
     mutation_counts = mutation_counts[lineage]
     mutation_counts[None] += 1  # hack to count number of lineages
 
@@ -65,7 +67,7 @@ def main(args):
     logger.info(f"Loading {args.columns_file_in}")
     with open(args.columns_file_in, "rb") as f:
         columns = pickle.load(f)
-        id_to_lineage = dict(zip(columns["accession_id"], columns["lineage"]))
+        id_to_lineage = {aid: None for aid in columns["accession_id"]}
         del columns
 
     # Count mutations via nextclade.
@@ -113,10 +115,13 @@ def main(args):
     columns = defaultdict(list)
     for row in zip(*old_columns.values()):
         row = dict(zip(old_columns, row))
-        lineage = id_to_lineage.get(row["accession_id"])
-        if lineage is None:
+        lcc = id_to_lineage.get(row["accession_id"])
+        if lcc is None:
             continue  # drop the row
+        lineage, clade, clades = lcc
         columns["lineage"].append(lineage)
+        columns["clade"].append(clade)
+        columns["clades"].append(clades)
         for k, v in row.items():
             columns[k].append(v)
     del old_columns
