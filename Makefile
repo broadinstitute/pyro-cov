@@ -57,7 +57,12 @@ update: FORCE
 preprocess: FORCE
 	time nice python scripts/preprocess_gisaid.py
 	time nice python scripts/preprocess_nextclade.py
-	time nice python scripts/preprocess_pangolin.py
+	time nice python scripts/preprocess_pangolin.py \
+	  --tree-file-in=results/aligndb/lineageTree.coarse.pb \
+	  --features-file-out=results/usher.features.pt
+	time nice python scripts/preprocess_pangolin.py \
+	  --tree-file-in=results/aligndb/lineageTree.fine.pb \
+	  --features-file-out=results/usher.features.fine.pt
 
 analyze: FORCE
 	python scripts/mutrans.py --vary-holdout
