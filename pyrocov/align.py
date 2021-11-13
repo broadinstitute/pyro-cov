@@ -257,7 +257,7 @@ class AlignDB:
             if os.path.exists(self.bad_filename):
                 shutil.copyfile(self.bad_filename, self.bad_temp_filename)
             with open(self.bad_temp_filename, "a") as f:
-                for fingerprint in self._pending():
+                for fingerprint in self._pending:
                     f.write(fingerprint + "\n")
             os.rename(self.bad_temp_filename, self.bad_filename)  # atomic
         os.remove(self.fasta_filename)
