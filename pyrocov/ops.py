@@ -1,6 +1,8 @@
 # Copyright Contributors to the Pyro-Cov project.
 # SPDX-License-Identifier: Apache-2.0
 
+import weakref
+
 import torch
 
 
@@ -63,6 +65,19 @@ class LogisticLogsumexp(torch.autograd.Function):
         return grad_alpha, grad_beta, grad_delta, None
 
 
+_log_factorial_cache = {}
+
+
+def log_factorial_sum(x: torch.Tensor) -> torch.Tensor:
+    if x.requires_grad:
+        return (x + 1).lgamma().sum()
+    key = id(x)
+    if key not in _log_factorial_cache:
+        weakref.finalize(x, _log_factorial_cache.pop, key, None)
+        _log_factorial_cache[key] = (x + 1).lgamma().sum()
+    return _log_factorial_cache[key]
+
+
 def sparse_poisson_likelihood(full_log_rate, nonzero_log_rate, nonzero_value):
     """
     The following are equivalent::
@@ -87,6 +102,28 @@ def sparse_poisson_likelihood(full_log_rate, nonzero_log_rate, nonzero_value):
     #   = log_rate * value - (value + 1).lgamma()
     return (
         torch.dot(nonzero_log_rate, nonzero_value)
-        - (nonzero_value + 1).lgamma().sum()
+        - log_factorial_sum(nonzero_value)
         - full_log_rate.exp().sum()
+    )
+
+
+def sparse_multinomial_likelihood(total_count, nonzero_logits, nonzero_value):
+    """
+    The following are equivalent::
+
+        # Version 1. dense
+        log_prob = Multinomial(logits=logits).log_prob(value).sum()
+
+        # Version 2. sparse
+        nnz = value.nonzero(as_tuple=True)
+        log_prob = sparse_multinomial_likelihood(
+            value.sum(-1),
+            (logits - logits.logsumexp(-1))[nnz],
+            value[nnz],
+        )
+    """
+    return (
+        log_factorial_sum(total_count)
+        - log_factorial_sum(nonzero_value)
+        + torch.dot(nonzero_logits, nonzero_value)
     )

@@ -37,7 +37,7 @@ from torch.distributions import constraints
 import pyrocov.geo
 
 from . import pangolin, sarscov2
-from .ops import logistic_logsumexp, sparse_poisson_likelihood
+from .ops import logistic_logsumexp, sparse_multinomial_likelihood
 from .util import pearson_correlation
 
 # Requires https://github.com/pyro-ppl/pyro/pull/2953
@@ -127,7 +127,8 @@ def rank_loo_lineages(
 def _make_sparse(x):
     index = x.nonzero(as_tuple=False).T.contiguous()
     value = x[tuple(index)]
-    return {"index": index, "value": value}
+    total = x.sum(-1)
+    return {"index": index, "value": value, "total": total}
 
 
 def load_gisaid_data(
@@ -477,8 +478,6 @@ def model(dataset, model_type, *, forecast_steps=None):
         init_loc_scale = pyro.sample("init_loc_scale", dist.LogNormal(0, 2))
         rate_scale = pyro.sample("rate_scale", dist.LogNormal(-4, 2))
         init_scale = pyro.sample("init_scale", dist.LogNormal(0, 2))
-        pois_loc = pyro.sample("pois_loc", dist.Normal(0, 4))
-        pois_scale = pyro.sample("pois_scale", dist.LogNormal(0, 4))
 
         # Assume relative growth rate depends strongly on mutations and weakly
         # on strain and place. Assume initial infections depend strongly on
@@ -504,28 +503,30 @@ def model(dataset, model_type, *, forecast_steps=None):
             return
 
         # Finally observe counts (during inference).
-        with time_plate, place_plate:
-            pois = pyro.sample("pois", dist.Normal(pois_loc, pois_scale))  # [T, P]
         if "dense" in model_type:  # equivalent either way
             # Compute a dense likelihood.
             logits = init + rate * (time_shift + local_time[..., None])  # [T, P, S]
-            pois_rate = (pois.exp() * logits.softmax(-1)).clamp_(min=1e-6)  # [T, P, S]
-            with time_plate, place_plate, strain_plate:
+            with time_plate, place_plate:
                 pyro.sample(
-                    "obs", dist.Poisson(pois_rate, is_sparse=True), obs=weekly_strains
-                )  # [T, P, S]
+                    "obs",
+                    dist.Multinomial(logits=logits.unsqueeze(-2), validate_args=False),
+                    obs=weekly_strains.unsqueeze(-2),
+                )  # [T, P, 1, S]
             return
         # Compute a cheap sparse likelihood.
         t, p, s = sparse_counts["index"]
         if "sparse" in model_type:  # equivalent either way
             logits = init[p, s] + rate[p, s] * (time_shift[p, s] + local_time[t, p])
             log_total = logistic_logsumexp(init, rate, time_shift, local_time)  # [T, P]
-            log_rate = pois[t, p, 0] + (logits - log_total[t, p])
+            logits = logits - log_total[t, p]
         else:  # in between sparse and dense
             logits = init + rate * (time_shift + local_time[..., None])  # [T, P, S]
-            log_rate = pois[t, p, 0] + logits.log_softmax(-1)[t, p, s]
+            logits = logits.log_softmax(-1)[t, p, s]
         pyro.factor(
-            "obs", sparse_poisson_likelihood(pois, log_rate, sparse_counts["value"])
+            "obs",
+            sparse_multinomial_likelihood(
+                sparse_counts["total"], logits, sparse_counts["value"]
+            ),
         )
 
 
@@ -546,8 +547,6 @@ class InitLocFn:
         self.init_loc = init.mean(0)  # [S]
         self.init_loc_decentered = self.init_loc / 2
         assert not torch.isnan(self.init).any()
-        self.pois = dataset["weekly_strains"].sum(-1, True).clamp(min=0.1).log()
-        # self.pois [T, P, 1]
         logger.info(f"init stddev = {self.init.std():0.3g}")
 
     def __call__(self, site):
@@ -574,10 +573,6 @@ class InitLocFn:
             return torch.rand(shape).sub_(0.5).mul_(0.01)
         if name == "coef_loc":
             return torch.rand(shape).sub_(0.5).mul_(0.01).add_(1.0)
-        if name == "pois_loc":
-            return self.pois.mean()
-        if name == "pois_scale":
-            return self.pois.std()
         raise ValueError(f"InitLocFn found unhandled site {repr(name)}; please update.")
 
 
