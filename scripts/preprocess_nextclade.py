@@ -33,9 +33,7 @@ def process_row(
         return
 
     # Collect stats on a single lineage.
-    clade = row["clade"]
-    clades = row["clades"]
-    id_to_lineage[accession_id] = lineage, clade, clades
+    id_to_lineage[accession_id] = lineage, row["lineages"], row["clade"], row["clades"]
     mutation_counts = mutation_counts[lineage]
     mutation_counts[None] += 1  # hack to count number of lineages
 
@@ -115,11 +113,12 @@ def main(args):
     columns = defaultdict(list)
     for row in zip(*old_columns.values()):
         row = dict(zip(old_columns, row))
-        lcc = id_to_lineage.get(row["accession_id"])
-        if lcc is None:
+        llcc = id_to_lineage.get(row["accession_id"])
+        if llcc is None:
             continue  # drop the row
-        lineage, clade, clades = lcc
+        lineage, lineages, clade, clades = llcc
         columns["lineage"].append(lineage)
+        columns["lineages"].append(lineages)
         columns["clade"].append(clade)
         columns["clades"].append(clades)
         for k, v in row.items():

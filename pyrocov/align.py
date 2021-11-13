@@ -241,14 +241,19 @@ class AlignDB:
                             continue  # skip row
                         clade, clades = cc
                         lineage = self.fine_to_coarse[clade]
-                        tab = "\t" * (num_cols - 3 - line.count("\t"))
-                        line = f"{line}{tab}{lineage}\t{clade}\t{clades}\n"
+                        lineages = ",".join(
+                            sorted(
+                                set(self.fine_to_coarse[c] for c in clades.split(","))
+                            )
+                        )
+                        tab = "\t" * (num_cols - 4 - line.count("\t"))
+                        line = f"{line}{tab}{lineage}\t{lineages}\t{clade}\t{clades}\n"
                         assert line.count("\t") + 1 == num_cols
                         frows.write(line)
                         self._pending.remove(fingerprint)
                     else:
                         with open(self.header_filename, "w") as fheader:
-                            line = f"{line}\tlineage\tclade\tclades\n"
+                            line = f"{line}\tlineage\tlineages\tclade\tclades\n"
                             fheader.write(line)
                             num_cols = line.count("\t") + 1
         os.rename(self.rows_temp_filename, self.rows_filename)  # atomic

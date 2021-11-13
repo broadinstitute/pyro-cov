@@ -8,6 +8,7 @@ from typing import Dict, FrozenSet, Tuple
 
 from Bio.Phylo.NewickIO import Parser
 
+from . import pangolin
 from .external.usher import parsimony_pb2
 
 logger = logging.getLogger(__name__)
@@ -26,14 +27,15 @@ def load_usher_clades(filename: str) -> Dict[str, Tuple[str, str]]:
     with open(filename) as f:
         for line in f:
             name, lineages = line.strip().split("\t")
-            # Split histograms like B.1.1.161*|B.1.1(2/3),B.1.1.161(1/3).
+            # Split histograms like B.1.1.161*|B.1.1(2/3),B.1.1.161(1/3) into points
+            # like B.1.1.161 and lists like B.1.1,B.1.1.161.
             if "*|" in lineages:
                 lineage, lineages = lineages.split("*|")
+                lineages = ",".join(part.split("(")[0] for part in lineages.split(","))
             else:
                 assert "*" not in lineages
                 assert "|" not in lineages
                 lineage = lineages
-                lineages = lineages + "(1/1)"
             clades[name] = lineage, lineages
     return clades
 
@@ -115,7 +117,7 @@ def refine_mutation_tree(filename_in: str, filename_out: str) -> Dict[str, str]:
     for clade, meta in metadata.items():
         fine = clade_to_fine[clade]
         if meta.clade:
-            fine_to_coarse[fine] = meta.clade
+            fine_to_coarse[fine] = pangolin.compress(meta.clade)
         meta.clade = fine if clade is fine_to_clade[fine] else ""
     for parent in clades:
         parent_coarse = fine_to_coarse[clade_to_fine[parent]]

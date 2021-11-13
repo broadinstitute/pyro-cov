@@ -221,16 +221,23 @@ def load_gisaid_data(
     logger.info("Loaded {} feature matrix".format(" x ".join(map(str, features.shape))))
 
     # Get lineages
-    lineages = list(map(pangolin.compress, columns["lineage"]))
-    lineage_id_inv = list(map(pangolin.compress, usher_features["lineages"]))
+    lineage_id_inv = usher_features["lineages"]
     lineage_id = {k: i for i, k in enumerate(lineage_id_inv)}
+    if any(lineage.starswith("fine") for lineage in lineage_id_inv):
+        # Use fine lineages.
+        lineages = columns["clade"]
+        histograms = columns["clades"]
+    else:
+        # Use coarse pango lineages.
+        lineages = columns["lineage"]
+        histograms = columns["lineages"]
 
     # Generate sparse_data.
     sparse_data: dict = Counter()
     location_id: dict = OrderedDict()
     skipped_lineages = set()
-    for virus_name, day, location, lineage in zip(
-        columns["virus_name"], columns["day"], columns["location"], lineages
+    for day, location, lineage, histogram in zip(
+        columns["day"], columns["location"], lineages, histograms
     ):
         if lineage not in lineage_id:
             if lineage not in skipped_lineages:
@@ -240,10 +247,9 @@ def load_gisaid_data(
 
         # Filter by include/exclude
         row = {
-            "virus_name": virus_name,
             "location": location,
             "day": day,
-            "lineage": pangolin.compress(lineage),
+            "lineage": lineage,
         }
         if not all(re.search(v, row[k]) for k, v in include.items()):
             continue
