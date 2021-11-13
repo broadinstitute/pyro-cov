@@ -104,7 +104,8 @@ def refine_mutation_tree(filename_in: str, filename_out: str) -> Dict[str, str]:
         for child in parent.clades:
             if mutations[child].mutation:
                 # Create a new fine id.
-                fine = f"{parent_fine}.{num_children[parent_fine]}"
+                n = num_children[parent_fine]
+                fine = f"{parent_fine}.{n - 1}" if n else parent_fine + "."
                 num_children[parent_fine] += 1
                 clade_to_fine[child] = fine
                 fine_to_clade[fine] = child
