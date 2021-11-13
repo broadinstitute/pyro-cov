@@ -7,18 +7,19 @@ import hashlib
 import logging
 import math
 import os
+import pickle
 import shutil
 import warnings
 from collections import Counter, defaultdict
 from subprocess import check_call
-from typing import Dict, Tuple
 
+from .usher import load_usher_clades, refine_mutation_tree
 from .util import open_tqdm
+
+logger = logging.getLogger(__name__)
 
 # Source: https://samtools.github.io/hts-specs/SAMv1.pdf
 CIGAR_CODES = "MIDNSHP=X"  # Note minimap2 uses only "MIDNSH"
-
-logger = logging.getLogger(__name__)
 
 NEXTSTRAIN_DATA = os.path.expanduser("~/github/nextstrain/nextclade/data/sars-cov-2")
 PANGOLEARN_DATA = os.path.expanduser("~/github/cov-lineages/pangoLEARN/pangoLEARN/data")
@@ -31,28 +32,11 @@ def _log_call(*args):
 
 def fingerprint_sequence(seq: str) -> str:
     """
-    Create a 12-character (60-bit) fingerprint, suitable for up to 1 billion sequences.
+    Create a 12-character (60-bit) fingerprint, safe for up to 1 billion sequences.
     """
     hasher = hashlib.sha1()
     hasher.update(seq.replace("\n", "").encode("utf-8"))
-    return base64.b32encode(hasher.digest())[:12].decode("utf-8") 
-
-
-def load_usher_clades(filename: str) -> Dict[str, Tuple[str, str]]:
-    with open(filename) as f:
-        clades = dict(line.strip().split("\t") for line in f)
-
-    for name, lineages in list(clades.items()):
-        # Split histograms like B.1.1.161*|B.1.1(2/3),B.1.1.161(1/3).
-        if "*|" in lineages:
-            lineage, lineages = lineages.split("*|")
-        else:
-            assert "*" not in lineages
-            assert "|" not in lineages
-            lineage = lineages
-            lineages = lineages + "(1/1)"
-        clades[name] = lineage, lineages
-    return clades
+    return base64.b32encode(hasher.digest())[:12].decode("utf-8")
 
 
 class AlignDB:
@@ -66,28 +50,40 @@ class AlignDB:
         dirname="results/aligndb",
         usher_proto=f"{PANGOLEARN_DATA}/lineageTree.pb",
     ):
-        dirname = os.path.realpath(dirname)
-        self.usher_proto = os.path.join(dirname, "lineageTree.pb")
-        if not os.path.exists(dirname):
-            os.makedirs(dirname)
-            shutil.copy2(usher_proto, self.usher_proto)
-        else:
-            if not filecmp.cmp(usher_proto, self.usher_proto):
-                warnings.warn("lineageTree.pb is out of date")
+        self.dirname = os.path.realpath(dirname)
 
-        self.fasta_filename = os.path.join(dirname, "temp.fasta")
-        self.dirname = dirname
-        self.rows_temp_filename = os.path.join(dirname, "temp.rows.tsv")
-        self.bad_temp_filename = os.path.join(dirname, "temp.bad.tsv")
+        # Initialize with a refined version of lineageTrees.pb, supporting both
+        # standard pango lineage use and finer downstream use.
+        self.coarse_proto = os.path.join(self.dirname, "lineageTree.coarse.pb")
+        self.fine_proto = os.path.join(self.dirname, "lineageTree.fine.pb")
+        self.refine_filename = os.path.join(self.dirname, "refine.pkl")
+        if not os.path.exists(self.dirname):
+            logger.info("Initializing AlignDB")
+            os.makedirs(self.dirname)
+            shutil.copy2(usher_proto, self.coarse_proto)
+            self.fine_to_coarse = refine_mutation_tree(
+                self.coarse_proto, self.fine_proto
+            )
+            with open(self.refine_filename, "wb") as f:
+                pickle.dump(self.fine_to_coarse, f)
+        else:
+            if not filecmp.cmp(usher_proto, self.coarse_proto):
+                warnings.warn("AlignDB is using an old lineageTree.pb")
+            with open(self.refine_filename, "rb") as f:
+                self.fine_to_coarse = pickle.load(f)
+
+        self.fasta_filename = os.path.join(self.dirname, "temp.fasta")
+        self.rows_temp_filename = os.path.join(self.dirname, "temp.rows.tsv")
+        self.bad_temp_filename = os.path.join(self.dirname, "temp.bad.tsv")
         self.usher_fasta_filename = self.fasta_filename.replace(
             ".fasta", ".usher.fasta"
         )
-        self.vcf_filename = os.path.join(dirname, "temp.vcf")
-        self.clades_filename = os.path.join(dirname, "clades.txt")
-        self.tsv_filename = os.path.join(dirname, "temp.tsv")
-        self.header_filename = os.path.join(dirname, "header.tsv")
-        self.rows_filename = os.path.join(dirname, "rows.tsv")
-        self.bad_filename = os.path.join(dirname, "bad.tsv")
+        self.vcf_filename = os.path.join(self.dirname, "temp.vcf")
+        self.clades_filename = os.path.join(self.dirname, "clades.txt")
+        self.tsv_filename = os.path.join(self.dirname, "temp.tsv")
+        self.header_filename = os.path.join(self.dirname, "header.tsv")
+        self.rows_filename = os.path.join(self.dirname, "rows.tsv")
+        self.bad_filename = os.path.join(self.dirname, "bad.tsv")
 
         self._fasta_file = open(self.fasta_filename, "wt")
         self._pending = set()
@@ -220,7 +216,7 @@ class AlignDB:
                 "-n",
                 "-D",
                 "-i",
-                self.usher_proto,
+                self.fine_proto,
                 "-v",
                 self.vcf_filename,
                 "-d",
@@ -240,15 +236,20 @@ class AlignDB:
                     if i:
                         fingerprint = line.split("\t", 1)[0]
                         assert " " not in fingerprint
-                        lineage, lineages = fingerprint_to_lineage.get(fingerprint)
-                        if lineage is None:
+                        cc = fingerprint_to_lineage.get(fingerprint)
+                        if cc is None:
                             continue  # skip row
-                        tab = "\t" * (num_cols - line.count("\t"))
-                        frows.write(f"{line}{tab}{lineage}\t{lineages}\n")
+                        clade, clades = cc
+                        lineage = self.fine_to_coarse[clade]
+                        tab = "\t" * (num_cols - 3 - line.count("\t"))
+                        line = f"{line}{tab}{lineage}\t{clade}\t{clades}\n"
+                        assert line.count("\t") + 1 == num_cols
+                        frows.write(line)
                         self._pending.remove(fingerprint)
                     else:
                         with open(self.header_filename, "w") as fheader:
-                            fheader.write(f"{line}\tlineage\tlineages\n")
+                            line = f"{line}\tlineage\tclade\tclades\n"
+                            fheader.write(line)
                             num_cols = line.count("\t") + 1
         os.rename(self.rows_temp_filename, self.rows_filename)  # atomic
         if self._pending:

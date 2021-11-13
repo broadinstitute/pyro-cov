@@ -1,17 +1,41 @@
 # Copyright Contributors to the Pyro-Cov project.
 # SPDX-License-Identifier: Apache-2.0
 
+import logging
 import warnings
 from collections import defaultdict, namedtuple
-from typing import Dict, FrozenSet
+from typing import Dict, FrozenSet, Tuple
 
 from Bio.Phylo.NewickIO import Parser
 
 from .external.usher import parsimony_pb2
 
+logger = logging.getLogger(__name__)
+
 Mutation = namedtuple("Mutation", ["position", "ref", "mut"])
 
 NUCLEOTIDE = "ACGT"
+
+
+def load_usher_clades(filename: str) -> Dict[str, Tuple[str, str]]:
+    """
+    Loads usher's output clades.txt and extracts the best lineage and a list of
+    possible lineages, for each sequence.
+    """
+    clades: Dict[str, Tuple[str, str]] = {}
+    with open(filename) as f:
+        for line in f:
+            name, lineages = line.strip().split("\t")
+            # Split histograms like B.1.1.161*|B.1.1(2/3),B.1.1.161(1/3).
+            if "*|" in lineages:
+                lineage, lineages = lineages.split("*|")
+            else:
+                assert "*" not in lineages
+                assert "|" not in lineages
+                lineage = lineages
+                lineages = lineages + "(1/1)"
+            clades[name] = lineage, lineages
+    return clades
 
 
 def load_mutation_tree(filename: str) -> Dict[str, FrozenSet[Mutation]]:
@@ -53,7 +77,7 @@ def load_mutation_tree(filename: str) -> Dict[str, FrozenSet[Mutation]]:
     return mutations_by_lineage
 
 
-def refine_mutation_tree(filename_in: str, filename_out: str) -> None:
+def refine_mutation_tree(filename_in: str, filename_out: str) -> Dict[str, str]:
     """
     Refines a mutation tree from pango lineages like B.1.1 to full node
     addresses like fine.0.12.4.1.
@@ -66,21 +90,44 @@ def refine_mutation_tree(filename_in: str, filename_out: str) -> None:
     clades = list(tree.find_clades())
     assert len(proto.metadata) == len(clades)
     assert len(proto.node_mutations) == len(clades)
+    metadata = dict(zip(clades, proto.metadata))
+    mutations = dict(zip(clades, proto.node_mutations))
 
-    # Add refined clades.
-    clade_to_meta = dict(zip(clades, proto.metadata))
-    proto.metadata[0].clade = "fine"
-    for parent, parent_meta in zip(clades, proto.metadata):
-        for i, child in enumerate(parent.clades):
-            clade_to_meta[child].clade = f"{parent_meta.clade}.{i}"
+    # Add refined clades, collapsing clones.
+    num_children: Dict[str, int] = defaultdict(int)
+    clade_to_fine = {clades[0]: "fine"}
+    fine_to_clade = {"fine": clades[0]}
+    for parent in clades:
+        parent_fine = clade_to_fine[parent]
+        for child in parent.clades:
+            if mutations[child].mutation:
+                # Create a new fine id.
+                fine = f"{parent_fine}.{num_children[parent_fine]}"
+                num_children[parent_fine] += 1
+                clade_to_fine[child] = fine
+                fine_to_clade[fine] = child
+            else:
+                # Collapse clone into parent.
+                clade_to_fine[child] = parent_fine
 
-    # Drop refined clades with no mutational difference from parent.
-    for clade, muts, meta in zip(clades, proto.node_mutations, proto.metadata):
-        if not muts.mutation:
-            meta.clade = ""
+    # Save basal fine clades and the fine -> coarse mapping.
+    fine_to_coarse = {}
+    for clade, meta in metadata.items():
+        fine = clade_to_fine[clade]
+        if meta.clade:
+            fine_to_coarse[fine] = meta.clade
+        meta.clade = fine if clade is fine_to_clade[fine] else ""
+    for parent in clades:
+        parent_coarse = fine_to_coarse[clade_to_fine[parent]]
+        for child in parent.clades:
+            fine_to_coarse.setdefault(clade_to_fine[child], parent_coarse)
 
     with open(filename_out, "wb") as f:
         f.write(proto.SerializeToString())
+
+    logger.info(f"Found {len(clades) - len(fine_to_coarse)} clones")
+    logger.info(f"Refined {len(set(fine_to_coarse.values()))} -> {len(fine_to_coarse)}")
+    return fine_to_coarse
 
 
 def apply_mutations(ref: str, mutations: FrozenSet[Mutation]) -> str:
