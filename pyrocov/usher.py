@@ -55,8 +55,8 @@ def load_mutation_tree(filename: str) -> Dict[str, FrozenSet[Mutation]]:
 
 def refine_mutation_tree(filename_in: str, filename_out: str) -> None:
     """
-    Refines a mutation tree from pango lineages like B.1.1 to refined lineages
-    like B.1.1:2:1, which is the first child of the second child of B.1.1.
+    Refines a mutation tree from pango lineages like B.1.1 to full node
+    addresses like fine.0.12.4.1.
     """
     with open(filename_in, "rb") as f:
         proto = parsimony_pb2.data.FromString(f.read())  # type: ignore
@@ -69,20 +69,15 @@ def refine_mutation_tree(filename_in: str, filename_out: str) -> None:
 
     # Add refined clades.
     clade_to_meta = dict(zip(clades, proto.metadata))
-    for clade in clades:
-        lineage = clade_to_meta[clade].clade
-        for i, c in enumerate(clade.clades):
-            m = clade_to_meta[c]
-            if not (m and m.clade):
-                m.clade = f"{lineage}:{1 + i}"
+    proto.metadata[0].clade = "fine"
+    for parent, parent_meta in zip(clades, proto.metadata):
+        for i, child in enumerate(parent.clades):
+            clade_to_meta[child].clade = f"{parent_meta.clade}.{i}"
 
     # Drop refined clades with no mutational difference from parent.
-    for clade, muts in zip(clades, proto.node_mutations):
-        if muts.mutation:
-            continue
-        m = clade_to_meta[clade]
-        if ":" in m.clade:
-            m.clade = ""
+    for clade, muts, meta in zip(clades, proto.node_mutations, proto.metadata):
+        if not muts.mutation:
+            meta.clade = ""
 
     with open(filename_out, "wb") as f:
         f.write(proto.SerializeToString())

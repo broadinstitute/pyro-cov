@@ -7,7 +7,7 @@ import os
 
 import torch
 
-from pyrocov.fasta import NEXTSTRAIN_DATA, PANGOLEARN_DATA, NextcladeDB
+from pyrocov.align import NEXTSTRAIN_DATA, PANGOLEARN_DATA, AlignDB
 from pyrocov.usher import apply_mutations, load_mutation_tree
 
 logger = logging.getLogger(__name__)
@@ -41,7 +41,7 @@ def main(args):
         aa_mutations_by_lineage[lineage] = ms.split(",") if ms else []
 
     logger.info(f"Aligning {len(nuc_mutations_by_lineage)} sequences with nextclade")
-    db = NextcladeDB(max_fasta_count=args.max_fasta_count)
+    db = AlignDB()
     for lineage, mutations in sorted(nuc_mutations_by_lineage.items()):
         seq = apply_mutations(ref, mutations)
         db.schedule(seq, collect_mutations, lineage)
@@ -99,6 +99,5 @@ if __name__ == "__main__":
         "--tree-file-in", default=os.path.join(PANGOLEARN_DATA, "lineageTree.pb")
     )
     parser.add_argument("--features-file-out", default="results/usher.features.pt")
-    parser.add_argument("--max-fasta-count", default=4000, type=int)
     args = parser.parse_args()
     main(args)

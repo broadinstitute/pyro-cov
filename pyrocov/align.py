@@ -1,16 +1,323 @@
 # Copyright Contributors to the Pyro-Cov project.
 # SPDX-License-Identifier: Apache-2.0
 
+import base64
+import filecmp
+import hashlib
+import logging
 import math
+import os
+import shutil
+import warnings
+from collections import Counter, defaultdict
+from subprocess import check_call
+from typing import Dict, Tuple
 
-import mappy
+from .util import open_tqdm
 
 # Source: https://samtools.github.io/hts-specs/SAMv1.pdf
 CIGAR_CODES = "MIDNSHP=X"  # Note minimap2 uses only "MIDNSH"
 
+logger = logging.getLogger(__name__)
+
+NEXTSTRAIN_DATA = os.path.expanduser("~/github/nextstrain/nextclade/data/sars-cov-2")
+PANGOLEARN_DATA = os.path.expanduser("~/github/cov-lineages/pangoLEARN/pangoLEARN/data")
+
+
+def _log_call(*args):
+    logger.info(" ".join(args))
+    return check_call(args)
+
+
+def fingerprint_sequence(seq: str) -> str:
+    """
+    Create a 12-character (60-bit) fingerprint, suitable for up to 1 billion sequences.
+    """
+    hasher = hashlib.sha1()
+    hasher.update(seq.replace("\n", "").encode("utf-8"))
+    return base64.b32encode(hasher.digest())[:12].decode("utf-8") 
+
+
+def load_usher_clades(filename: str) -> Dict[str, Tuple[str, str]]:
+    with open(filename) as f:
+        clades = dict(line.strip().split("\t") for line in f)
+
+    for name, lineages in list(clades.items()):
+        # Split histograms like B.1.1.161*|B.1.1(2/3),B.1.1.161(1/3).
+        if "*|" in lineages:
+            lineage, lineages = lineages.split("*|")
+        else:
+            assert "*" not in lineages
+            assert "|" not in lineages
+            lineage = lineages
+            lineages = lineages + "(1/1)"
+        clades[name] = lineage, lineages
+    return clades
+
+
+class AlignDB:
+    """
+    Database to cache results of nextclade and usher, so that only new samples
+    need to be aligned.
+    """
+
+    def __init__(
+        self,
+        dirname="results/aligndb",
+        usher_proto=f"{PANGOLEARN_DATA}/lineageTree.pb",
+    ):
+        dirname = os.path.realpath(dirname)
+        self.usher_proto = os.path.join(dirname, "lineageTree.pb")
+        if not os.path.exists(dirname):
+            os.makedirs(dirname)
+            shutil.copy2(usher_proto, self.usher_proto)
+        else:
+            if not filecmp.cmp(usher_proto, self.usher_proto):
+                warnings.warn("lineageTree.pb is out of date")
+
+        self.fasta_filename = os.path.join(dirname, "temp.fasta")
+        self.dirname = dirname
+        self.rows_temp_filename = os.path.join(dirname, "temp.rows.tsv")
+        self.bad_temp_filename = os.path.join(dirname, "temp.bad.tsv")
+        self.usher_fasta_filename = self.fasta_filename.replace(
+            ".fasta", ".usher.fasta"
+        )
+        self.vcf_filename = os.path.join(dirname, "temp.vcf")
+        self.clades_filename = os.path.join(dirname, "clades.txt")
+        self.tsv_filename = os.path.join(dirname, "temp.tsv")
+        self.header_filename = os.path.join(dirname, "header.tsv")
+        self.rows_filename = os.path.join(dirname, "rows.tsv")
+        self.bad_filename = os.path.join(dirname, "bad.tsv")
+
+        self._fasta_file = open(self.fasta_filename, "wt")
+        self._pending = set()
+        self._tasks = defaultdict(list)
+
+        # Load hashes of already-aligned sequences.
+        self._already_aligned = set()
+        if os.path.exists(self.rows_filename):
+            with open(self.rows_filename) as f:
+                for line in f:
+                    key = line.split("\t", 1)[0]
+                    self._already_aligned.add(key)
+        if os.path.exists(self.bad_filename):
+            with open(self.bad_filename) as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        self._already_aligned.add(line)
+
+    def schedule(self, sequence, *fn_args):
+        """
+        Schedule a task for a given input ``sequence``.
+        """
+        key = fingerprint_sequence(sequence)
+        if key not in self._already_aligned:
+            self._schedule_alignment(key, sequence)
+        self._tasks[key].append(fn_args)
+
+    def maybe_schedule(self, sequence, *fn_args):
+        """
+        Schedule a task iff no new alignment work is required.
+        Tasks requiring new alignment work will be silently dropped.
+        """
+        key = fingerprint_sequence(sequence)
+        if key in self._already_aligned:
+            self._tasks[key].append(fn_args)
+
+    def wait(self):
+        """
+        Wait for all scheduled or maybe_scheduled tasks to complete.
+        """
+        self._flush()
+        with open(self.header_filename) as f:
+            header = f.read().strip().split("\t")
+        logger.info(f"Processing {len(self._tasks)} sequences")
+        for row in open_tqdm(self.rows_filename):
+            row = row.strip().split("\t")
+            key = row[0]
+            assert len(row) == len(header)
+            row = dict(zip(header, row))
+            for fn_args in self._tasks.pop(key, []):
+                fn, args = fn_args[0], fn_args[1:]
+                fn(*args, row)
+
+        num_skipped = sum(map(len, self._tasks.values()))
+        logger.info(f"Skipped {num_skipped} sequences")
+        self._tasks.clear()
+
+    def repair(self):
+        logger.info(f"Repairing {self.rows_filename}")
+        with open(self.header_filename) as f:
+            header = f.read().strip().split("\t")
+        bad = Counter()
+        temp_filename = self.rows_filename + ".temp"
+        with open(temp_filename, "wt") as fout:
+            for line in open_tqdm(self.rows_filename):
+                row = line.strip().split("\t")
+                if len(row) < len(header):
+                    bad[f"invalid length {len(header)} vs {len(row)}"] += 1
+                    row = row[:-1] + [""] * (len(header) - len(row)) + row[-1:]
+                    line = "\t".join(row) + "\n"
+                fout.write(line)
+        logger.info(f"Fixed {sum(bad.values())} errors:")
+        if bad:
+            for k, v in bad.most_common():
+                logger.info(f"{v}\t{k}")
+            logger.info(f"Next mv {temp_filename} {self.rows_filename}")
+
+    def _schedule_alignment(self, key, sequence):
+        if key in self._pending:
+            return
+        self._fasta_file.write(">")
+        self._fasta_file.write(key)
+        self._fasta_file.write("\n")
+        self._fasta_file.write(sequence)
+        self._fasta_file.write("\n")
+        self._pending.add(key)
+        max_fasta_count = 4000  # Avoid nextclade file size limit.
+        if len(self._pending) >= max_fasta_count:
+            self._flush()
+
+    def _flush(self):
+        if not self._pending:
+            return
+        self._fasta_file.close()
+
+        # Align via nextclade.
+        _log_call(
+            "./nextclade",
+            f"--input-root-seq={NEXTSTRAIN_DATA}/reference.fasta",
+            "--genes=E,M,N,ORF1a,ORF1b,ORF3a,ORF6,ORF7a,ORF7b,ORF8,ORF9b,S",
+            f"--input-gene-map={NEXTSTRAIN_DATA}/genemap.gff",
+            f"--input-tree={NEXTSTRAIN_DATA}/tree.json",
+            f"--input-qc-config={NEXTSTRAIN_DATA}/qc.json",
+            f"--input-pcr-primers={NEXTSTRAIN_DATA}/primers.csv",
+            f"--input-fasta={self.fasta_filename}",
+            f"--output-tsv={self.tsv_filename}",
+            f"--output-dir={self.dirname}",
+        )
+
+        # Classify pango lineages.
+        aligned_filename = self.fasta_filename.replace(".fasta", ".aligned.fasta")
+        if os.stat(aligned_filename).st_size == 0:
+            # No sequences could be aligned; skip.
+            fingerprint_to_lineage = {}
+        else:
+            # Concatenate reference to aligned sequences.
+            with open(self.usher_fasta_filename, "wt") as fout:
+                with open(f"{NEXTSTRAIN_DATA}/reference.fasta") as fin:
+                    shutil.copyfileobj(fin, fout)
+                with open(aligned_filename) as fin:
+                    shutil.copyfileobj(fin, fout)
+
+            # Convert aligned fasta to vcf for usher.
+            _log_call("faToVcf", self.usher_fasta_filename, self.vcf_filename)
+
+            # Run Usher.
+            _log_call(
+                "usher",
+                "-n",
+                "-D",
+                "-i",
+                self.usher_proto,
+                "-v",
+                self.vcf_filename,
+                "-d",
+                self.dirname,
+            )
+            fingerprint_to_lineage = load_usher_clades(self.clades_filename)
+
+        # Append to a copy to ensure atomicity.
+        self._already_aligned.update(self._pending)
+        if os.path.exists(self.rows_filename):
+            shutil.copyfile(self.rows_filename, self.rows_temp_filename)
+        with open(self.tsv_filename) as f:
+            with open(self.rows_temp_filename, "a") as frows:
+                num_cols = 0  # defined below
+                for i, line in enumerate(f):
+                    line = line.rstrip("\n")
+                    if i:
+                        fingerprint = line.split("\t", 1)[0]
+                        assert " " not in fingerprint
+                        lineage, lineages = fingerprint_to_lineage.get(fingerprint)
+                        if lineage is None:
+                            continue  # skip row
+                        tab = "\t" * (num_cols - line.count("\t"))
+                        frows.write(f"{line}{tab}{lineage}\t{lineages}\n")
+                        self._pending.remove(fingerprint)
+                    else:
+                        with open(self.header_filename, "w") as fheader:
+                            fheader.write(f"{line}\tlineage\tlineages\n")
+                            num_cols = line.count("\t") + 1
+        os.rename(self.rows_temp_filename, self.rows_filename)  # atomic
+        if self._pending:
+            logger.info(f"Failed to align {len(self._pending)} sequences")
+            if os.path.exists(self.bad_filename):
+                shutil.copyfile(self.bad_filename, self.bad_temp_filename)
+            with open(self.bad_temp_filename, "a") as f:
+                for fingerprint in self._pending():
+                    f.write(fingerprint + "\n")
+            os.rename(self.bad_temp_filename, self.bad_filename)  # atomic
+        os.remove(self.fasta_filename)
+        os.remove(self.tsv_filename)
+        self._fasta_file = open(self.fasta_filename, "w")
+        self._pending.clear()
+
+
+class ShardedFastaWriter:
+    """
+    Writer that splits into multiple fasta files to avoid nextclade file size
+    limit.
+    """
+
+    def __init__(self, filepattern, max_count=5000):
+        assert filepattern.count("*") == 1
+        self.filepattern = filepattern
+        self.max_count = max_count
+        self._file_count = 0
+        self._line_count = 0
+        self._file = None
+
+    def _open(self):
+        filename = self.filepattern.replace("*", str(self._file_count))
+        print(f"writing to {filename}")
+        return open(filename, "wt")
+
+    def __enter__(self):
+        assert self._file is None
+        self._file = self._open()
+        self._file_count += 1
+        return self
+
+    def __exit__(self, *args, **kwargs):
+        self._file.close()
+        self._file = None
+        self._file_count = 0
+        self._line_count = 0
+
+    def write(self, name, sequence):
+        if self._line_count == self.max_count:
+            self._file.close()
+            self._file = self._open()
+            self._file_count += 1
+            self._line_count = 0
+        self._file.write(">")
+        self._file.write(name)
+        self._file.write("\n")
+        self._file.write(sequence)
+        self._file.write("\n")
+        self._line_count += 1
+
 
 class Differ:
+    """
+    Genetic sequence differ based on mappy.
+    """
+
     def __init__(self, ref, lb=0, ub=math.inf, **kwargs):
+        import mappy
+
         self.ref = ref
         self.lb = lb
         self.ub = ub

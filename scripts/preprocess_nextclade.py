@@ -10,7 +10,7 @@ from collections import Counter, defaultdict
 
 import torch
 
-from pyrocov.fasta import NextcladeDB
+from pyrocov.align import AlignDB
 from pyrocov.util import open_tqdm
 
 logger = logging.getLogger(__name__)
@@ -57,7 +57,7 @@ def process_row(
 
 
 def main(args):
-    db = NextcladeDB(max_fasta_count=args.max_fasta_count)
+    db = AlignDB()
     if args.repair:
         return db.repair()
 
@@ -195,6 +195,5 @@ if __name__ == "__main__":
     parser.add_argument("--min-nchars", default=29000, type=int)
     parser.add_argument("--max-nchars", default=31000, type=int)
     parser.add_argument("--min-good-samples", default=5, type=float)
-    parser.add_argument("--max-fasta-count", default=4000, type=int)
     args = parser.parse_args()
     main(args)
