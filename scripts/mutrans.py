@@ -89,7 +89,7 @@ def load_data(args, **kwargs):
 def _fit_filename(name, *args):
     parts = [name]
     parts.append(str(args[0].min_region_size))
-    parts.append("ambi" if args.ambiguous else "best")
+    parts.append("ambi" if args[0].ambiguous else "best")
     for arg in args[2:]:
         if isinstance(arg, tuple):
             parts.append("-".join(f"{k}={_safe_str(v)}" for k, v in arg))

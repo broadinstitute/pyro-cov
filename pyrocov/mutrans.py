@@ -228,7 +228,7 @@ def load_gisaid_data(
     # Get lineages
     lineage_id_inv = usher_features["lineages"]
     lineage_id = {k: i for i, k in enumerate(lineage_id_inv)}
-    if any(lineage.starswith("fine") for lineage in lineage_id_inv):
+    if any(lineage.startswith("fine") for lineage in lineage_id_inv):
         # Use fine lineages.
         lineages = columns["clade"]
         histograms = columns["clades"]
@@ -242,6 +242,7 @@ def load_gisaid_data(
     sparse_hist: dict = defaultdict(list)
     location_id: dict = OrderedDict()
     skipped_lineages = set()
+    num_obs = 0
     for day, location, lineage, histogram in zip(
         columns["day"], columns["location"], lineages, histograms
     ):
@@ -278,6 +279,7 @@ def load_gisaid_data(
         location = " / ".join(parts)
 
         # Save sparse data.
+        num_obs += 1
         t = day // TIMESTEP
         p = location_id.setdefault(location, len(location_id))
         if lineage == histogram or not ambiguous:
@@ -288,7 +290,7 @@ def load_gisaid_data(
             # Save an ambiguous observation.
             i = len(sparse_hist["size"])
             sparse_hist["size"].append(len(histogram))
-            for lineage in histogram:
+            for lineage in histogram.split(","):
                 s = lineage_id[lineage]
                 sparse_hist["destin"].append(i)
                 sparse_hist["source"].append((t, p, s))
@@ -305,7 +307,25 @@ def load_gisaid_data(
         weekly_strains[tps] = n
     logger.info(f"Dataset size [T x P x S] {T} x {P} x {S}")
 
-    # Add ambiguous strains.
+    logger.info(
+        f"Keeping {num_obs}/{len(lineages)} rows "
+        f"(dropped {len(lineages) - int(num_obs)})"
+    )
+
+    # Filter regions.
+    if ambiguous:
+        pass  # TODO implement region filtering.
+    else:
+        num_times_observed = (weekly_strains > 0).max(2).values.sum(0)
+        ok_regions = (num_times_observed >= 2).nonzero(as_tuple=True)[0]
+        ok_region_set = set(ok_regions.tolist())
+        logger.info(f"Keeping {len(ok_regions)}/{weekly_strains.size(1)} regions")
+        weekly_strains = weekly_strains.index_select(1, ok_regions)
+        locations = [k for k, v in location_id.items() if v in ok_region_set]
+        location_id = OrderedDict(zip(locations, range(len(locations))))
+
+    # Construct sparse representation.
+    sparse_counts = _make_sparse(weekly_strains)
     if sparse_hist:
         # Construct a sparse COO matrix for use in the fused gather-scatter:
         # torch.mv(sparse_hist["matrix"], probs.reshape(-1))
@@ -313,29 +333,18 @@ def load_gisaid_data(
         sparse_source = torch.tensor(sparse_hist["source"]).mv(
             torch.tensor([P * S, S, 1])
         )
+        shape = (len(sparse_hist["size"]), T * P * S)
+        logger.info(
+            f"Sparse {shape} histogram has {len(sparse_hist['source'])} entries"
+        )
         sparse_hist = {
             "size": torch.tensor(sparse_hist["size"], dtype=torch.float),
             "matrix": torch.sparse_coo_tensor(
                 torch.stack([sparse_destin, sparse_source]),
                 torch.ones(len(sparse_destin)),
-                (len(sparse_destin), T * P * S),
+                shape,
             ),
         }
-
-    logger.info(
-        f"Keeping {int(weekly_strains.sum())}/{len(lineages)} rows "
-        f"(dropped {len(lineages) - int(weekly_strains.sum())})"
-    )
-
-    # Filter regions.
-    num_times_observed = (weekly_strains > 0).max(2).values.sum(0)
-    ok_regions = (num_times_observed >= 2).nonzero(as_tuple=True)[0]
-    ok_region_set = set(ok_regions.tolist())
-    logger.info(f"Keeping {len(ok_regions)}/{weekly_strains.size(1)} regions")
-    weekly_strains = weekly_strains.index_select(1, ok_regions)
-    locations = [k for k, v in location_id.items() if v in ok_region_set]
-    location_id = OrderedDict(zip(locations, range(len(locations))))
-    sparse_counts = _make_sparse(weekly_strains)
 
     # Construct region-local time scales centered around observations.
     num_obs = weekly_strains.sum(-1)
