@@ -37,7 +37,11 @@ from torch.distributions import constraints
 import pyrocov.geo
 
 from . import pangolin, sarscov2
-from .ops import logistic_logsumexp, sparse_multinomial_likelihood
+from .ops import (
+    logistic_logsumexp,
+    sparse_categorical_kl,
+    sparse_multinomial_likelihood,
+)
 from .util import pearson_correlation
 
 # Requires https://github.com/pyro-ppl/pyro/pull/2953
@@ -141,6 +145,7 @@ def load_gisaid_data(
     columns_filename="results/usher.columns.pkl",
     features_filename="results/usher.features.pt",
     feature_type="aa",
+    ambiguous=False,
 ) -> dict:
     """
     Loads the two files columns_filename and features_filename,
@@ -234,6 +239,7 @@ def load_gisaid_data(
 
     # Generate sparse_data.
     sparse_data: dict = Counter()
+    sparse_hist: dict = defaultdict(list)
     location_id: dict = OrderedDict()
     skipped_lineages = set()
     for day, location, lineage, histogram in zip(
@@ -271,10 +277,21 @@ def load_gisaid_data(
             parts = parts[:2]
         location = " / ".join(parts)
 
-        p = location_id.setdefault(location, len(location_id))
-        s = lineage_id[lineage]
+        # Save sparse data.
         t = day // TIMESTEP
-        sparse_data[t, p, s] += 1
+        p = location_id.setdefault(location, len(location_id))
+        if lineage == histogram or not ambiguous:
+            # Save an unambiguous observation.
+            s = lineage_id[lineage]
+            sparse_data[t, p, s] += 1
+        else:
+            # Save an ambiguous observation.
+            i = len(sparse_hist["size"])
+            sparse_hist["size"].append(len(histogram))
+            for lineage in histogram:
+                s = lineage_id[lineage]
+                sparse_hist["destin"].append(i)
+                sparse_hist["source"].append((t, p, s))
 
     # Generate weekly_strains tensor from sparse_data.
     if end_day is not None:
@@ -287,6 +304,23 @@ def load_gisaid_data(
     for tps, n in sparse_data.items():
         weekly_strains[tps] = n
     logger.info(f"Dataset size [T x P x S] {T} x {P} x {S}")
+
+    # Add ambiguous strains.
+    if sparse_hist:
+        # Construct a sparse COO matrix for use in the fused gather-scatter:
+        # torch.mv(sparse_hist["matrix"], probs.reshape(-1))
+        sparse_destin = torch.tensor(sparse_hist["destin"])
+        sparse_source = torch.tensor(sparse_hist["source"]).mv(
+            torch.tensor([P * S, S, 1])
+        )
+        sparse_hist = {
+            "size": torch.tensor(sparse_hist["size"], dtype=torch.float),
+            "matrix": torch.sparse_coo_tensor(
+                torch.stack([sparse_destin, sparse_source]),
+                torch.ones(len(sparse_destin)),
+                (len(sparse_destin), T * P * S),
+            ),
+        }
 
     logger.info(
         f"Keeping {int(weekly_strains.sum())}/{len(lineages)} rows "
@@ -318,6 +352,7 @@ def load_gisaid_data(
         "lineage_id_inv": lineage_id_inv,
         "local_time": local_time,
         "sparse_counts": sparse_counts,
+        "sparse_hist": sparse_hist,
     }
 
 
@@ -331,6 +366,8 @@ def subset_gisaid_data(
     This is not used in the final published results.
     """
     old = gisaid_dataset
+    if old["sparse_hist"]:
+        raise NotImplementedError
     new = old.copy()
 
     # Select locations.
@@ -455,6 +492,7 @@ def model(dataset, model_type, *, forecast_steps=None):
             assert weekly_strains.shape == (T, P, S)
         else:
             sparse_counts = dataset["sparse_counts"]
+            sparse_hist = dataset["sparse_hist"]
     else:  # During prediction.
         T = T + forecast_steps
         t0 = local_time[0]
@@ -518,22 +556,42 @@ def model(dataset, model_type, *, forecast_steps=None):
                     dist.Multinomial(logits=logits.unsqueeze(-2), validate_args=False),
                     obs=weekly_strains.unsqueeze(-2),
                 )  # [T, P, 1, S]
+            if dataset["sparse_hist"]:
+                raise NotImplementedError
             return
-        # Compute a cheap sparse likelihood.
         t, p, s = sparse_counts["index"]
         if "sparse" in model_type:  # equivalent either way
+            # Compute a cheap sparse likelihood.
             logits = init[p, s] + rate[p, s] * (time_shift[p, s] + local_time[t, p])
             log_total = logistic_logsumexp(init, rate, time_shift, local_time)  # [T, P]
             logits = logits - log_total[t, p]
-        else:  # in between sparse and dense
-            logits = init + rate * (time_shift + local_time[..., None])  # [T, P, S]
-            logits = logits.log_softmax(-1)[t, p, s]
+            pyro.factor(
+                "obs",
+                sparse_multinomial_likelihood(
+                    sparse_counts["total"], logits, sparse_counts["value"]
+                ),
+            )
+            if sparse_hist:
+                raise NotImplementedError
+            return
+        # Compromise between sparse and dense.
+        logits = init + rate * (time_shift + local_time[..., None])  # [T, P, S]
+        logits = logits.log_softmax(-1)
         pyro.factor(
             "obs",
             sparse_multinomial_likelihood(
-                sparse_counts["total"], logits, sparse_counts["value"]
+                sparse_counts["total"], logits[t, p, s], sparse_counts["value"]
             ),
         )
+        if sparse_hist:
+            pyro.factor(
+                "obs_ambiguous",
+                sparse_categorical_kl(
+                    log_q=logits.reshape(-1),
+                    p_support=sparse_hist["matrix"],
+                    log_p=sparse_hist["size"].log().neg_(),
+                ),
+            )
 
 
 class InitLocFn:

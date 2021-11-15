@@ -64,6 +64,7 @@ def hashable_to_holdout(holdout):
 def _load_data_filename(args, **kwargs):
     parts = ["data", "double" if args.double else "single"]
     parts.append(str(args.min_region_size))
+    parts.append("ambi" if args.ambiguous else "best")
     for k, v in sorted(kwargs.get("include", {}).items()):
         parts.append(f"I{k}={_safe_str(v)}")
     for k, v in sorted(kwargs.get("exclude", {}).items()):
@@ -78,18 +79,23 @@ def load_data(args, **kwargs):
     Cached wrapper to load GISAID data.
     """
     return mutrans.load_gisaid_data(
-        device=args.device, min_region_size=args.min_region_size, **kwargs
+        device=args.device,
+        min_region_size=args.min_region_size,
+        ambiguous=args.ambiguous,
+        **kwargs,
     )
 
 
 def _fit_filename(name, *args):
-    strs = [name]
+    parts = [name]
+    parts.append(str(args[0].min_region_size))
+    parts.append("ambi" if args.ambiguous else "best")
     for arg in args[2:]:
         if isinstance(arg, tuple):
-            strs.append("-".join(f"{k}={_safe_str(v)}" for k, v in arg))
+            parts.append("-".join(f"{k}={_safe_str(v)}" for k, v in arg))
         else:
-            strs.append(str(arg))
-    return "results/mutrans.{}.pt".format(".".join(strs))
+            parts.append(str(arg))
+    return "results/mutrans.{}.pt".format(".".join(parts))
 
 
 @cached(lambda *args: _fit_filename("svi", *args))
@@ -538,6 +544,7 @@ if __name__ == "__main__":
     parser.add_argument("--vary-nsp", action="store_true")
     parser.add_argument("--only-gene")
     parser.add_argument("--min-region-size", default=50, type=int)
+    parser.add_argument("--ambiguous", action="store_true")
     parser.add_argument("-cd", "--cond-data", default="coef_scale=0.5")
     parser.add_argument("-m", "--model-type", default="reparam")
     parser.add_argument("-g", "--guide-type", default="custom")

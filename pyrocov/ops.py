@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import weakref
+from typing import Dict
 
 import torch
 
@@ -65,7 +66,7 @@ class LogisticLogsumexp(torch.autograd.Function):
         return grad_alpha, grad_beta, grad_delta, None
 
 
-_log_factorial_cache = {}
+_log_factorial_cache: Dict[int, torch.Tensor] = {}
 
 
 def log_factorial_sum(x: torch.Tensor) -> torch.Tensor:
@@ -127,3 +128,25 @@ def sparse_multinomial_likelihood(total_count, nonzero_logits, nonzero_value):
         - log_factorial_sum(nonzero_value)
         + torch.dot(nonzero_logits, nonzero_value)
     )
+
+
+def sparse_categorical_kl(log_q, p_support, log_p):
+    """
+    Computes the restricted Kl divergence::
+
+        sum_i restrict(q)(i) (log q(i) - log p(i))
+
+    where ``p`` is a uniform prior, ``q`` is the posterior, and
+    ``restrict(q))`` is the posterior restricted to the support of ``p`` and
+    renormalized. Note for degenerate ``p=delta(i)`` this reduces to the log
+    likelihood ``log q(i)``.
+    """
+    assert log_q.dim() == 1
+    assert log_p.dim() == 1
+    assert p_support.shape == log_p.shape + log_q.shape
+    q = log_q.exp()
+    sum_q = torch.mv(p_support, q)
+    sum_q_log_q = torch.mv(p_support, q * log_q)
+    sum_r_log_q = sum_q_log_q / sum_q  # restrict and normalize
+    kl = sum_r_log_q - log_p  # note sum_r_log_p = log_p because p is uniform
+    return kl.sum()
