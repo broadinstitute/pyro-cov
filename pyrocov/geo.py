@@ -18,6 +18,8 @@ JHU_DIRNAME = os.path.expanduser(
 )
 
 GISAID_DEDUP = {
+    "Europe / England": "Europe / United Kingdom / England",
+    "Europe / Slovak Republic": "Europe / Slovakia",
     "South America / Brazil / São Paulo": "South America / Brazil / Sao Paulo",
 }
 

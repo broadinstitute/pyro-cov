@@ -183,6 +183,8 @@ def load_gisaid_data(
             columns[k].append(v)
     del raw_columns
     columns = dict(columns)
+    # Clean up location ids (temporary; this should be done in preprocess_gisaid.py).
+    columns["location"] = list(map(pyrocov.geo.gisaid_normalize, columns["location"]))
 
     logger.info("Training on {} rows with columns:".format(len(columns["day"])))
     logger.info(", ".join(columns.keys()))
@@ -330,9 +332,10 @@ def load_gisaid_data(
         # Construct a sparse COO matrix for use in the fused gather-scatter:
         # torch.mv(sparse_hist["matrix"], probs.reshape(-1))
         sparse_destin = torch.tensor(sparse_hist["destin"])
-        sparse_source = torch.tensor(sparse_hist["source"]).mv(
-            torch.tensor([P * S, S, 1])
-        )
+        sparse_source = torch.tensor(sparse_hist["source"])
+        sparse_source[:, 0] *= P * S
+        sparse_source[:, 1] *= S
+        sparse_source = sparse_source.sum(-1)
         shape = (len(sparse_hist["size"]), T * P * S)
         logger.info(
             f"Sparse {shape} histogram has {len(sparse_hist['source'])} entries"
