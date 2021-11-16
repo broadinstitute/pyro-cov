@@ -4,6 +4,7 @@
 import datetime
 import logging
 import os
+import re
 import typing
 from collections import OrderedDict, defaultdict
 from typing import List
@@ -17,10 +18,38 @@ JHU_DIRNAME = os.path.expanduser(
     "~/github/CSSEGISandData/COVID-19/csse_covid_19_data/csse_covid_19_time_series"
 )
 
-GISAID_DEDUP = {
+# To update see explore_gisaid.ipynb
+GISAID_NORMALIZE = {
+    "Africa / Botswana / Mochud": "Africa / Botswana / Mochudi",
+    "Africa / Botswana / Selebe Phikwe": "Africa / Botswana / Selebi Phikwe",
+    "Africa / Canary Islands / Las Palmas de Gran Canaria": "Africa / Canary Islands / Las Palmas",
+    "Africa / Djibouti / Djbouti": "Africa / Djibouti / Djibouti",
+    "Africa / Ethiopia / Addisababa": "Africa / Ethiopia / Addis Ababa",
+    "Africa / Ghana / Accra Metro": "frica / Ghana / Accra",
+    "Africa / Ghana / Central": "Africa / Ghana / Central Region",
+    "Africa / Ghana / Greater Accra, Ghana": "Africa / Ghana / Greater Accra",
+    "Africa / Kenya / Meru County": "Africa / Kenya / Meru",
+    "Africa / Mali / Mopti Region": "Africa / Mali / Mopti",
+    "Africa / Mauritius / Plaine Wilhems": "Africa / Mauritius / Plaines Wilhems",
+    "Africa / Mozambique / Inhambabe": "Africa / Mozambique / Inhambane",
+    "Africa / Mozambique / Maputo Cidade": "Africa / Mozambique / Maputo",
+    "Africa / Togo / Lome Golfe": "Africa / Togo / Lome",
+    "Africa / Zimbabwe / Mash. East": "Africa / Zimbabwe / Mashonaland East",
+    "Asia / Bangladesh / Cox,s Bazar": "Asia / Bangladesh / Cox's Bazar",
+    "Asia / Bangladesh / Mymemensingh": "Asia / Bangladesh / Mymensingh",
+    "Asia / India / Maharasthra": "Asia / India / Maharashtra",
+    "Asia / India / Pondicherry": "Asia / India / Puducherry",
+    "Asia / Indonesia / North Sumatera": "Asia / Indonesia / North Sumatra",
+    "Asia / Vietnam / Langson": "Asia / Vietnam / Lang Son",
+    "Asia / Vietnam / Namdinh": "Asia / Vietnam / Nam Dinh",
+    "Asia / Vietnam / Nghean": "Asia / Vietnam / Nghe An",
+    "Asia / Vietnam / Phutho": "Asia / Vietnam / Phu Tho",
+    "Asia / Vietnam / Thanhhoa": "Asia / Vietnam / Thanh Hoa",
+    "Asia / Vietnam / Vinhphuc": "Asia / Vietnam / Vinh Phuc",
+    "Europe / Croatia / Osijek Baranjacounty": "Europe / Croatia / Osijek Baranja",
     "Europe / England": "Europe / United Kingdom / England",
     "Europe / Slovak Republic": "Europe / Slovakia",
-    "South America / Brazil / São Paulo": "South America / Brazil / Sao Paulo",
+    "Europe / Sweden / Vastra Gotalandsregionen": "Europe / Sweden / Vastra Gotalands",
 }
 
 # To update see explore-jhu-time-series.ipynb
@@ -153,7 +182,62 @@ def parse_date(string):
 
 
 def gisaid_normalize(gisaid_location):
-    return GISAID_DEDUP.get(gisaid_location, gisaid_location)
+    if gisaid_location in GISAID_NORMALIZE:
+        return GISAID_NORMALIZE[gisaid_location]
+    x = gisaid_location
+
+    # Clean up slashes and truncate.
+    x = " / ".join(p for p in re.split(r"\s*/\s*", x)[:3] if p)
+
+    # Normalize unicode.
+    x = " ".join(p.rstrip(".") for p in x.lower().split())
+    x = x.replace("'", " ")
+    x = x.replace("-", " ")
+    x = x.replace("_", " ")
+    x = x.replace("à", "a")
+    x = x.replace("á", "a")
+    x = x.replace("â", "a")
+    x = x.replace("ã", "a")
+    x = x.replace("ä", "a")
+    x = x.replace("ç", "c")
+    x = x.replace("é", "e")
+    x = x.replace("ë", "e")
+    x = x.replace("ì", "i")
+    x = x.replace("í", "i")
+    x = x.replace("î", "i")
+    x = x.replace("ó", "o")
+    x = x.replace("ô", "o")
+    x = x.replace("ö", "oe")
+    x = x.replace("ü", "ue")
+    x = x.replace("ý", "y")
+    x = x.replace("ą", "a")
+    x = x.replace("ė", "e")
+    x = x.replace("ł", "l")
+    x = x.replace("ň", "n")
+    x = x.replace("ś", "s")
+    x = x.replace("š", "s")
+    x = x.replace("ų", "u")
+    x = x.replace("ž", "z")
+    x = x.replace("ơ", "o")
+    x = x.replace("ư", "u")
+    x = x.replace("ˇ", "")
+    x = x.replace("ầ", "a")
+    x = x.replace("’", " ")
+    x = x.replace("√º", "u")  # Zurich
+
+    # Drop region suffixes.
+    x = re.sub(
+        " (city|district|metro|region|state|province|county|town|apskr|apskritis|r)$",
+        "",
+        x,
+    )
+
+    # Capitalize
+    x = " ".join(p.capitalize() for p in x.split())
+
+    x = GISAID_NORMALIZE.setdefault(x, x)
+    GISAID_NORMALIZE[gisaid_location] = x
+    return x
 
 
 def gisaid_to_jhu_location(
