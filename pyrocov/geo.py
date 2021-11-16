@@ -234,6 +234,7 @@ def gisaid_normalize(gisaid_location):
 
     # Capitalize
     x = " ".join(p.capitalize() for p in x.split())
+    x = re.sub(r"\bUsa\b", "USA", x)
 
     x = GISAID_NORMALIZE.setdefault(x, x)
     GISAID_NORMALIZE[gisaid_location] = x
