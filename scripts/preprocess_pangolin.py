@@ -9,6 +9,7 @@ import torch
 
 from pyrocov.align import NEXTSTRAIN_DATA, PANGOLEARN_DATA, AlignDB
 from pyrocov.usher import apply_mutations, load_mutation_tree
+from pyrocov import pangolin
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(format="%(relativeCreated) 9d %(message)s", level=logging.INFO)
@@ -26,11 +27,7 @@ def main(args):
 
     # Load reference sequence.
     with open(os.path.join(NEXTSTRAIN_DATA, "reference.fasta")) as f:
-        lines = []
-        for line in f:
-            if not line.startswith(">"):
-                lines.append(line.strip())
-    ref = "".join(lines)
+        ref = "".join(line.strip() for line in f if not line.startswith(">"))
     assert len(ref) == 29903, len(ref)
 
     # Convert from nucleotide mutations to amino acid mutations.
@@ -60,6 +57,16 @@ def main(args):
             j = mutation_ids[m]
             aa_features[i, j] = True
 
+    # Create a dense ancestry matrix.
+    ancestry = torch.eye(len(lineages))
+    for child, parent in pangolin.find_edges(lineages):
+        ancestry[parent, child] = 1
+    while True:  # Transitively close.
+        square = (ancestry @ ancestry).clamp_(max=1)
+        if torch.allclose(ancestry, square):
+            break
+        ancestry = square
+
     # Create dense nucleotide features.
     nuc_mutations_by_lineage = {
         lineage: [f"{m.ref}{m.position}{m.mut}" for m in ms]
@@ -76,10 +83,9 @@ def main(args):
             j = mutation_ids[m]
             nuc_features[i, j] = True
 
-    # TODO create pairwise features.
-
     result = {
         "lineages": lineages,
+        "ancestry": ancestry,
         "aa_mutations": aa_mutations,
         "aa_features": aa_features,
         "nuc_mutations": nuc_mutations,

@@ -496,8 +496,10 @@ def model(dataset, model_type, *, forecast_steps=None):
     # Tensor shapes are commented at at the end of some lines.
     features = dataset["features"]
     local_time = dataset["local_time"]  # [T, P]
+    ancestry = dataset["ancestry"]
     T, P = local_time.shape
     S, F = features.shape
+    assert ancestry.shape == (S, S)
     if forecast_steps is None:  # During inference.
         if "dense" in model_type:
             weekly_strains = dataset["weekly_strains"]
@@ -542,9 +544,11 @@ def model(dataset, model_type, *, forecast_steps=None):
             "coef", dist.Logistic(torch.zeros(F), coef_scale).to_event(1)
         )  # [F]
         with strain_plate:
-            rate_loc_loc = 0.01 * coef @ features.T
-            rate_loc = pyro.sample(
-                "rate_loc", dist.Normal(rate_loc_loc, rate_loc_scale)
+            rate_walk = pyro.sample(
+                "rate_walk", dist.Logistic(0, rate_loc_scale)
+            )  # [S]
+            rate_loc = pyro.deterministic(
+                "rate_loc", 0.01 * coef @ features.T + rate_walk @ ancestry
             )  # [S]
             init_loc = pyro.sample("init_loc", dist.Normal(0, init_loc_scale))  # [S]
         with place_plate, strain_plate:
@@ -641,6 +645,8 @@ class InitLocFn:
         if name in (
             "rate_loc",
             "rate_loc_decentered",
+            "rate_walk",
+            "rate_walk_decentered",
             "coef",
             "coef_decentered",
             "rate",
@@ -674,6 +680,8 @@ class Guide(AutoGuideList):
             "coef_decentered",
             "rate_loc",
             "rate_loc_decentered",
+            "rate_walk",
+            "rate_walk_decentered",
             "init_loc",
             "init_loc_decentered",
         ]
