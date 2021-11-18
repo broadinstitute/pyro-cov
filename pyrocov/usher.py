@@ -8,6 +8,7 @@ import warnings
 from collections import defaultdict, namedtuple
 from typing import Dict, FrozenSet, Optional, Tuple
 
+import tqdm
 from Bio.Phylo.NewickIO import Parser, Writer
 
 from . import pangolin
@@ -151,14 +152,15 @@ def prune_mutation_tree(
     """
     with open(filename_in, "rb") as f:
         proto = parsimony_pb2.data.FromString(f.read())  # type: ignore
-    if len(proto.node_mutations) <= max_num_nodes:
+    num_pruned = len(proto.node_mutations) - max_num_nodes
+    if num_pruned < 0:
         shutil.copyfile(filename_in, filename_out)
         return
 
     # Extract phylogenetic tree.
     tree = next(Parser.from_string(proto.newick).parse())
     clades = list(tree.find_clades())
-    logger.info(f"Pruning a tree with {len(clades)} nodes")
+    logger.info(f"Pruning {num_pruned}/{len(clades)} nodes")
     assert len(clades) == len(set(clades))
     clade_to_id = {c: i for i, c in enumerate(clades)}
     assert len(proto.metadata) == len(clades)
@@ -182,7 +184,7 @@ def prune_mutation_tree(
     # Greedily prune nodes.
     heap = [(get_loss(c), clade_to_id[c]) for c in clades[1:]]  # don't prune the root
     heapq.heapify(heap)
-    while len(heap) + 1 > max_num_nodes:
+    for step in tqdm.tqdm(range(num_pruned)):
         # Find the clade with lowest loss.
         stale_loss, i = heapq.heappop(heap)
         clade = clades[i]
