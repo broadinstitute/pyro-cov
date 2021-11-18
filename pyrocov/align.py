@@ -106,6 +106,17 @@ class AlignDB:
     def schedule(self, sequence, *fn_args):
         """
         Schedule a task for a given input ``sequence``.
+        This asynchronously calls::
+
+            fn_args[0](*fn_args[1:], row)
+
+        where ``row`` is a dictionary with nextclade columns plus the
+        additional columns:
+
+        - ``lineage`` a coarse pango lineage.
+        - ``lineages`` a comma-deliminted string of ambiguous pango lineages.
+        - ``clade`` a fine clade name e.g. ``fine.1...3.2``.
+        - ``clades`` a comma-deliminted string of ambiguous clades.
         """
         key = fingerprint_sequence(sequence)
         if key not in self._already_aligned:

@@ -108,6 +108,8 @@ def decompress(name: str) -> str:
     """
     Decompress an alias like C.10 to a full lineage like B.1.1.1.10.
     """
+    if name.startswith("fine"):
+        return name
     try:
         return DECOMPRESS[name]
     except KeyError:
@@ -128,6 +130,8 @@ def compress(name: str) -> str:
     """
     Compress a full lineage like B.1.1.1.10 to an alias like C.10.
     """
+    if name.startswith("fine"):
+        return name
     try:
         return COMPRESS[name]
     except KeyError:
@@ -155,7 +159,7 @@ def get_parent(name: str) -> Optional[str]:
     its parent lineage.
     """
     assert decompress(name) == name, "expected a decompressed name"
-    if name == "A":
+    if name in ("A", "fine"):
         return None
     if name == "B":
         return "A"

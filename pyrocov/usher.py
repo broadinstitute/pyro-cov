@@ -157,7 +157,7 @@ def prune_mutation_tree(
     num_pruned = len(proto.node_mutations) - max_num_nodes
     if num_pruned < 0:
         shutil.copyfile(filename_in, filename_out)
-        return
+        return {}
 
     # Extract phylogenetic tree.
     tree = next(Parser.from_string(proto.newick).parse())
