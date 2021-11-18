@@ -1,12 +1,13 @@
 # Copyright Contributors to the Pyro-Cov project.
 # SPDX-License-Identifier: Apache-2.0
 
+import heapq
 import logging
 import warnings
 from collections import defaultdict, namedtuple
 from typing import Dict, FrozenSet, Tuple
 
-from Bio.Phylo.NewickIO import Parser
+from Bio.Phylo.NewickIO import Parser, Writer
 
 from . import pangolin
 from .external.usher import parsimony_pb2
@@ -81,8 +82,9 @@ def load_mutation_tree(filename: str) -> Dict[str, FrozenSet[Mutation]]:
 
 def refine_mutation_tree(filename_in: str, filename_out: str) -> Dict[str, str]:
     """
-    Refines a mutation tree from pango lineages like B.1.1 to full node
-    addresses like fine.0.12.4.1.
+    Refines a mutation tree clade metadata from pango lineages like B.1.1 to
+    full node addresses like fine.0.12.4.1. The tree structure remains
+    unchanged.
     """
     with open(filename_in, "rb") as f:
         proto = parsimony_pb2.data.FromString(f.read())  # type: ignore
@@ -90,6 +92,7 @@ def refine_mutation_tree(filename_in: str, filename_out: str) -> Dict[str, str]:
     # Extract phylogenetic tree.
     tree = next(Parser.from_string(proto.newick).parse())
     clades = list(tree.find_clades())
+    logger.info(f"Refining a tree with {len(clades)} nodes")
     assert len(proto.metadata) == len(clades)
     assert len(proto.node_mutations) == len(clades)
     metadata = dict(zip(clades, proto.metadata))
@@ -131,6 +134,78 @@ def refine_mutation_tree(filename_in: str, filename_out: str) -> Dict[str, str]:
     logger.info(f"Found {len(clades) - len(fine_to_coarse)} clones")
     logger.info(f"Refined {len(set(fine_to_coarse.values()))} -> {len(fine_to_coarse)}")
     return fine_to_coarse
+
+
+def prune_mutation_tree(
+    filename_in: str,
+    filename_out: str,
+    weights: Dict[str, int],
+    max_num_nodes: int,
+) -> None:
+    """
+    Condenses a mutation tree by greedily pruning nodes with least value
+    under the error-minimizing objective function::
+
+        value(node) = num_mutations(node) * weights(node)
+    """
+    with open(filename_in, "rb") as f:
+        proto = parsimony_pb2.data.FromString(f.read())  # type: ignore
+
+    # Extract phylogenetic tree.
+    tree = next(Parser.from_string(proto.newick).parse())
+    clades = list(tree.find_clades())
+    logger.info(f"Pruning a tree with {len(clades)} nodes")
+    assert len(clades) == len(set(clades))
+    clade_to_id = {c: i for i, c in enumerate(clades)}
+    assert len(proto.metadata) == len(clades)
+    assert len(proto.node_mutations) == len(clades)
+    metadata = dict(zip(clades, proto.metadata))
+    mutations = dict(zip(clades, proto.node_mutations))
+
+    # Initialize weights and topology.
+    weights = defaultdict(
+        float, {c: weights.get(m.clade, 0) for c, m in metadata.items() if m.clade}
+    )
+    parents = {c: parent for parent in clades for c in parent.clades}
+    assert tree.root not in parents
+
+    def get_loss(clade):
+        return weights[clade] * len(mutations[clade].mutation)
+
+    # Greedily prune nodes.
+    heap = [(get_loss(c), clade_to_id[c]) for c in clades[1:]]  # don't prune the root
+    heapq.heapify(heap)
+    while len(heap) + 1 > max_num_nodes:
+        # Find the clade with lowest loss.
+        stale_loss, i = heapq.heappop(heap)
+        clade = clades[i]
+        loss = get_loss(clade)
+        while loss != stale_loss:
+            # Reinsert clades whose loss was stale.
+            stale_loss, i = heapq.heappushpop(heap, (loss, i))
+            clade = clades[i]
+            loss = get_loss(clade)
+
+        # Prune this clade.
+        parent = parents.pop(clade)
+        weights[parent] += weights.pop(clade, 0)  # makes the parent loss stale
+        parent.clades.remove(clade)
+        parent.clades.extend(clade.clades)
+        mutation = mutations.pop(clade).mutation
+        for child in clade.clades:
+            parents[child] = parent
+            mutations[child].mutation.extend(mutation)
+    clades = list(tree.find_clades())
+    assert len(clades) <= max_num_nodes
+
+    # Create the pruned proto.
+    proto.newick = next(iter(Writer([tree]).to_strings()))
+    del proto.metadata[:]
+    del proto.node_mutations[:]
+    proto.metadata.extend(metadata[clade] for clade in clades)
+    proto.node_mutations.extend(mutations[clade] for clade in clades)
+    with open(filename_out, "wb") as f:
+        f.write(proto.SerializeToString())
 
 
 def apply_mutations(ref: str, mutations: FrozenSet[Mutation]) -> str:
