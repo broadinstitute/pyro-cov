@@ -191,10 +191,13 @@ def prune_mutation_tree(
         weights[parent] += weights.pop(clade, 0)  # makes the parent loss stale
         parent.clades.remove(clade)
         parent.clades.extend(clade.clades)
-        mutation = mutations.pop(clade).mutation
+        mutation = list(mutations.pop(clade).mutation)
         for child in clade.clades:
             parents[child] = parent
-            mutations[child].mutation.extend(mutation)
+            m = mutations[child].mutation
+            cat = mutation + list(m)  # order so as to be compatible with reversions
+            del m[:]
+            m.extend(cat)
     clades = list(tree.find_clades())
     assert len(clades) <= max_num_nodes
 
