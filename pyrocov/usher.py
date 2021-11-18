@@ -3,9 +3,10 @@
 
 import heapq
 import logging
+import shutil
 import warnings
 from collections import defaultdict, namedtuple
-from typing import Dict, FrozenSet, Tuple
+from typing import Dict, FrozenSet, Optional, Tuple
 
 from Bio.Phylo.NewickIO import Parser, Writer
 
@@ -139,8 +140,8 @@ def refine_mutation_tree(filename_in: str, filename_out: str) -> Dict[str, str]:
 def prune_mutation_tree(
     filename_in: str,
     filename_out: str,
-    weights: Dict[str, int],
     max_num_nodes: int,
+    weights: Optional[Dict[str, int]] = None,
 ) -> None:
     """
     Condenses a mutation tree by greedily pruning nodes with least value
@@ -150,6 +151,9 @@ def prune_mutation_tree(
     """
     with open(filename_in, "rb") as f:
         proto = parsimony_pb2.data.FromString(f.read())  # type: ignore
+    if len(proto.node_mutations) <= max_num_nodes:
+        shutil.copyfile(filename_in, filename_out)
+        return
 
     # Extract phylogenetic tree.
     tree = next(Parser.from_string(proto.newick).parse())
@@ -163,9 +167,12 @@ def prune_mutation_tree(
     mutations = dict(zip(clades, proto.node_mutations))
 
     # Initialize weights and topology.
-    weights = defaultdict(
-        float, {c: weights.get(m.clade, 0) for c, m in metadata.items() if m.clade}
-    )
+    if weights is None:
+        weights = {c: 1 for c in clades}
+    else:
+        weights = {
+            c: weights.get(m.clade, 0) if m.clade else 0 for c, m in metadata.items()
+        }
     parents = {c: parent for parent in clades for c in parent.clades}
     assert tree.root not in parents
 
@@ -199,7 +206,7 @@ def prune_mutation_tree(
             del m[:]
             m.extend(cat)
     clades = list(tree.find_clades())
-    assert len(clades) <= max_num_nodes
+    assert len(clades) == max_num_nodes
 
     # Create the pruned proto.
     proto.newick = next(iter(Writer([tree]).to_strings()))
