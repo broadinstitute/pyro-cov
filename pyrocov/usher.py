@@ -143,12 +143,14 @@ def prune_mutation_tree(
     filename_out: str,
     max_num_nodes: int,
     weights: Optional[Dict[str, int]] = None,
-) -> None:
+) -> Dict[str, str]:
     """
     Condenses a mutation tree by greedily pruning nodes with least value
     under the error-minimizing objective function::
 
         value(node) = num_mutations(node) * weights(node)
+
+    Returns a dict mapping old clade names to new clade names.
     """
     with open(filename_in, "rb") as f:
         proto = parsimony_pb2.data.FromString(f.read())  # type: ignore
@@ -167,6 +169,7 @@ def prune_mutation_tree(
     assert len(proto.node_mutations) == len(clades)
     metadata = dict(zip(clades, proto.metadata))
     mutations = dict(zip(clades, proto.node_mutations))
+    old_to_new = {}
 
     # Initialize weights and topology.
     if weights is None:
@@ -207,6 +210,7 @@ def prune_mutation_tree(
             cat = mutation + list(m)  # order so as to be compatible with reversions
             del m[:]
             m.extend(cat)
+        old_to_new[clade] = parent
     clades = list(tree.find_clades())
     assert len(clades) == max_num_nodes
 
@@ -218,6 +222,19 @@ def prune_mutation_tree(
     proto.node_mutations.extend(mutations[clade] for clade in clades)
     with open(filename_out, "wb") as f:
         f.write(proto.SerializeToString())
+
+    # Collapse chains to keep complexity linear.
+    def union_find(k):
+        v = old_to_new[k]
+        if v in old_to_new:
+            v = old_to_new[k] = union_find(v)
+        return v
+
+    return {
+        metadata[old].clade: metadata[union_find(old)].clade
+        for old in old_to_new
+        if metadata[old].clade
+    }
 
 
 def apply_mutations(ref: str, mutations: FrozenSet[Mutation]) -> str:
