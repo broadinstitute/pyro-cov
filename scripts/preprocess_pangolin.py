@@ -3,26 +3,75 @@
 
 import argparse
 import logging
+import math
 import os
+import pickle
+from collections import defaultdict
 
 import torch
 
-from pyrocov.align import NEXTSTRAIN_DATA, PANGOLEARN_DATA, AlignDB
-from pyrocov.usher import apply_mutations, load_mutation_tree
 from pyrocov import pangolin
+from pyrocov.align import NEXTSTRAIN_DATA, AlignDB
+from pyrocov.usher import apply_mutations, load_mutation_tree, prune_mutation_tree
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(format="%(relativeCreated) 9d %(message)s", level=logging.INFO)
 
 
+def prune_tree(args, coarse_to_fine, columns):
+    # To ensure pango lineages remain distinct, set their weights to infinity.
+    weights = {fine: math.inf for fine in coarse_to_fine.values()}
+
+    # Add weights of ambiguous clades.
+    for clades in columns["clades"]:
+        clades = clades.split(",")
+        weight = 1 / len(clades)
+        for clade in clades:
+            weights[clade] += weight
+
+    # Prune the tree, minimizing the number of incorrect mutations.
+    args.max_num_clades = max(args.max_num_clades, len(coarse_to_fine))
+    tree_filename = f"results/lineageTree.{args.max_num_clades}.pb"
+    fine_to_meso = prune_mutation_tree(
+        args.tree_file_in, tree_filename, args.max_num_clades, weights
+    )
+    return fine_to_meso, tree_filename
+
+
 def main(args):
+    # Extract mappings between coarse lineages and fine clades.
+    db = AlignDB()
+    fine_to_coarse = db.fine_to_coarse.copy()
+    coarse_to_fines = defaultdict(list)
+    for fine, coarse in db.fine_to_coarse.items():
+        coarse_to_fines[coarse].append(fine)
+    # Choose the basal representative.
+    coarse_to_fine = {c: min(fs) for c, fs in coarse_to_fines.items()}
+
+    # Prune tree, updating data structures to use meso-scale clades.
+    logger.info(f"Loading {args.columns_file_in}")
+    with open(args.columns_file_in, "rb") as f:
+        columns = pickle.load(f)
+    fine_to_meso, tree_filename = prune_tree(args, coarse_to_fine, columns)
+    fine_to_coarse = {fine_to_meso.get(f, f): c for f, c in fine_to_coarse.items()}
+    coarse_to_fine = {c: fine_to_meso.get(f, f) for c, f in coarse_to_fine.items()}
+    columns["clade"] = [fine_to_meso.get(c, c) for c in columns["clades"]]
+    columns["clades"] = [
+        ",".join(fine_to_meso.get(c, c) for c in cs.split(","))
+        for cs in columns["clades"]
+    ]
+    if not args.columns_file_out:
+        args.columns_file_out = "results/columns.{args.max_num_clades}.pkl"
+    with open(args.columns_file_out, "wb") as f:
+        pickle.dump(columns, f)
+    logger.info(f"Saved {args.columns_file_out}")
+
     # Extract mutations from an annotated tree.
-    nuc_mutations_by_lineage = load_mutation_tree(args.tree_file_in)
-    assert nuc_mutations_by_lineage
-    nuc_mutations = frozenset(m for ms in nuc_mutations_by_lineage.values() for m in ms)
+    nuc_mutations_by_clade = load_mutation_tree(tree_filename)
+    assert nuc_mutations_by_clade
+    nuc_mutations = frozenset(m for ms in nuc_mutations_by_clade.values() for m in ms)
     logger.info(
-        f"Found {len(nuc_mutations)} mutations in "
-        f"{len(nuc_mutations_by_lineage)} lineages"
+        f"Found {len(nuc_mutations)} mutations in {len(nuc_mutations_by_clade)} clades"
     )
 
     # Load reference sequence.
@@ -31,35 +80,34 @@ def main(args):
     assert len(ref) == 29903, len(ref)
 
     # Convert from nucleotide mutations to amino acid mutations.
-    aa_mutations_by_lineage = {}
+    aa_mutations_by_clade = {}
 
-    def collect_mutations(lineage, row):
+    def collect_mutations(clade, row):
         ms = row["aaSubstitutions"]
-        aa_mutations_by_lineage[lineage] = ms.split(",") if ms else []
+        aa_mutations_by_clade[clade] = ms.split(",") if ms else []
 
-    logger.info(f"Aligning {len(nuc_mutations_by_lineage)} sequences with nextclade")
-    db = AlignDB()
-    for lineage, mutations in sorted(nuc_mutations_by_lineage.items()):
+    logger.info(f"Aligning {len(nuc_mutations_by_clade)} sequences with nextclade")
+    for clade, mutations in sorted(nuc_mutations_by_clade.items()):
         seq = apply_mutations(ref, mutations)
-        db.schedule(seq, collect_mutations, lineage)
+        db.schedule(seq, collect_mutations, clade)
     db.wait()
 
     # Create dense aa features.
-    lineages = sorted(nuc_mutations_by_lineage)
-    lineage_ids = {k: i for i, k in enumerate(lineages)}
-    aa_mutations = sorted(set(m for ms in aa_mutations_by_lineage.values() for m in ms))
+    clades = sorted(nuc_mutations_by_clade)
+    clade_ids = {k: i for i, k in enumerate(clades)}
+    aa_mutations = sorted(set(m for ms in aa_mutations_by_clade.values() for m in ms))
     logger.info(f"Found {len(aa_mutations)} amino acid mutations")
     mutation_ids = {k: i for i, k in enumerate(aa_mutations)}
-    aa_features = torch.zeros(len(lineage_ids), len(mutation_ids), dtype=torch.bool)
-    for lineage, ms in aa_mutations_by_lineage.items():
-        i = lineage_ids[lineage]
+    aa_features = torch.zeros(len(clade_ids), len(mutation_ids), dtype=torch.bool)
+    for clade, ms in aa_mutations_by_clade.items():
+        i = clade_ids[clade]
         for m in ms:
             j = mutation_ids[m]
             aa_features[i, j] = True
 
     # Create a dense ancestry matrix.
-    ancestry = torch.eye(len(lineages))
-    for child, parent in pangolin.find_edges(lineages):
+    ancestry = torch.eye(len(clades))
+    for child, parent in pangolin.find_edges(clades):
         ancestry[parent, child] = 1
     while True:  # Transitively close.
         square = (ancestry @ ancestry).clamp_(max=1)
@@ -68,24 +116,27 @@ def main(args):
         ancestry = square
 
     # Create dense nucleotide features.
-    nuc_mutations_by_lineage = {
-        lineage: [f"{m.ref}{m.position}{m.mut}" for m in ms]
-        for lineage, ms in nuc_mutations_by_lineage.items()
+    nuc_mutations_by_clade = {
+        clade: [f"{m.ref}{m.position}{m.mut}" for m in ms]
+        for clade, ms in nuc_mutations_by_clade.items()
     }
-    nuc_mutations = sorted(
-        set(m for ms in nuc_mutations_by_lineage.values() for m in ms)
-    )
+    nuc_mutations = sorted(set(m for ms in nuc_mutations_by_clade.values() for m in ms))
     mutation_ids = {k: i for i, k in enumerate(nuc_mutations)}
-    nuc_features = torch.zeros(len(lineage_ids), len(mutation_ids), dtype=torch.bool)
-    for lineage, ms in nuc_mutations_by_lineage.items():
-        i = lineage_ids[lineage]
+    nuc_features = torch.zeros(len(clade_ids), len(mutation_ids), dtype=torch.bool)
+    for clade, ms in nuc_mutations_by_clade.items():
+        i = clade_ids[clade]
         for m in ms:
             j = mutation_ids[m]
             nuc_features[i, j] = True
 
-    result = {
-        "lineages": lineages,
+    # Save features.
+    if not args.features_file_out:
+        args.features_file_out = f"results/features.{args.max_num_clades}.pt"
+    features = {
+        "clades": clades,
         "ancestry": ancestry,
+        "clade_to_lineage": fine_to_coarse,
+        "lineage_to_clade": coarse_to_fine,
         "aa_mutations": aa_mutations,
         "aa_features": aa_features,
         "nuc_mutations": nuc_mutations,
@@ -96,14 +147,15 @@ def main(args):
         f"{tuple(nuc_features.shape)} nucleotide features "
         f"to {args.features_file_out}"
     )
-    torch.save(result, args.features_file_out)
+    torch.save(features, args.features_file_out)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Preprocess pangolin mutations")
-    parser.add_argument(
-        "--tree-file-in", default=os.path.join(PANGOLEARN_DATA, "lineageTree.pb")
-    )
-    parser.add_argument("--features-file-out", default="results/usher.features.pt")
+    parser.add_argument("--columns-file-in", default="results/usher.columns.pkl")
+    parser.add_argument("--tree-file-in", default="results/aligndb/lineageTree.fine.pb")
+    parser.add_argument("--features-file-out", default="")
+    parser.add_argument("--columns-file-out", default="")
+    parser.add_argument("--max-num-clades", type=int, default=10000)
     args = parser.parse_args()
     main(args)

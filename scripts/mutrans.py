@@ -63,6 +63,7 @@ def hashable_to_holdout(holdout):
 
 def _load_data_filename(args, **kwargs):
     parts = ["data", "double" if args.double else "single"]
+    parts.append(str(args.max_num_clades))
     parts.append(str(args.min_region_size))
     parts.append("ambi" if args.ambiguous else "best")
     for k, v in sorted(kwargs.get("include", {}).items()):
@@ -80,6 +81,8 @@ def load_data(args, **kwargs):
     """
     return mutrans.load_gisaid_data(
         device=args.device,
+        columns_filename=f"results/columns.{args.max_num_clades}.pkl",
+        features_filename=f"results/features.{args.max_num_clades}.pt",
         min_region_size=args.min_region_size,
         ambiguous=args.ambiguous,
         **kwargs,
@@ -138,7 +141,7 @@ def fit_svi(
         num_samples=args.num_samples,
     )
 
-    if "lineage" in holdout.get("exclude", {}):
+    if "clade" in holdout.get("exclude", {}):
         # Save only what's needed to evaluate loo predictions.
         result = {
             "median": {
@@ -199,7 +202,7 @@ def backtesting(args, default_config):
         result["weekly_cases"] = dataset["weekly_cases"]
         result["weekly_strains_shape"] = tuple(dataset["weekly_strains"].shape)
         result["location_id"] = dataset["location_id"]
-        result["lineage_id_inv"] = dataset["lineage_id_inv"]
+        result["clade_id_inv"] = dataset["clade_id_inv"]
 
         result = torch_map(result, device="cpu", dtype=torch.float)  # to save space
         results[config] = result
@@ -223,13 +226,14 @@ def backtesting(args, default_config):
 
 def vary_leaves(args, default_config):
     """
-    Run a leave-one-out experiment over a set of leaf lineages, saving results
+    Run a leave-one-out experiment over a set of leaf clades, saving results
     to ``results/mutrans.vary_leaves.pt``.
     """
+    # FIXME update using usher_features["coarse_to_fine"]
     # Load a single common dataset.
     dataset = load_data(args)
-    lineage_id = {name: i for i, name in enumerate(dataset["lineage_id_inv"])}
-    descendents = pangolin.find_descendents(dataset["lineage_id_inv"])
+    clade_id = {name: i for i, name in enumerate(dataset["clade_id_inv"])}
+    descendents = pangolin.find_descendents(dataset["clade_id_inv"])
     if args.only_gene:
         for m in dataset["mutations"]:
             assert m.startswith(args.only_gene + ":"), m
@@ -263,9 +267,9 @@ def vary_leaves(args, default_config):
         logger.info(f"Config: {config}")
 
         # Construct a leave-one-out dataset by zeroing out a subclade.
-        clade = [lineage_id[lineage]]
+        clade = [clade_id[lineage]]
         for descendent in descendents[lineage]:
-            clade.append(lineage_id[descendent])
+            clade.append(clade_id[descendent])
         loo_dataset = dataset.copy()
         loo_dataset["weekly_strains"] = dataset["weekly_strains"].clone()
         loo_dataset["weekly_strains"][:, :, clade] = 0
@@ -274,7 +278,7 @@ def vary_leaves(args, default_config):
         result = fit_svi(args, loo_dataset, *config)
         result["mutations"] = dataset["mutations"]
         result["location_id"] = dataset["location_id"]
-        result["lineage_id_inv"] = dataset["lineage_id_inv"]
+        result["clade_id_inv"] = dataset["clade_id_inv"]
         results[config] = result
 
         # Cleanup
@@ -509,7 +513,7 @@ def main(args):
         result["weekly_cases"] = dataset["weekly_cases"]
         result["weekly_strains_shape"] = tuple(dataset["weekly_strains"].shape)
         result["location_id"] = dataset["location_id"]
-        result["lineage_id_inv"] = dataset["lineage_id_inv"]
+        result["clade_id_inv"] = dataset["clade_id_inv"]
 
         result = torch_map(result, device="cpu", dtype=torch.float)  # to save space
         results[config] = result
@@ -571,6 +575,7 @@ if __name__ == "__main__":
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--test", action="store_true")
     parser.add_argument("--debug", action="store_true")
+    parser.add_argument("--max-num-clades", default=10000, type=int)
     args = parser.parse_args()
     args.device = "cuda" if args.cuda else "cpu"
     main(args)

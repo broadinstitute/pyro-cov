@@ -149,7 +149,7 @@ def load_gisaid_data(
 ) -> dict:
     """
     Loads the two files columns_filename and features_filename,
-    converts teh input to PyTorch tensors and truncates the data according to
+    converts the input to PyTorch tensors and truncates the data according to
     ``include`` and ``exclude``.
 
     :param str device: torch device to use
@@ -172,21 +172,10 @@ def load_gisaid_data(
 
     # Load column data.
     with open(columns_filename, "rb") as f:
-        raw_columns = pickle.load(f)
-    # Filter to known lineages.
-    columns = defaultdict(list)
-    for row in zip(*raw_columns.values()):
-        row = dict(zip(raw_columns, row))
-        if row["lineage"] is None:
-            continue
-        for k, v in row.items():
-            columns[k].append(v)
-    del raw_columns
-    columns = dict(columns)
+        columns = pickle.load(f)
     # Clean up location ids (temporary; this should be done in preprocess_gisaid.py).
     columns["location"] = list(map(pyrocov.geo.gisaid_normalize, columns["location"]))
-
-    logger.info("Training on {} rows with columns:".format(len(columns["day"])))
+    logger.info(f"Training on {len(columns['day'])} rows with columns:")
     logger.info(", ".join(columns.keys()))
 
     # Aggregate regions smaller than min_region_size to country level.
@@ -227,17 +216,11 @@ def load_gisaid_data(
         features = features[:, :1] * 0
     logger.info("Loaded {} feature matrix".format(" x ".join(map(str, features.shape))))
 
-    # Get lineages
-    lineage_id_inv = usher_features["lineages"]
+    # Construct the list of clades.
+    lineage_id_inv = usher_features["clades"]
     lineage_id = {k: i for i, k in enumerate(lineage_id_inv)}
-    if any(lineage.startswith("fine") for lineage in lineage_id_inv):
-        # Use fine lineages.
-        lineages = columns["clade"]
-        histograms = columns["clades"]
-    else:
-        # Use coarse pango lineages.
-        lineages = columns["lineage"]
-        histograms = columns["lineages"]
+    lineages = columns["clade"]
+    histograms = columns["clades"]
 
     # Generate sparse_data.
     sparse_data: dict = Counter()

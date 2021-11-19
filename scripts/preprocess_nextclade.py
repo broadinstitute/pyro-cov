@@ -112,10 +112,10 @@ def main(args):
         if llcc is None:
             continue  # drop the row
         lineage, lineages, clade, clades = llcc
-        columns["lineage"].append(lineage)
-        columns["lineages"].append(lineages)
         columns["clade"].append(clade)
         columns["clades"].append(clades)
+        columns["lineage"].append(lineage)
+        columns["lineages"].append(lineages)
         for k, v in row.items():
             columns[k].append(v)
     del old_columns
