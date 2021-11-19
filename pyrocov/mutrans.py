@@ -217,32 +217,35 @@ def load_gisaid_data(
     logger.info("Loaded {} feature matrix".format(" x ".join(map(str, features.shape))))
 
     # Construct the list of clades.
-    lineage_id_inv = usher_features["clades"]
-    lineage_id = {k: i for i, k in enumerate(lineage_id_inv)}
-    lineages = columns["clade"]
+    clade_id_inv = usher_features["clades"]
+    clade_id = {k: i for i, k in enumerate(clade_id_inv)}
+    clades = columns["clade"]
     histograms = columns["clades"]
+    ancestry = usher_features["ancestry"].to(
+        device=device, dtype=torch.get_default_dtype()
+    )
 
     # Generate sparse_data.
     sparse_data: dict = Counter()
     sparse_hist: dict = defaultdict(list)
     location_id: dict = OrderedDict()
-    skipped_lineages = set()
+    skipped_clades = set()
     num_obs = 0
-    for day, location, lineage, histogram in zip(
-        columns["day"], columns["location"], lineages, histograms
+    for day, location, clade, histogram in zip(
+        columns["day"], columns["location"], clades, histograms
     ):
-        if lineage not in lineage_id:
-            if lineage not in skipped_lineages:
-                skipped_lineages.add(lineage)
-                if not lineage.startswith("fine"):
-                    logger.warning(f"WARNING skipping unsampled lineage {lineage}")
+        if clade not in clade_id:
+            if clade not in skipped_clades:
+                skipped_clades.add(clade)
+                if not clade.startswith("fine"):
+                    logger.warning(f"WARNING skipping unsampled clade {clade}")
             continue
 
         # Filter by include/exclude
         row = {
             "location": location,
             "day": day,
-            "lineage": lineage,
+            "clade": clade,
         }
         if not all(re.search(v, row[k]) for k, v in include.items()):
             continue
@@ -268,19 +271,19 @@ def load_gisaid_data(
         num_obs += 1
         t = day // TIMESTEP
         p = location_id.setdefault(location, len(location_id))
-        if lineage == histogram or not ambiguous:
+        if clade == histogram or not ambiguous:
             # Save an unambiguous observation.
-            s = lineage_id[lineage]
+            s = clade_id[clade]
             sparse_data[t, p, s] += 1
         else:
             # Save an ambiguous observation.
             i = len(sparse_hist["size"])
             sparse_hist["size"].append(len(histogram))
-            for lineage in histogram.split(","):
-                s = lineage_id[lineage]
+            for clade in histogram.split(","):
+                s = clade_id[clade]
                 sparse_hist["destin"].append(i)
                 sparse_hist["source"].append((t, p, s))
-    logger.warning(f"WARNING skipped {len(skipped_lineages)} unsampled lineages")
+    logger.warning(f"WARNING skipped {len(skipped_clades)} unsampled clades")
 
     # Generate weekly_strains tensor from sparse_data.
     if end_day is not None:
@@ -288,15 +291,15 @@ def load_gisaid_data(
     else:
         T = 1 + max(columns["day"]) // TIMESTEP
     P = len(location_id)
-    S = len(lineage_id)
+    S = len(clade_id)
     weekly_strains = torch.zeros(T, P, S)
     for tps, n in sparse_data.items():
         weekly_strains[tps] = n
     logger.info(f"Dataset size [T x P x S] {T} x {P} x {S}")
 
     logger.info(
-        f"Keeping {num_obs}/{len(lineages)} rows "
-        f"(dropped {len(lineages) - int(num_obs)})"
+        f"Keeping {num_obs}/{len(clades)} rows "
+        f"(dropped {len(clades) - int(num_obs)})"
     )
 
     # Filter regions.
@@ -345,11 +348,12 @@ def load_gisaid_data(
         "mutations": mutations,
         "weekly_strains": weekly_strains,
         "features": features,
-        "lineage_id": lineage_id,
-        "lineage_id_inv": lineage_id_inv,
+        "clade_id": clade_id,
+        "clade_id_inv": clade_id_inv,
         "local_time": local_time,
         "sparse_counts": sparse_counts,
         "sparse_hist": sparse_hist,
+        "ancestry": ancestry,
     }
 
 
@@ -391,8 +395,8 @@ def subset_gisaid_data(
         )
         new["weekly_strains"] = new["weekly_strains"].index_select(-1, ids)
         new["features"] = new["features"].index_select(0, ids)
-        new["lineage_id_inv"] = [new["lineage_id_inv"][i] for i in ids.tolist()]
-        new["lineage_id"] = {name: i for i, name in enumerate(new["lineage_id_inv"])}
+        new["clade_id_inv"] = [new["clade_id_inv"][i] for i in ids.tolist()]
+        new["clade_id"] = {name: i for i, name in enumerate(new["clade_id_inv"])}
         new["sparse_counts"] = _make_sparse(new["weekly_strains"])
 
     # Select mutations.
@@ -405,8 +409,8 @@ def subset_gisaid_data(
         "Selected {}/{} places, {}/{} strains, {}/{} mutations, {}/{} samples".format(
             len(new["location_id"]),
             len(old["location_id"]),
-            len(new["lineage_id"]),
-            len(old["lineage_id"]),
+            len(new["clade_id"]),
+            len(old["clade_id"]),
             len(new["mutations"]),
             len(old["mutations"]),
             int(new["weekly_strains"].sum()),
@@ -469,13 +473,13 @@ def load_jhu_data(gisaid_data: dict) -> dict:
 
 def model(dataset, model_type, *, forecast_steps=None):
     """
-    Bayesian regression model of lineage portions as a function of mutation features.
+    Bayesian regression model of clade portions as a function of mutation features.
 
     This function can be run in two different modes:
     - During training, ``forecast_steps=None`` and the model is conditioned on
       observed data.
     - During prediction (after training), the likelihood statement is omitted
-      and instead a ``probs`` tensor is recorded; this is the predicted lineage
+      and instead a ``probs`` tensor is recorded; this is the predicted clade
       portions in each (time, regin) bin.
     """
     # Tensor shapes are commented at at the end of some lines.
@@ -962,14 +966,14 @@ def log_stats(dataset: dict, result: dict) -> dict:
         stats[f"ΔlogR({name}) mean"] = m
         stats[f"ΔlogR({name}) std"] = s
 
-    # Growth rates of individual lineages.
+    # Growth rates of individual clades.
     try:
-        i = dataset["lineage_id"]["A"]
+        i = dataset["clade_id"]["A"]
         rate_A = result["mean"]["rate"][..., i].mean(0)
     except KeyError:
         rate_A = result["mean"]["rate"].median()
     for s in ["B.1.1.7", "B.1.617.2"]:
-        i = dataset["lineage_id"][s]
+        i = dataset["clade_id"][s]
         rate = result["median"]["rate"][..., i].mean()
         R_RA = (rate - rate_A).exp()
         logger.info(f"R({s})/R(A) = {R_RA:0.3g}")
@@ -1028,7 +1032,7 @@ def log_stats(dataset: dict, result: dict) -> dict:
         )
 
         for strain in strains:
-            s = dataset["lineage_id"][strain]
+            s = dataset["clade_id"][strain]
             stats[f"{place} {strain} MAE"] = mae[p, s]
             stats[f"{place} {strain} RMSE"] = mse[p, s].sqrt()
             logger.info(
