@@ -20,7 +20,7 @@ logging.basicConfig(format="%(relativeCreated) 9d %(message)s", level=logging.IN
 
 def prune_tree(args, coarse_to_fine, columns):
     # To ensure pango lineages remain distinct, set their weights to infinity.
-    weights = {fine: math.inf for fine in coarse_to_fine.values()}
+    weights = defaultdict(float, {fine: math.inf for fine in coarse_to_fine.values()})
 
     # Add weights of ambiguous clades.
     for clades in columns["clades"]:
@@ -61,7 +61,7 @@ def main(args):
         for cs in columns["clades"]
     ]
     if not args.columns_file_out:
-        args.columns_file_out = "results/columns.{args.max_num_clades}.pkl"
+        args.columns_file_out = f"results/columns.{args.max_num_clades}.pkl"
     with open(args.columns_file_out, "wb") as f:
         pickle.dump(columns, f)
     logger.info(f"Saved {args.columns_file_out}")
@@ -108,7 +108,7 @@ def main(args):
     # Create a dense ancestry matrix.
     ancestry = torch.eye(len(clades))
     for child, parent in pangolin.find_edges(clades):
-        ancestry[parent, child] = 1
+        ancestry[clade_ids[parent], clade_ids[child]] = 1
     while True:  # Transitively close.
         square = (ancestry @ ancestry).clamp_(max=1)
         if torch.allclose(ancestry, square):
@@ -148,6 +148,7 @@ def main(args):
         f"to {args.features_file_out}"
     )
     torch.save(features, args.features_file_out)
+    logger.info(f"Saved {args.features_file_out}")
 
 
 if __name__ == "__main__":
@@ -156,6 +157,6 @@ if __name__ == "__main__":
     parser.add_argument("--tree-file-in", default="results/aligndb/lineageTree.fine.pb")
     parser.add_argument("--features-file-out", default="")
     parser.add_argument("--columns-file-out", default="")
-    parser.add_argument("--max-num-clades", type=int, default=10000)
+    parser.add_argument("-c", "--max-num-clades", type=int, default=10000)
     args = parser.parse_args()
     main(args)

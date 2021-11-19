@@ -68,7 +68,9 @@ def main(args):
     mutation_counts = defaultdict(Counter)
     status_counts = defaultdict(Counter)
     db = AlignDB()
-    for line in open_tqdm(args.gisaid_file_in, "rt"):
+    for i, line in enumerate(open_tqdm(args.gisaid_file_in, "rt")):
+        if args.truncate and args.truncate <= i:
+            break
         datum = json.loads(line)
 
         # Filter to desired sequences.
@@ -140,5 +142,6 @@ if __name__ == "__main__":
     parser.add_argument("--columns-file-in", default="results/gisaid.columns.pkl")
     parser.add_argument("--columns-file-out", default="results/usher.columns.pkl")
     parser.add_argument("--counts-file-out", default="results/nextclade.counts.pkl")
+    parser.add_argument("--truncate", type=int)
     args = parser.parse_args()
     main(args)
