@@ -92,6 +92,7 @@ def load_data(args, **kwargs):
 def _fit_filename(name, *args):
     parts = [name]
     parts.append(str(args[0].min_region_size))
+    parts.append(str(args[0].max_num_clades))
     parts.append("ambi" if args[0].ambiguous else "best")
     for arg in args[2:]:
         if isinstance(arg, tuple):

@@ -343,7 +343,7 @@ def load_gisaid_data(
     local_time = local_time[:, None]
     local_time = local_time - (local_time * num_obs).sum(0) / num_obs.sum(0)
 
-    return {
+    dataset = {
         "location_id": location_id,
         "mutations": mutations,
         "weekly_strains": weekly_strains,
@@ -354,7 +354,10 @@ def load_gisaid_data(
         "sparse_counts": sparse_counts,
         "sparse_hist": sparse_hist,
         "ancestry": ancestry,
+        "lineage_to_clade": usher_features["lineage_to_clade"],
+        "clade_to_lineage": usher_features["clade_to_lineage"],
     }
+    return dataset
 
 
 def subset_gisaid_data(
@@ -511,7 +514,7 @@ def model(dataset, model_type, *, forecast_steps=None):
     if "reparam" in model_type:
         time_shift = pyro.param("time_shift", lambda: torch.zeros(P, S))  # [P, S]
         reparam["coef"] = LocScaleReparam()
-        reparam["rate_loc"] = LocScaleReparam()
+        reparam["rate_walk"] = LocScaleReparam()
         reparam["init_loc"] = LocScaleReparam()
         reparam["rate"] = LocScaleReparam()
         reparam["init"] = LocScaleReparam()
@@ -972,8 +975,9 @@ def log_stats(dataset: dict, result: dict) -> dict:
         rate_A = result["mean"]["rate"][..., i].mean(0)
     except KeyError:
         rate_A = result["mean"]["rate"].median()
-    for s in ["B.1.1.7", "B.1.617.2"]:
-        i = dataset["clade_id"][s]
+    for lineage in ["B.1.1.7", "B.1.617.2"]:
+        clade = dataset["lineage_to_clade"][lineage]
+        i = dataset["clade_id"][clade]
         rate = result["median"]["rate"][..., i].mean()
         R_RA = (rate - rate_A).exp()
         logger.info(f"R({s})/R(A) = {R_RA:0.3g}")
@@ -1013,7 +1017,7 @@ def log_stats(dataset: dict, result: dict) -> dict:
         # "England": ["B.1.1.7", "B.1.177", "B.1.1", "B.1"],
         # "USA / California": ["B.1.1.7", "B.1.429", "B.1.427", "B.1.2", "B.1", "P.1"],
     }
-    for place, strains in queries.items():
+    for place, lineages in queries.items():
         matches = [p for name, p in dataset["location_id"].items() if place in name]
         if not matches:
             continue
@@ -1031,16 +1035,17 @@ def log_stats(dataset: dict, result: dict) -> dict:
             )
         )
 
-        for strain in strains:
-            s = dataset["clade_id"][strain]
-            stats[f"{place} {strain} MAE"] = mae[p, s]
-            stats[f"{place} {strain} RMSE"] = mse[p, s].sqrt()
+        for lineage in lineages:
+            clade = dataset["lineage_to_clade"][lineage]
+            s = dataset["clade_id"][clade]
+            stats[f"{place} {lineage} MAE"] = mae[p, s]
+            stats[f"{place} {lineage} RMSE"] = mse[p, s].sqrt()
             logger.info(
                 "{} {}\tMAE = {:0.3g}, RMSE = {:0.3g}".format(
                     place,
-                    strain,
-                    stats[f"{place} {strain} MAE"],
-                    stats[f"{place} {strain} RMSE"],
+                    lineage,
+                    stats[f"{place} {lineage} MAE"],
+                    stats[f"{place} {lineage} RMSE"],
                 )
             )
 
