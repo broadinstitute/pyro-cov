@@ -234,7 +234,8 @@ def load_gisaid_data(
         if lineage not in lineage_id:
             if lineage not in skipped_lineages:
                 skipped_lineages.add(lineage)
-                logger.warning(f"WARNING skipping unsampled lineage {lineage}")
+                if not lineage.startswith("fine"):
+                    logger.warning(f"WARNING skipping unsampled lineage {lineage}")
             continue
 
         # Filter by include/exclude
@@ -279,6 +280,7 @@ def load_gisaid_data(
                 s = lineage_id[lineage]
                 sparse_hist["destin"].append(i)
                 sparse_hist["source"].append((t, p, s))
+    logger.warning(f"WARNING skipped {len(skipped_lineages)} unsampled lineages")
 
     # Generate weekly_strains tensor from sparse_data.
     if end_day is not None:
