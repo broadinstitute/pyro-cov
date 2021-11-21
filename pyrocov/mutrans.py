@@ -980,8 +980,8 @@ def log_stats(dataset: dict, result: dict) -> dict:
         i = dataset["clade_id"][clade]
         rate = result["median"]["rate"][..., i].mean()
         R_RA = (rate - rate_A).exp()
-        logger.info(f"R({s})/R(A) = {R_RA:0.3g}")
-        stats[f"R({s})/R(A)"] = R_RA
+        logger.info(f"R({lineage})/R(A) = {R_RA:0.3g}")
+        stats[f"R({lineage})/R(A)"] = R_RA
 
     # Accuracy of mutation-only model, ie without region-local effects.
     true = dataset["weekly_strains"] + 1e-20  # avoid nans
