@@ -67,6 +67,7 @@ GISAID_TO_JHU = {
     "caribbean": ("dominican republic",),  # most populous island
     "cayman islands": ("united kingdom", "cayman islands"),
     "canary islands": ("spain",),
+    "cote d ivoire": ("cote d'ivoire",),
     "cote divoire": ("cote d'ivoire",),
     "crimea": ("ukraine",),  # or "russia"?
     "curacao": ("netherlands", "curacao"),
@@ -129,8 +130,10 @@ GISAID_TO_JHU = {
     "wallis and futuna": ("france", "wallis and futuna islands"),
     "slovak republic": ("slovakia",),
     "the bahamas": ("bahamas",),
+    "timor leste": ("timor-leste",),
     "rio de janeiro": ("brazil",),
     "parana": ("brazil",),
+    "u.s virgin islands": ("us", "us virgin islands"),
     "u.s. virgin islands": ("us", "us virgin islands"),
     "wallis and futuna islands": ("france", "wallis and futuna islands"),
 }
