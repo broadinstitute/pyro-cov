@@ -45,7 +45,6 @@ test: lint data FORCE
 
 ###########################################################################
 # Main processing workflow
-# TODO convert this to a wdl pipeline
 
 update: FORCE
 	scripts/pull_gisaid.sh
@@ -72,12 +71,12 @@ analyze: FORCE
 
 push: FORCE
 	gsutil -m -o GSUtil:parallel_composite_upload_threshold=150M \
-	  rsync -r -P -x '.*\.json$$' \
+	  rsync -r -x '.*\.json$$' \
 	  $(shell readlink results)/ gs://pyro-cov/$(shell readlink results)/
 
 pull: FORCE
 	gsutil -m -o GSUtil:parallel_composite_upload_threshold=150M \
-	  rsync -r -P -x '.*\.json$$' \
+	  rsync -r -x '.*\.json$$' \
 	  gs://pyro-cov/$(shell readlink results)/ $(shell readlink results)/
 
 ###########################################################################
@@ -88,40 +87,3 @@ data:
 
 ssh:
 	gcloud compute ssh --project pyro-284215 --zone us-central1-c pyro-fritzo-vm-gpu -- -AX
-
-pull-result:
-	gcloud compute scp --project pyro-284215 --zone us-central1-c \
-	  --recurse --compress \
-	  pyro-fritzo-vm-gpu:~/pyro-cov/results/mutrans.pt \
-	  results/
-
-# This data is needed for mutrans.ipynb
-pull-data:
-	gcloud compute scp --project pyro-284215 --zone us-central1-c \
-	  --recurse --compress \
-	  pyro-fritzo-vm-gpu:~/pyro-cov/results/\{usher.columns.pkl,gisaid.stats.pkl,usher.features.pt,nextclade.counts.pkl\} \
-	  results/
-
-pull-grid:
-	gcloud compute scp --project pyro-284215 --zone us-central1-c \
-          --recurse --compress \
-	  pyro-fritzo-vm-gpu:~/pyro-cov/results/grid_search.tsv \
-	  results/
-	gcloud compute scp --project pyro-284215 --zone us-central1-c \
-	  --recurse --compress \
-	  pyro-fritzo-vm-gpu:~/pyro-cov/results/mutrans.grid.pt \
-	  results/
-
-pull-gene:
-	gcloud compute scp --project pyro-284215 --zone us-central1-c \
-	  --recurse --compress \
-	  pyro-fritzo-vm-gpu:~/pyro-cov/results/{mutrans.vary_gene.pt,mutrans.vary_nsp.pt} \
-	  results/
-
-pull-leaves:
-	gcloud compute scp --project pyro-284215 --zone us-central1-c \
-	  --recurse --compress \
-	  pyro-fritzo-vm-gpu:~/pyro-cov/results/mutrans.vary_leaves.pt \
-	  results/
-
-FORCE:
