@@ -58,8 +58,8 @@ def main(args):
         if date < args.start_date:
             date = args.start_date  # Clip rows before start date.
         lineage = datum["covv_lineage"]
-        if lineage in (None, "None", "", "XA"):
-            continue  # Drop rows with unknown or ambiguous lineage.
+        if lineage in (None, "None", ""):
+            continue  # Drop rows with unknown lineage.
         try:
             lineage = pangolin.compress(lineage)
             lineage = pangolin.decompress(lineage)

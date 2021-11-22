@@ -84,3 +84,6 @@ data:
 
 ssh:
 	gcloud compute ssh --project pyro-284215 --zone us-central1-c pyro-fritzo-vm-gpu -- -AX
+
+FORCE:
+

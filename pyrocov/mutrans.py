@@ -363,7 +363,7 @@ def load_gisaid_data(
 def subset_gisaid_data(
     gisaid_dataset: dict,
     location_queries=None,
-    max_strains=math.inf,
+    max_clades=math.inf,
 ) -> dict:
     """
     Selects a small subset of data for exploratory fitting of a small model.
@@ -388,13 +388,13 @@ def subset_gisaid_data(
         new["weekly_strains"] = new["weekly_strains"].index_select(1, ids)
         new["local_time"] = new["local_time"].index_select(1, ids)
 
-    # Select strains.
-    if new["weekly_strains"].size(-1) > max_strains:
+    # Select clades.
+    if new["weekly_strains"].size(-1) > max_clades:
         ids = (
             new["weekly_strains"]
             .sum([0, 1])
             .sort(0, descending=True)
-            .indices[:max_strains]
+            .indices[:max_clades]
         )
         new["weekly_strains"] = new["weekly_strains"].index_select(-1, ids)
         new["features"] = new["features"].index_select(0, ids)
@@ -409,7 +409,7 @@ def subset_gisaid_data(
     new["features"] = new["features"].index_select(-1, ids)
 
     logger.info(
-        "Selected {}/{} places, {}/{} strains, {}/{} mutations, {}/{} samples".format(
+        "Selected {}/{} places, {}/{} clades, {}/{} mutations, {}/{} samples".format(
             len(new["location_id"]),
             len(old["location_id"]),
             len(new["clade_id"]),
@@ -505,7 +505,7 @@ def model(dataset, model_type, *, forecast_steps=None):
         dt = local_time[1] - local_time[0]
         local_time = t0 + dt * torch.arange(float(T))[:, None]
         assert local_time.shape == (T, P)
-    strain_plate = pyro.plate("strain", S, dim=-1)
+    clade_plate = pyro.plate("clade", S, dim=-1)
     place_plate = pyro.plate("place", P, dim=-2)
     time_plate = pyro.plate("time", T, dim=-3)
 
@@ -530,12 +530,12 @@ def model(dataset, model_type, *, forecast_steps=None):
         init_scale = pyro.sample("init_scale", dist.LogNormal(0, 2))
 
         # Assume relative growth rate depends strongly on mutations and weakly
-        # on strain and place. Assume initial infections depend strongly on
-        # strain and place.
+        # on clade and place. Assume initial infections depend strongly on
+        # clade and place.
         coef = pyro.sample(
             "coef", dist.Logistic(torch.zeros(F), coef_scale).to_event(1)
         )  # [F]
-        with strain_plate:
+        with clade_plate:
             rate_walk = pyro.sample(
                 "rate_walk", dist.Logistic(0, rate_loc_scale)
             )  # [S]
@@ -543,14 +543,14 @@ def model(dataset, model_type, *, forecast_steps=None):
                 "rate_loc", 0.01 * coef @ features.T + rate_walk @ ancestry
             )  # [S]
             init_loc = pyro.sample("init_loc", dist.Normal(0, init_loc_scale))  # [S]
-        with place_plate, strain_plate:
+        with place_plate, clade_plate:
             rate = pyro.sample("rate", dist.Normal(rate_loc, rate_scale))  # [P, S]
             init = pyro.sample("init", dist.Normal(init_loc, init_scale))  # [P, S]
 
         # Optionally predict probabilities (during prediction).
         if forecast_steps is not None:
             logits = init + rate * (time_shift + local_time[..., None])  # [T, P, S]
-            with time_plate, place_plate, strain_plate:
+            with time_plate, place_plate, clade_plate:
                 pyro.deterministic("probs", logits.softmax(-1))
             return
 
@@ -632,7 +632,7 @@ class InitLocFn:
             return torch.ones(shape)
         if name == "logits_scale":
             return torch.full(shape, 0.002)
-        if name in ("rate_loc_scale", "rate_scale", "place_scale", "strain_scale"):
+        if name in ("rate_loc_scale", "rate_scale", "place_scale", "clade_scale"):
             return torch.full(shape, 0.01)
         if name in (
             "rate_loc",
@@ -661,7 +661,7 @@ class Guide(AutoGuideList):
     def __init__(self, model, init_loc_fn, init_scale, rank):
         super().__init__(InitMessenger(init_loc_fn)(model))
 
-        # Jointly estimate globals, mutation coefficients, and strain coefficients.
+        # Jointly estimate globals, mutation coefficients, and clade coefficients.
         mvn = [
             "coef_scale",
             "rate_loc_scale",

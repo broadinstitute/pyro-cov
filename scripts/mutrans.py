@@ -21,7 +21,7 @@ logging.basicConfig(format="%(relativeCreated) 9d %(message)s", level=logging.IN
 
 def cached(filename: Union[str, Callable]):
     """
-    Simple utiltity to cache results based on filename.
+    Simple dicorator to cache function results based on filename.
     """
 
     def decorator(fn):
@@ -515,6 +515,8 @@ def main(args):
         result["weekly_strains_shape"] = tuple(dataset["weekly_strains"].shape)
         result["location_id"] = dataset["location_id"]
         result["clade_id_inv"] = dataset["clade_id_inv"]
+        result["clade_to_lineage"] = dataset["clade_to_lineage"]
+        result["lineage_to_clade"] = dataset["lineage_to_clade"]
 
         result = torch_map(result, device="cpu", dtype=torch.float)  # to save space
         results[config] = result
@@ -549,6 +551,7 @@ if __name__ == "__main__":
     parser.add_argument("--vary-nsp", action="store_true")
     parser.add_argument("--only-gene")
     parser.add_argument("--min-region-size", default=50, type=int)
+    parser.add_argument("--max-num-clades", default=2000, type=int)
     parser.add_argument("--ambiguous", action="store_true")
     parser.add_argument("-cd", "--cond-data", default="coef_scale=0.5")
     parser.add_argument("-m", "--model-type", default="reparam")
@@ -576,7 +579,6 @@ if __name__ == "__main__":
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--test", action="store_true")
     parser.add_argument("--debug", action="store_true")
-    parser.add_argument("--max-num-clades", default=10000, type=int)
     args = parser.parse_args()
     args.device = "cuda" if args.cuda else "cpu"
     main(args)

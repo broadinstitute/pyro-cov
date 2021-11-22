@@ -14,7 +14,7 @@ PANGOLIN_REPO = os.path.expanduser(
     os.environ.get("PANGOLIN_REPO", "~/github/cov-lineages/pango-designation")
 )
 
-# See https://cov-lineages.org/lineages.html or
+# See https://cov-lineages.org/lineages_list.html or
 # https://github.com/cov-lineages/pango-designation/blob/master/pango_designation/alias_key.json
 # This list can be updated via update_aliases() below.
 PANGOLIN_ALIASES = {
@@ -61,6 +61,8 @@ PANGOLIN_ALIASES = {
     "W": "B.1.177.53",
     "Y": "B.1.177.52",
     "Z": "B.1.177.50",
+    "XA": "B.1.1.7",
+    "XB": "B.1.634",
 }
 
 # From https://www.who.int/en/activities/tracking-SARS-CoV-2-variants/
