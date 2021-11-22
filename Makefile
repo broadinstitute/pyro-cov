@@ -62,10 +62,23 @@ preprocess: FORCE
 	time nice python scripts/preprocess_pangolin.py --max-num-clades=10000
 
 analyze: FORCE
-	python scripts/mutrans.py --vary-holdout
+	python scripts/mutrans.py --max-num-clades=2000 --vary-holdout
+	python scripts/mutrans.py --max-num-clades=5000 --vary-holdout
+	python scripts/mutrans.py --max-num-clades=10000 --vary-holdout
+	# python scripts/mutrans.py --vary-holdout
 	python scripts/mutrans.py --vary-gene
 	python scripts/mutrans.py --vary-nsp
-	python scripts/mutrans.py --vary-leaves=9999
+	# python scripts/mutrans.py --vary-leaves=9999
+
+push: FORCE
+	gsutil -m -o GSUtil:parallel_composite_upload_threshold=150M \
+	  rsync -r -P -x '.*\.json$$' \
+	  $(shell readlink results)/ gs://pyro-cov/$(shell readlink results)/
+
+pull: FORCE
+	gsutil -m -o GSUtil:parallel_composite_upload_threshold=150M \
+	  rsync -r -P -x '.*\.json$$' \
+	  gs://pyro-cov/$(shell readlink results)/ $(shell readlink results)/
 
 ###########################################################################
 # TODO remove these user-specific targets
@@ -74,10 +87,9 @@ data:
 	ln -sf ~/Google\ Drive\ File\ Stream/Shared\ drives/Pyro\ CoV data
 
 ssh:
-	gcloud compute ssh --project pyro-284215 --zone us-central1-c \
-	  pyro-fritzo-vm-gpu -- -AX
+	gcloud compute ssh --project pyro-284215 --zone us-central1-c pyro-fritzo-vm-gpu -- -AX
 
-pull:
+pull-result:
 	gcloud compute scp --project pyro-284215 --zone us-central1-c \
 	  --recurse --compress \
 	  pyro-fritzo-vm-gpu:~/pyro-cov/results/mutrans.pt \
