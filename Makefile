@@ -61,13 +61,10 @@ preprocess: FORCE
 	time nice python scripts/preprocess_pangolin.py --max-num-clades=10000
 
 analyze: FORCE
-	python scripts/mutrans.py --max-num-clades=2000 --vary-holdout
-	python scripts/mutrans.py --max-num-clades=5000 --vary-holdout
-	python scripts/mutrans.py --max-num-clades=10000 --vary-holdout
-	# python scripts/mutrans.py --vary-holdout
+	python scripts/mutrans.py --vary-holdout
 	python scripts/mutrans.py --vary-gene
 	python scripts/mutrans.py --vary-nsp
-	# python scripts/mutrans.py --vary-leaves=9999
+	python scripts/mutrans.py --vary-leaves=9999
 
 push: FORCE
 	gsutil -m -o GSUtil:parallel_composite_upload_threshold=150M \
