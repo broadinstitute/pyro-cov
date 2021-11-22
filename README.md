@@ -3,7 +3,9 @@
 
 # Pyro models for SARS-CoV-2 analysis
 
-This repository is described in the paper ["Analysis of 2.1 million SARS-CoV-2 genomes identifies mutations associated with transmissibility"](https://www.medrxiv.org/content/10.1101/2021.09.07.21263228v1). Figures and supplementary data for that paper are in the [paper/](paper/) directory.
+Supporting material for the paper ["Analysis of 2.1 million SARS-CoV-2 genomes identifies mutations associated with transmissibility"](https://www.medrxiv.org/content/10.1101/2021.09.07.21263228v1). Figures and supplementary data for that paper are in the [paper/](paper/) directory.
+
+This is open source, but we are not intending to support code for use by outside groups. To use outputs of this model, we recommend ingesting the tables [strains.tsv](paper/strains.tsv) and [mutations.tsv](paper/mutations.tsv).
 
 ## Reproducing
 
