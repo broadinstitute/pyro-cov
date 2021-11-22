@@ -199,9 +199,9 @@ def backtesting(args, default_config):
 
         # Generate results
         result["mutations"] = dataset["mutations"]
-        result["weekly_strains"] = dataset["weekly_strains"]
+        result["weekly_clades"] = dataset["weekly_clades"]
         result["weekly_cases"] = dataset["weekly_cases"]
-        result["weekly_strains_shape"] = tuple(dataset["weekly_strains"].shape)
+        result["weekly_clades_shape"] = tuple(dataset["weekly_clades"].shape)
         result["location_id"] = dataset["location_id"]
         result["clade_id_inv"] = dataset["clade_id_inv"]
 
@@ -209,7 +209,7 @@ def backtesting(args, default_config):
         results[config] = result
 
         # Ensure number of regions match
-        assert dataset["weekly_strains"].shape[1] == result["mean"]["probs"].shape[1]
+        assert dataset["weekly_clades"].shape[1] == result["mean"]["probs"].shape[1]
         assert dataset["weekly_cases"].shape[1] == result["mean"]["probs"].shape[1]
 
         # Cleanup
@@ -272,8 +272,8 @@ def vary_leaves(args, default_config):
         for descendent in descendents[lineage]:
             clade.append(clade_id[descendent])
         loo_dataset = dataset.copy()
-        loo_dataset["weekly_strains"] = dataset["weekly_strains"].clone()
-        loo_dataset["weekly_strains"][:, :, clade] = 0
+        loo_dataset["weekly_clades"] = dataset["weekly_clades"].clone()
+        loo_dataset["weekly_clades"][:, :, clade] = 0
 
         # Run SVI
         result = fit_svi(args, loo_dataset, *config)
@@ -510,9 +510,9 @@ def main(args):
 
         # Generate results
         result["mutations"] = dataset["mutations"]
-        result["weekly_strains"] = dataset["weekly_strains"]
+        result["weekly_clades"] = dataset["weekly_clades"]
         result["weekly_cases"] = dataset["weekly_cases"]
-        result["weekly_strains_shape"] = tuple(dataset["weekly_strains"].shape)
+        result["weekly_clades_shape"] = tuple(dataset["weekly_clades"].shape)
         result["location_id"] = dataset["location_id"]
         result["clade_id_inv"] = dataset["clade_id_inv"]
         result["clade_to_lineage"] = dataset["clade_to_lineage"]
@@ -522,7 +522,7 @@ def main(args):
         results[config] = result
 
         # Ensure number of regions match
-        assert dataset["weekly_strains"].shape[1] == result["mean"]["probs"].shape[1]
+        assert dataset["weekly_clades"].shape[1] == result["mean"]["probs"].shape[1]
         assert dataset["weekly_cases"].shape[1] == result["mean"]["probs"].shape[1]
 
         # Cleanup

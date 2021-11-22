@@ -42,14 +42,14 @@ def generate_forecast(fit, queries=None, future_fit=None):
 
     # Weekly strains is of size TxPxS (e.g. [29, 869, 1281])
     # It does not include forecast periods
-    weekly_strains = fit["weekly_strains"]
+    weekly_clades = fit["weekly_clades"]
 
-    # Trim weekly cases to size of weekly_strains
-    #   weekly_cases_trimmed = weekly_cases[: len(weekly_strains)]
+    # Trim weekly cases to size of weekly_clades
+    #   weekly_cases_trimmed = weekly_cases[: len(weekly_clades)]
 
     # forecast is anything we don't have data for
-    # both probs and weekly_strains are of dim TxPxS
-    forecast_steps = probs_orig.shape[0] - fit["weekly_strains"].shape[0]
+    # both probs and weekly_clades are of dim TxPxS
+    forecast_steps = probs_orig.shape[0] - fit["weekly_clades"].shape[0]
     assert forecast_steps >= 0
 
     # augment data with +/-1 SD
@@ -68,7 +68,7 @@ def generate_forecast(fit, queries=None, future_fit=None):
     )
 
     # get the strain identifiers
-    strain_ids = weekly_strains[:, ids].sum([0, 1]).sort(-1, descending=True).indices
+    strain_ids = weekly_clades[:, ids].sum([0, 1]).sort(-1, descending=True).indices
 
     # get date_range
     date_range = mutrans.date_range(len(fit["mean"]["probs"]))
@@ -80,12 +80,12 @@ def generate_forecast(fit, queries=None, future_fit=None):
         "predicted": predicted,
         "location_id": location_id,
         "weekly_cases": weekly_cases,
-        "weekly_strains": weekly_strains,
+        "weekly_clades": weekly_clades,
         "lineage_id_inv": fit["lineage_id_inv"],
         "weekly_cases_future": future_fit["weekly_cases"]
         if future_fit is not None
         else None,
-        "weekly_strains_future": future_fit["weekly_strains"]
+        "weekly_clades_future": future_fit["weekly_clades"]
         if future_fit is not None
         else None,
     }
@@ -109,18 +109,18 @@ def get_forecast_values(forecast):
     predicted = forecast["predicted"]
     location_id = forecast["location_id"]
     weekly_cases = forecast["weekly_cases"]  # T x P
-    weekly_strains = forecast["weekly_strains"]  # T x P x S
+    weekly_clades = forecast["weekly_clades"]  # T x P x S
     lineage_id_inv = forecast["lineage_id_inv"]
 
     weekly_cases_future = forecast["weekly_cases_future"]
-    weekly_strains_future = forecast["weekly_strains_future"]
+    weekly_clades_future = forecast["weekly_clades_future"]
 
     # log input shapes
     logging.debug(f"date_range shape {date_range.shape}")
     logging.debug(f"predicted shape {predicted.shape}")
     logging.debug(f"queries length {len(queries)}")
     logging.debug(f"weekly_cases shape {tuple(weekly_cases.shape)}")
-    logging.debug(f"weekly_strains shape {tuple(weekly_strains.shape)}")
+    logging.debug(f"weekly_clades shape {tuple(weekly_clades.shape)}")
 
     # Determine output tensor shapes
     logging.info("Generating output tensor")
@@ -131,7 +131,7 @@ def get_forecast_values(forecast):
     # append a leftmost dim for each query
     output_predicted_tensor_shape.insert(0, len(queries))
 
-    output_observed_tensor_shape = list(weekly_strains.shape)
+    output_observed_tensor_shape = list(weekly_clades.shape)
     del output_observed_tensor_shape[-2]
     output_observed_tensor_shape.insert(0, len(queries))
 
@@ -144,7 +144,7 @@ def get_forecast_values(forecast):
 
     # If we are processing future data
     if weekly_cases_future is not None:
-        output_observed_future_tensor_shape = list(weekly_strains_future.shape)
+        output_observed_future_tensor_shape = list(weekly_clades_future.shape)
         del output_observed_future_tensor_shape[-2]
         output_observed_future_tensor_shape.insert(0, len(queries))
         output_observed_future = torch.zeros(output_observed_future_tensor_shape)
@@ -164,13 +164,13 @@ def get_forecast_values(forecast):
         # of shape 3 x T_total x S, first dim is stats, T_total includes data abd predicted
 
         # Calculate observed
-        obs = weekly_strains[:, ids].sum(1)
+        obs = weekly_clades[:, ids].sum(1)
         obs /= obs.sum(-1, True).clamp_(min=1e-9)
         logging.debug(f"obs shape {tuple(obs.shape)}")
         # same shape as pred above
 
         if weekly_cases_future is not None:
-            obs_future = weekly_strains_future[:, ids].sum(1)
+            obs_future = weekly_clades_future[:, ids].sum(1)
             obs_future /= obs_future.sum(-1, True).clamp_(min=1e-9)
             output_observed_future[k, :] = obs_future
 
@@ -244,7 +244,7 @@ def evaluate_fit_forecast(
     assert fit["lineage_id_inv"] == future_fit["lineage_id_inv"]
 
     # Get the truth from the future dataset
-    true = future_fit["weekly_strains"]
+    true = future_fit["weekly_clades"]
     logging.debug(f"initial true shape: {true.shape}")
 
     # Get the predicted fit
@@ -252,7 +252,7 @@ def evaluate_fit_forecast(
     logging.debug(f"initial pred shape: {pred.shape}")
 
     # Restrict to the forecast interval.
-    t0 = len(fit["weekly_strains"])
+    t0 = len(fit["weekly_clades"])
     t1 = min(len(true), len(pred))
     pred = pred[t0:t1]
     true = true[t0:t1]

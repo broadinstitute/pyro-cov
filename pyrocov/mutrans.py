@@ -100,8 +100,8 @@ def rank_loo_lineages(
     ancestors = set(lineage_id)
 
     # Filter to often-observed lineages.
-    weekly_strains = full_dataset["weekly_strains"]  # [T, P, S]
-    lineage_counts = weekly_strains.sum([0, 1])  # [S]
+    weekly_clades = full_dataset["weekly_clades"]  # [T, P, C]
+    lineage_counts = weekly_clades.sum([0, 1])  # [C]
     lineages = []
     for c, child in enumerate(lineage_id_inv):
         if child in ("A", "B", "B.1"):
@@ -273,29 +273,29 @@ def load_gisaid_data(
         p = location_id.setdefault(location, len(location_id))
         if clade == histogram or not ambiguous:
             # Save an unambiguous observation.
-            s = clade_id[clade]
-            sparse_data[t, p, s] += 1
+            c = clade_id[clade]
+            sparse_data[t, p, c] += 1
         else:
             # Save an ambiguous observation.
             i = len(sparse_hist["size"])
             sparse_hist["size"].append(len(histogram))
             for clade in histogram.split(","):
-                s = clade_id[clade]
+                c = clade_id[clade]
                 sparse_hist["destin"].append(i)
-                sparse_hist["source"].append((t, p, s))
+                sparse_hist["source"].append((t, p, c))
     logger.warning(f"WARNING skipped {len(skipped_clades)} unsampled clades")
 
-    # Generate weekly_strains tensor from sparse_data.
+    # Generate weekly_clades tensor from sparse_data.
     if end_day is not None:
         T = 1 + end_day // TIMESTEP
     else:
         T = 1 + max(columns["day"]) // TIMESTEP
     P = len(location_id)
-    S = len(clade_id)
-    weekly_strains = torch.zeros(T, P, S)
+    C = len(clade_id)
+    weekly_clades = torch.zeros(T, P, C)
     for tps, n in sparse_data.items():
-        weekly_strains[tps] = n
-    logger.info(f"Dataset size [T x P x S] {T} x {P} x {S}")
+        weekly_clades[tps] = n
+    logger.info(f"Dataset size [T x P x C] {T} x {P} x {C}")
 
     logger.info(
         f"Keeping {num_obs}/{len(clades)} rows "
@@ -306,25 +306,25 @@ def load_gisaid_data(
     if ambiguous:
         pass  # TODO implement region filtering.
     else:
-        num_times_observed = (weekly_strains > 0).max(2).values.sum(0)
+        num_times_observed = (weekly_clades > 0).max(2).values.sum(0)
         ok_regions = (num_times_observed >= 2).nonzero(as_tuple=True)[0]
         ok_region_set = set(ok_regions.tolist())
-        logger.info(f"Keeping {len(ok_regions)}/{weekly_strains.size(1)} regions")
-        weekly_strains = weekly_strains.index_select(1, ok_regions)
+        logger.info(f"Keeping {len(ok_regions)}/{weekly_clades.size(1)} regions")
+        weekly_clades = weekly_clades.index_select(1, ok_regions)
         locations = [k for k, v in location_id.items() if v in ok_region_set]
         location_id = OrderedDict(zip(locations, range(len(locations))))
 
     # Construct sparse representation.
-    sparse_counts = _make_sparse(weekly_strains)
+    sparse_counts = _make_sparse(weekly_clades)
     if sparse_hist:
         # Construct a sparse COO matrix for use in the fused gather-scatter:
         # torch.mv(sparse_hist["matrix"], probs.reshape(-1))
         sparse_destin = torch.tensor(sparse_hist["destin"])
         sparse_source = torch.tensor(sparse_hist["source"])
-        sparse_source[:, 0] *= P * S
-        sparse_source[:, 1] *= S
+        sparse_source[:, 0] *= P * C
+        sparse_source[:, 1] *= C
         sparse_source = sparse_source.sum(-1)
-        shape = (len(sparse_hist["size"]), T * P * S)
+        shape = (len(sparse_hist["size"]), T * P * C)
         logger.info(
             f"Sparse {shape} histogram has {len(sparse_hist['source'])} entries"
         )
@@ -338,7 +338,7 @@ def load_gisaid_data(
         }
 
     # Construct region-local time scales centered around observations.
-    num_obs = weekly_strains.sum(-1)
+    num_obs = weekly_clades.sum(-1)
     local_time = torch.arange(float(len(num_obs))) * TIMESTEP / GENERATION_TIME
     local_time = local_time[:, None]
     local_time = local_time - (local_time * num_obs).sum(0) / num_obs.sum(0)
@@ -346,7 +346,7 @@ def load_gisaid_data(
     dataset = {
         "location_id": location_id,
         "mutations": mutations,
-        "weekly_strains": weekly_strains,
+        "weekly_clades": weekly_clades,
         "features": features,
         "clade_id": clade_id,
         "clade_id_inv": clade_id_inv,
@@ -385,22 +385,22 @@ def subset_gisaid_data(
         )
         ids = torch.tensor([old["location_id"][location] for location in locations])
         new["location_id"] = {name: i for i, name in enumerate(locations)}
-        new["weekly_strains"] = new["weekly_strains"].index_select(1, ids)
+        new["weekly_clades"] = new["weekly_clades"].index_select(1, ids)
         new["local_time"] = new["local_time"].index_select(1, ids)
 
     # Select clades.
-    if new["weekly_strains"].size(-1) > max_clades:
+    if new["weekly_clades"].size(-1) > max_clades:
         ids = (
-            new["weekly_strains"]
+            new["weekly_clades"]
             .sum([0, 1])
             .sort(0, descending=True)
             .indices[:max_clades]
         )
-        new["weekly_strains"] = new["weekly_strains"].index_select(-1, ids)
+        new["weekly_clades"] = new["weekly_clades"].index_select(-1, ids)
         new["features"] = new["features"].index_select(0, ids)
         new["clade_id_inv"] = [new["clade_id_inv"][i] for i in ids.tolist()]
         new["clade_id"] = {name: i for i, name in enumerate(new["clade_id_inv"])}
-        new["sparse_counts"] = _make_sparse(new["weekly_strains"])
+        new["sparse_counts"] = _make_sparse(new["weekly_clades"])
 
     # Select mutations.
     gaps = new["features"].max(0).values - new["features"].min(0).values
@@ -416,8 +416,8 @@ def subset_gisaid_data(
             len(old["clade_id"]),
             len(new["mutations"]),
             len(old["mutations"]),
-            int(new["weekly_strains"].sum()),
-            int(old["weekly_strains"].sum()),
+            int(new["weekly_clades"].sum()),
+            int(old["weekly_clades"].sum()),
         )
     )
 
@@ -459,7 +459,7 @@ def load_jhu_data(gisaid_data: dict) -> dict:
     jhu_start_date = pyrocov.geo.parse_date(us_cases_df.columns[11])
     assert start_date < jhu_start_date
     dt = (jhu_start_date - start_date).days
-    T = len(gisaid_data["weekly_strains"])
+    T = len(gisaid_data["weekly_clades"])
     weekly_cases = daily_cases.new_zeros(T, len(locations))
     for w in range(TIMESTEP):
         t0 = (w + dt) // TIMESTEP
@@ -490,12 +490,12 @@ def model(dataset, model_type, *, forecast_steps=None):
     local_time = dataset["local_time"]  # [T, P]
     ancestry = dataset["ancestry"]
     T, P = local_time.shape
-    S, F = features.shape
-    assert ancestry.shape == (S, S)
+    C, F = features.shape
+    assert ancestry.shape == (C, C)
     if forecast_steps is None:  # During inference.
         if "dense" in model_type:
-            weekly_strains = dataset["weekly_strains"]
-            assert weekly_strains.shape == (T, P, S)
+            weekly_clades = dataset["weekly_clades"]
+            assert weekly_clades.shape == (T, P, C)
         else:
             sparse_counts = dataset["sparse_counts"]
             sparse_hist = dataset["sparse_hist"]
@@ -505,21 +505,21 @@ def model(dataset, model_type, *, forecast_steps=None):
         dt = local_time[1] - local_time[0]
         local_time = t0 + dt * torch.arange(float(T))[:, None]
         assert local_time.shape == (T, P)
-    clade_plate = pyro.plate("clade", S, dim=-1)
+    clade_plate = pyro.plate("clade", C, dim=-1)
     place_plate = pyro.plate("place", P, dim=-2)
     time_plate = pyro.plate("time", T, dim=-3)
 
     # Configure reparametrization (which does not affect model density).
     reparam = {}
     if "reparam" in model_type:
-        time_shift = pyro.param("time_shift", lambda: torch.zeros(P, S))  # [P, S]
+        time_shift = pyro.param("time_shift", lambda: torch.zeros(P, C))  # [P, C]
         reparam["coef"] = LocScaleReparam()
         reparam["rate_walk"] = LocScaleReparam()
         reparam["init_loc"] = LocScaleReparam()
         reparam["rate"] = LocScaleReparam()
         reparam["init"] = LocScaleReparam()
     else:
-        time_shift = torch.zeros(P, S)
+        time_shift = torch.zeros(P, C)
     with poutine.reparam(config=reparam):
 
         # Sample global random variables.
@@ -538,18 +538,18 @@ def model(dataset, model_type, *, forecast_steps=None):
         with clade_plate:
             rate_walk = pyro.sample(
                 "rate_walk", dist.Logistic(0, rate_loc_scale)
-            )  # [S]
+            )  # [C]
             rate_loc = pyro.deterministic(
                 "rate_loc", 0.01 * coef @ features.T + rate_walk @ ancestry
-            )  # [S]
-            init_loc = pyro.sample("init_loc", dist.Normal(0, init_loc_scale))  # [S]
+            )  # [C]
+            init_loc = pyro.sample("init_loc", dist.Normal(0, init_loc_scale))  # [C]
         with place_plate, clade_plate:
-            rate = pyro.sample("rate", dist.Normal(rate_loc, rate_scale))  # [P, S]
-            init = pyro.sample("init", dist.Normal(init_loc, init_scale))  # [P, S]
+            rate = pyro.sample("rate", dist.Normal(rate_loc, rate_scale))  # [P, C]
+            init = pyro.sample("init", dist.Normal(init_loc, init_scale))  # [P, C]
 
         # Optionally predict probabilities (during prediction).
         if forecast_steps is not None:
-            logits = init + rate * (time_shift + local_time[..., None])  # [T, P, S]
+            logits = init + rate * (time_shift + local_time[..., None])  # [T, P, C]
             with time_plate, place_plate, clade_plate:
                 pyro.deterministic("probs", logits.softmax(-1))
             return
@@ -557,20 +557,20 @@ def model(dataset, model_type, *, forecast_steps=None):
         # Finally observe counts (during inference).
         if "dense" in model_type:  # equivalent either way
             # Compute a dense likelihood.
-            logits = init + rate * (time_shift + local_time[..., None])  # [T, P, S]
+            logits = init + rate * (time_shift + local_time[..., None])  # [T, P, C]
             with time_plate, place_plate:
                 pyro.sample(
                     "obs",
                     dist.Multinomial(logits=logits.unsqueeze(-2), validate_args=False),
-                    obs=weekly_strains.unsqueeze(-2),
-                )  # [T, P, 1, S]
+                    obs=weekly_clades.unsqueeze(-2),
+                )  # [T, P, 1, C]
             if dataset["sparse_hist"]:
                 raise NotImplementedError
             return
-        t, p, s = sparse_counts["index"]
+        t, p, c = sparse_counts["index"]
         if "sparse" in model_type:  # equivalent either way
             # Compute a cheap sparse likelihood.
-            logits = init[p, s] + rate[p, s] * (time_shift[p, s] + local_time[t, p])
+            logits = init[p, c] + rate[p, c] * (time_shift[p, c] + local_time[t, p])
             log_total = logistic_logsumexp(init, rate, time_shift, local_time)  # [T, P]
             logits = logits - log_total[t, p]
             pyro.factor(
@@ -583,12 +583,12 @@ def model(dataset, model_type, *, forecast_steps=None):
                 raise NotImplementedError
             return
         # Compromise between sparse and dense.
-        logits = init + rate * (time_shift + local_time[..., None])  # [T, P, S]
+        logits = init + rate * (time_shift + local_time[..., None])  # [T, P, C]
         logits = logits.log_softmax(-1)
         pyro.factor(
             "obs",
             sparse_multinomial_likelihood(
-                sparse_counts["total"], logits[t, p, s], sparse_counts["value"]
+                sparse_counts["total"], logits[t, p, c], sparse_counts["value"]
             ),
         )
         if sparse_hist:
@@ -611,12 +611,12 @@ class InitLocFn:
 
     def __init__(self, dataset):
         # Initialize init.
-        init = dataset["weekly_strains"].sum(0)  # [P, S]
+        init = dataset["weekly_clades"].sum(0)  # [P, C]
         init.add_(1 / init.size(-1)).div_(init.sum(-1, True))
         init.log_().sub_(init.median(-1, True).values)
-        self.init = init  # [P, S]
+        self.init = init  # [P, C]
         self.init_decentered = init / 2
-        self.init_loc = init.mean(0)  # [S]
+        self.init_loc = init.mean(0)  # [C]
         self.init_loc_decentered = self.init_loc / 2
         assert not torch.isnan(self.init).any()
         logger.info(f"init stddev = {self.init.std():0.3g}")
@@ -887,7 +887,7 @@ def fit_svi(
     elbo = Elbo(max_plate_nesting=3, ignore_jit_warnings=True)
     svi = SVI(model_, guide, optim, elbo)
     losses = []
-    num_obs = dataset["weekly_strains"].count_nonzero()
+    num_obs = dataset["weekly_clades"].count_nonzero()
     for step in range(num_steps):
         loss = svi.step(dataset=dataset, model_type=model_type)
         assert not math.isnan(loss)
@@ -984,7 +984,7 @@ def log_stats(dataset: dict, result: dict) -> dict:
         stats[f"R({lineage})/R(A)"] = R_RA
 
     # Accuracy of mutation-only model, ie without region-local effects.
-    true = dataset["weekly_strains"] + 1e-20  # avoid nans
+    true = dataset["weekly_clades"] + 1e-20  # avoid nans
     counts = true.sum(-1, True)
     true_probs = true / counts
     local_time = dataset["local_time"][..., None]
@@ -1037,9 +1037,9 @@ def log_stats(dataset: dict, result: dict) -> dict:
 
         for lineage in lineages:
             clade = dataset["lineage_to_clade"][lineage]
-            s = dataset["clade_id"][clade]
-            stats[f"{place} {lineage} MAE"] = mae[p, s]
-            stats[f"{place} {lineage} RMSE"] = mse[p, s].sqrt()
+            c = dataset["clade_id"][clade]
+            stats[f"{place} {lineage} MAE"] = mae[p, c]
+            stats[f"{place} {lineage} RMSE"] = mse[p, c].sqrt()
             logger.info(
                 "{} {}\tMAE = {:0.3g}, RMSE = {:0.3g}".format(
                     place,

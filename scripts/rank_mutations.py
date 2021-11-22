@@ -91,7 +91,7 @@ def rank_full_svi(args, dataset):
 def compute_hessian(args, dataset, result):
     logger.info("Computing Hessian")
     features = dataset["features"]
-    weekly_strains = dataset["weekly_strains"]
+    weekly_clades = dataset["weekly_clades"]
     rate_coef = result["median"]["rate_coef"].clone().requires_grad_()
 
     cond_data = result["median"].copy()
@@ -102,7 +102,7 @@ def compute_hessian(args, dataset, result):
     def log_prob(rate_coef):
         with poutine.trace() as tr:
             with poutine.condition(data={"rate_coef": rate_coef}):
-                model(weekly_strains, features)
+                model(weekly_clades, features)
         return tr.trace.log_prob_sum()
 
     hessian = torch.autograd.functional.hessian(
