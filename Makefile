@@ -71,10 +71,14 @@ analyze: FORCE
 	# python scripts/mutrans.py --vary-leaves=9999
 
 push: FORCE
-	gsutil rsync -r -P -x '.*\.json$$' $(shell readlink results)/ gs://pyro-cov/$(shell readlink results)/
+	gsutil -m -o GSUtil:parallel_composite_upload_threshold=150M \
+	  rsync -r -P -x '.*\.json$$' \
+	  $(shell readlink results)/ gs://pyro-cov/$(shell readlink results)/
 
 pull: FORCE
-	gsutil rsync -r -P -x '.*\.json$$' gs://pyro-cov/$(shell readlink results)/ $(shell readlink results)/
+	gsutil -m -o GSUtil:parallel_composite_upload_threshold=150M \
+	  rsync -r -P -x '.*\.json$$' \
+	  gs://pyro-cov/$(shell readlink results)/ $(shell readlink results)/
 
 ###########################################################################
 # TODO remove these user-specific targets
