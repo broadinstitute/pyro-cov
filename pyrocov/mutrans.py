@@ -521,11 +521,14 @@ def model(dataset, model_type, *, forecast_steps=None):
     local_time = dataset["local_time"]  # [T, P]
     ancestry = dataset["ancestry"]
     state_to_country = dataset["state_to_country"]
+    clade_id_to_lineage_id = dataset["clade_id_to_lineage_id"]
     T, P = local_time.shape
     C, F = features.shape
     (S,) = state_to_country.shape
     K = P - S
+    L = len(dataset["lineage_id"])
     assert ancestry.shape == (C, C)
+    assert clade_id_to_lineage_id.shape == (C,)
     if forecast_steps is None:  # During inference.
         if "dense" in model_type:
             weekly_clades = dataset["weekly_clades"]
@@ -614,8 +617,12 @@ def model(dataset, model_type, *, forecast_steps=None):
         # Optionally predict probabilities (during prediction).
         if forecast_steps is not None:
             logits = init + rate * (time_shift + local_time[..., None])  # [T, P, C]
-            with time_plate, place_plate, clade_plate:
-                pyro.deterministic("probs", logits.softmax(-1))
+            probs = logits.softmax(-1)
+            probs = logits.new_zeros(logits.shape[:2] + (L,)).scatter_add_(
+                -1, clade_id_to_lineage_id.expand_as(probs), logits.softmax(-1)
+            )
+            with time_plate, place_plate, pyro.plate("lineage", L, dim=-1):
+                pyro.deterministic("probs", probs)
             return
 
         # Finally observe counts (during inference).
@@ -1066,24 +1073,15 @@ def log_stats(dataset: dict, result: dict) -> dict:
         logger.info(f"R({lineage})/R(A) = {R_RA:0.3g}")
         stats[f"R({lineage})/R(A)"] = R_RA
 
-    # Accuracy of mutation-only model, ie without region-local effects.
-    true = dataset["weekly_clades"] + 1e-20  # avoid nans
+    # Posterior predictive error.
+    L = len(dataset["lineage_id"])
+    weekly_clades = dataset["weekly_clades"]
+    weekly_lineages = torch.zeros(weekly_clades.shape[:-1] + (L,)).scatter_add_(
+        -1, dataset["clade_id_to_lineage_id"].expand_as(weekly_clades), weekly_clades
+    )
+    true = weekly_lineages + 1e-20  # avoid nans
     counts = true.sum(-1, True)
     true_probs = true / counts
-    local_time = dataset["local_time"][..., None]
-    if "local_time" in result["params"]:
-        local_time = local_time + result["params"]["local_time"].to(local_time.device)
-    rate = 0.01 * result["median"]["coef"] @ dataset["features"].T
-    pred = result["median"]["init"] + rate * local_time
-    pred -= pred.logsumexp(-1, True)  # apply log sigmoid function
-    kl = true.mul(true_probs.log() - pred).sum(-1)
-    kl = stats["naive KL"] = kl.sum() / counts.sum()  # in units of nats / observation
-    error = (pred.exp() - true_probs) * counts ** 0.5  # scaled by Poisson stddev
-    mae = stats["naive MAE"] = error.abs().sum(-1).mean()
-    rmse = stats["naive RMSE"] = error.square().sum(-1).mean().sqrt()
-    logger.info(f"naive KL = {kl:0.4g}, MAE = {mae:0.4g}, RMSE = {rmse:0.4g}")
-
-    # Posterior predictive error.
     pred = result["median"]["probs"][: len(true)] + 1e-20  # truncate, avoid nans
     kl = true.mul(true_probs.log() - pred.log()).sum([0, -1])
     error = (pred - true_probs) * counts ** 0.5  # scaled by Poisson stddev
