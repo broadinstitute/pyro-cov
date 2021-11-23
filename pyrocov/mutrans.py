@@ -139,7 +139,7 @@ def load_gisaid_data(
     *,
     device="cpu",
     min_region_size=50,
-    max_num_clades=2000,
+    max_num_clades=5000,
     include={},
     exclude={},
     end_day=None,
@@ -553,7 +553,7 @@ def model(dataset, model_type, *, forecast_steps=None):
     if "reparam" in model_type:
         time_shift = pyro.param("time_shift", lambda: torch.zeros(P, C))  # [P, C]
         reparam["coef"] = LocScaleReparam()
-        reparam["rate_walk"] = LocScaleReparam()
+        reparam["rate_walk" if "ancest" in model_type else "rate_loc"] = LocScaleReparam()
         reparam["init_loc"] = LocScaleReparam()
         reparam["rate_country"] = LocScaleReparam()
         reparam["init_country"] = LocScaleReparam()
@@ -1023,7 +1023,7 @@ def fit_svi(
     result["params"] = {
         k: v.detach().float().cpu().clone()
         for k, v in param_store.items()
-        if v.numel() < 1e7
+        if v.numel() < 1e8
     }
     result["walltime"] = default_timer() - start_time
     return result

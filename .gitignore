@@ -5,7 +5,7 @@ nextclade_results/
 /data
 /results
 /results.*
-.*.swp
+*.swp
 temp.*
 
 # Byte-compiled / optimized / DLL files
