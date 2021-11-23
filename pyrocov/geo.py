@@ -40,6 +40,7 @@ GISAID_NORMALIZE = {
     "Asia / India / Maharasthra": "Asia / India / Maharashtra",
     "Asia / India / Pondicherry": "Asia / India / Puducherry",
     "Asia / Indonesia / North Sumatera": "Asia / Indonesia / North Sumatra",
+    "Asia / Turkey": "Europe / Turkey",
     "Asia / Vietnam / Langson": "Asia / Vietnam / Lang Son",
     "Asia / Vietnam / Namdinh": "Asia / Vietnam / Nam Dinh",
     "Asia / Vietnam / Nghean": "Asia / Vietnam / Nghe An",
@@ -55,7 +56,7 @@ GISAID_NORMALIZE = {
     "North America / U.s Virgin Islands": "North America / USA / U.s Virgin Islands",
     "North America / USA / Us Virgin Islands": "North America / USA / U.s Virgin Islands",
     "North America / USA / Virgin Islands Of The U.s": "North America / USA / U.s Virgin Islands",
-    "frica / Ghana / Accra": "Africa / Ghana / Accra",
+    "Frica / Ghana / Accra": "Africa / Ghana / Accra",
 }
 
 # To update see explore-jhu-time-series.ipynb
@@ -248,6 +249,16 @@ def gisaid_normalize(gisaid_location):
     x = GISAID_NORMALIZE.setdefault(x, x)
     GISAID_NORMALIZE[gisaid_location] = x
     return x
+
+
+GISAID_COUNTRY = {}
+
+
+def gisaid_get_country(location: str) -> str:
+    if location not in GISAID_COUNTRY:
+        country = " / ".join(location.split(" / ")[:2])
+        GISAID_COUNTRY[location] = country
+    return GISAID_COUNTRY[location]
 
 
 def gisaid_to_jhu_location(

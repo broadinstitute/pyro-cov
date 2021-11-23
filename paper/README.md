@@ -52,6 +52,11 @@ The following plots assess robustness via 2-fold crossvalidation, splitting data
 ![Mutation box plots](mutation_europe_boxplot_rankby_t.png)
 ![Lineage prediction](lineage_prediction.png)
 
+## Data plots
+
+![Distribution of samples among regions](region_distribution.png)
+![Distribution of samples among clades](clade_distribution.png)
+
 ## Misc plots
 
 ![Logistic distribution](logistic_distribution.png)
