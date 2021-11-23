@@ -1122,10 +1122,9 @@ def log_stats(dataset: dict, result: dict) -> dict:
         )
 
         for lineage in lineages:
-            clade = dataset["lineage_to_clade"][lineage]
-            c = dataset["clade_id"][clade]
-            stats[f"{place} {lineage} MAE"] = mae[p, c]
-            stats[f"{place} {lineage} RMSE"] = mse[p, c].sqrt()
+            i = dataset["lineage_id"][lineage]
+            stats[f"{place} {lineage} MAE"] = mae[p, i]
+            stats[f"{place} {lineage} RMSE"] = mse[p, i].sqrt()
             logger.info(
                 "{} {}\tMAE = {:0.3g}, RMSE = {:0.3g}".format(
                     place,

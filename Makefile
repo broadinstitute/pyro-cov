@@ -61,6 +61,9 @@ preprocess: FORCE
 	time nice python scripts/preprocess_pangolin.py --max-num-clades=10000
 
 analyze: FORCE
+	# python scripts/mutrans.py --vary-holdout --max-num-clades=2000
+	# python scripts/mutrans.py --vary-holdout --max-num-clades=5000
+	# python scripts/mutrans.py --vary-holdout --max-num-clades=10000
 	python scripts/mutrans.py --vary-holdout
 	python scripts/mutrans.py --vary-gene
 	python scripts/mutrans.py --vary-nsp
@@ -68,12 +71,12 @@ analyze: FORCE
 
 push: FORCE
 	gsutil -m -o GSUtil:parallel_composite_upload_threshold=150M \
-	  rsync -r -x '.*\.json$$' \
+	  rsync -r -x '.*\.json$$|.*mutrans\.pt$$' \
 	  $(shell readlink results)/ gs://pyro-cov/$(shell readlink results)/
 
 pull: FORCE
 	gsutil -m -o GSUtil:parallel_composite_upload_threshold=150M \
-	  rsync -r -x '.*\.json$$' \
+	  rsync -r -x '.*\.json$$|.*mutrans\.pt$$' \
 	  gs://pyro-cov/$(shell readlink results)/ $(shell readlink results)/
 
 ###########################################################################
