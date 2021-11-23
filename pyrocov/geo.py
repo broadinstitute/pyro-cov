@@ -50,6 +50,12 @@ GISAID_NORMALIZE = {
     "Europe / England": "Europe / United Kingdom / England",
     "Europe / Slovak Republic": "Europe / Slovakia",
     "Europe / Sweden / Vastra Gotalandsregionen": "Europe / Sweden / Vastra Gotalands",
+    "North America / U.s Virgin Islands / St Croix": "North America / USA / U.s Virgin Islands / St Croix",
+    "North America / U.s Virgin Islands / St Thomas": "North America / USA / U.s Virgin Islands / St Thomas",
+    "North America / U.s Virgin Islands": "North America / USA / U.s Virgin Islands",
+    "North America / USA / Us Virgin Islands": "North America / USA / U.s Virgin Islands",
+    "North America / USA / Virgin Islands Of The U.s": "North America / USA / U.s Virgin Islands",
+    "frica / Ghana / Accra": "Africa / Ghana / Accra",
 }
 
 # To update see explore-jhu-time-series.ipynb
