@@ -579,12 +579,17 @@ def model(dataset, model_type, *, forecast_steps=None):
             "coef", dist.Logistic(torch.zeros(F), coef_scale).to_event(1)
         )  # [F]
         with clade_plate:
-            rate_walk = pyro.sample(
-                "rate_walk", dist.Logistic(0, rate_loc_scale)
-            )  # [C]
-            rate_loc = pyro.deterministic(
-                "rate_loc", 0.01 * coef @ features.T + rate_walk @ ancestry
-            )  # [C]
+            if "ancest" in model_type:
+                rate_walk = pyro.sample(
+                    "rate_walk", dist.Logistic(0, rate_loc_scale)
+                )  # [C]
+                rate_loc = pyro.deterministic(
+                    "rate_loc", 0.01 * coef @ features.T + rate_walk @ ancestry
+                )  # [C]
+            else:
+                rate_loc = pyro.sample(
+                    "rate_loc", dist.Normal(0.01 * coef @ features.T, rate_loc_scale)
+                )
             init_loc = pyro.sample("init_loc", dist.Normal(0, init_loc_scale))  # [C]
         with country_plate, clade_plate:
             rate_country = pyro.sample(
@@ -1087,9 +1092,9 @@ def log_stats(dataset: dict, result: dict) -> dict:
     error = (pred - true_probs) * counts ** 0.5  # scaled by Poisson stddev
     mae = error.abs().mean(0)  # average over time
     mse = error.square().mean(0)  # average over time
-    stats["MAE"] = mae.sum(-1).mean()  # average over region
-    stats["RMSE"] = mse.sum(-1).mean().sqrt()  # root average over region
-    stats["KL"] = kl.sum() / counts.sum()  # in units of nats / observation
+    stats["MAE"] = float(mae.sum(-1).mean())  # average over region
+    stats["RMSE"] = float(mse.sum(-1).mean().sqrt())  # root average over region
+    stats["KL"] = float(kl.sum() / counts.sum())  # in units of nats / observation
     logger.info("KL = {KL:0.4g}, MAE = {MAE:0.4g}, RMSE = {RMSE:0.4g}".format(**stats))
 
     # Examine the MSE and RMSE over a few regions of interest.
@@ -1104,9 +1109,9 @@ def log_stats(dataset: dict, result: dict) -> dict:
             continue
         assert len(matches) == 1, matches
         p = matches[0]
-        stats[f"{place} KL"] = kl[p].sum() / true[:, p].sum()
-        stats[f"{place} MAE"] = mae[p].sum()
-        stats[f"{place} RMSE"] = mse[p].sum().sqrt()
+        stats[f"{place} KL"] = float(kl[p].sum() / true[:, p].sum())
+        stats[f"{place} MAE"] = float(mae[p].sum())
+        stats[f"{place} RMSE"] = float(mse[p].sum().sqrt())
         logger.info(
             "{}\tKL = {:0.3g}, MAE = {:0.3g}, RMSE = {:0.3g}".format(
                 place,
