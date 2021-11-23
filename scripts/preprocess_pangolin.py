@@ -28,14 +28,35 @@ def prune_tree(args, coarse_to_fine, columns):
         weight = 1 / len(clades)
         for clade in clades:
             weights[clade] += weight
+    for clade in columns["clade"]:
+        assert clade in weights
 
     # Prune the tree, minimizing the number of incorrect mutations.
     args.max_num_clades = max(args.max_num_clades, len(coarse_to_fine))
     tree_filename = f"results/lineageTree.{args.max_num_clades}.pb"
-    fine_to_meso = prune_mutation_tree(
+    meso_set = prune_mutation_tree(
         args.tree_file_in, tree_filename, args.max_num_clades, weights
     )
-    return fine_to_meso, tree_filename
+    assert len(meso_set) == args.max_num_clades
+    return FineToMeso(meso_set), tree_filename
+
+
+class FineToMeso:
+    """
+    Mapping from fine clade names like ``fine.1...3.`` to ancestors in
+    ``meso_set`` like ``fine.1..`` .
+    """
+
+    def __init__(self, meso_set):
+        self.meso_set = frozenset(meso_set)
+        self._cache = {}
+
+    def __call__(self, fine):
+        meso = self._cache.get(fine, None)
+        if meso is None:
+            meso = fine if fine in self.meso_set else self(fine.rsplit(".")[0])
+            self._cache[fine] = meso
+        return meso
 
 
 def main(args):
@@ -53,13 +74,17 @@ def main(args):
     with open(args.columns_file_in, "rb") as f:
         columns = pickle.load(f)
     fine_to_meso, tree_filename = prune_tree(args, coarse_to_fine, columns)
-    fine_to_coarse = {fine_to_meso.get(f, f): c for f, c in fine_to_coarse.items()}
-    coarse_to_fine = {c: fine_to_meso.get(f, f) for c, f in coarse_to_fine.items()}
-    columns["clade"] = [fine_to_meso.get(c, c) for c in columns["clades"]]
+
+    fine_to_coarse = {fine_to_meso(f): c for f, c in fine_to_coarse.items()}
+    coarse_to_fine = {c: fine_to_meso(f) for c, f in coarse_to_fine.items()}
+    columns["clade"] = [fine_to_meso(c) for c in columns["clade"]]
+    clade_set = set(columns["clade"])
+    assert len(clade_set) <= args.max_num_clades
     columns["clades"] = [
-        ",".join(fine_to_meso.get(c, c) for c in cs.split(","))
-        for cs in columns["clades"]
+        ",".join(fine_to_meso(c) for c in cs.split(",")) for cs in columns["clades"]
     ]
+    clade_set.update(*(c.split(",") for c in columns["clades"]))
+    assert len(clade_set) <= args.max_num_clades
     if not args.columns_file_out:
         args.columns_file_out = f"results/columns.{args.max_num_clades}.pkl"
     with open(args.columns_file_out, "wb") as f:

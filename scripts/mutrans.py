@@ -84,6 +84,7 @@ def load_data(args, **kwargs):
         columns_filename=f"results/columns.{args.max_num_clades}.pkl",
         features_filename=f"results/features.{args.max_num_clades}.pt",
         min_region_size=args.min_region_size,
+        max_num_clades=args.max_num_clades,
         ambiguous=args.ambiguous,
         **kwargs,
     )

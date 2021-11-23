@@ -28,6 +28,6 @@ def test_refine_prune():
 
         # Prune the tree, keeping coarse nodes.
         weights = {fine: random.lognormvariate(0, 1) for fine in fine_to_coarse}
-        for fine in coarse_to_fine.items():
+        for fine in coarse_to_fine.values():
             weights[fine] = math.inf
         prune_mutation_tree(filename2, filename3, weights=weights, max_num_nodes=10000)

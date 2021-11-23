@@ -139,6 +139,7 @@ def load_gisaid_data(
     *,
     device="cpu",
     min_region_size=50,
+    max_num_clades=2000,
     include={},
     exclude={},
     end_day=None,
@@ -292,6 +293,7 @@ def load_gisaid_data(
         T = 1 + max(columns["day"]) // TIMESTEP
     P = len(location_id)
     C = len(clade_id)
+    assert C <= max_num_clades, (C, max_num_clades)
     weekly_clades = torch.zeros(T, P, C)
     for tps, n in sparse_data.items():
         weekly_clades[tps] = n
@@ -343,19 +345,35 @@ def load_gisaid_data(
     local_time = local_time[:, None]
     local_time = local_time - (local_time * num_obs).sum(0) / num_obs.sum(0)
 
+    # Construct lineage <-> clade mappings.
+    lineage_to_clade = usher_features["lineage_to_clade"]
+    clade_to_lineage = usher_features["clade_to_lineage"]
+    lineage_id_inv = sorted(lineage_to_clade)
+    lineage_id = {k: i for i, k in enumerate(lineage_id_inv)}
+    clade_id_to_lineage_id = torch.zeros(len(clade_to_lineage), dtype=torch.long)
+    for c, l in clade_to_lineage.items():
+        clade_id_to_lineage_id[clade_id[c]] = lineage_id[l]
+    lineage_id_to_clade_id = torch.zeros(len(lineage_to_clade), dtype=torch.long)
+    for l, c in lineage_to_clade.items():
+        lineage_id_to_clade_id[lineage_id[l]] = clade_id[c]
+
     dataset = {
-        "location_id": location_id,
-        "mutations": mutations,
-        "weekly_clades": weekly_clades,
-        "features": features,
+        "ancestry": ancestry,
         "clade_id": clade_id,
         "clade_id_inv": clade_id_inv,
+        "clade_id_to_lineage_id": clade_id_to_lineage_id,
+        "clade_to_lineage": usher_features["clade_to_lineage"],
+        "features": features,
+        "lineage_id": lineage_id,
+        "lineage_id_inv": lineage_id_inv,
+        "lineage_id_to_clade_id": lineage_id_to_clade_id,
+        "lineage_to_clade": usher_features["lineage_to_clade"],
         "local_time": local_time,
+        "location_id": location_id,
+        "mutations": mutations,
         "sparse_counts": sparse_counts,
         "sparse_hist": sparse_hist,
-        "ancestry": ancestry,
-        "lineage_to_clade": usher_features["lineage_to_clade"],
-        "clade_to_lineage": usher_features["clade_to_lineage"],
+        "weekly_clades": weekly_clades,
     }
     return dataset
 

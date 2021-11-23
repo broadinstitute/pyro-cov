@@ -6,7 +6,7 @@ import logging
 import shutil
 import warnings
 from collections import defaultdict, namedtuple
-from typing import Dict, FrozenSet, Optional, Tuple
+from typing import Dict, FrozenSet, Optional, Set, Tuple
 
 import tqdm
 from Bio.Phylo.NewickIO import Parser, Writer
@@ -143,7 +143,7 @@ def prune_mutation_tree(
     filename_out: str,
     max_num_nodes: int,
     weights: Optional[Dict[str, int]] = None,
-) -> Dict[str, str]:
+) -> Set[str]:
     """
     Condenses a mutation tree by greedily pruning nodes with least value
     under the error-minimizing objective function::
@@ -157,7 +157,7 @@ def prune_mutation_tree(
     num_pruned = len(proto.node_mutations) - max_num_nodes
     if num_pruned < 0:
         shutil.copyfile(filename_in, filename_out)
-        return {}
+        return {m.clade for m in proto.node_metadata if m.clade}
 
     # Extract phylogenetic tree.
     tree = next(Parser.from_string(proto.newick).parse())
@@ -169,15 +169,18 @@ def prune_mutation_tree(
     assert len(proto.node_mutations) == len(clades)
     metadata = dict(zip(clades, proto.metadata))
     mutations = dict(zip(clades, proto.node_mutations))
-    old_to_new = {}
+    name_set = {m.clade for m in proto.metadata if m.clade}
 
     # Initialize weights and topology.
     if weights is None:
         weights = {c: 1 for c in clades}
     else:
-        weights = {
-            c: weights.get(m.clade, 0) if m.clade else 0 for c, m in metadata.items()
-        }
+        assert set(weights).issubset(name_set)
+        old_weights = weights.copy()
+        weights = {}
+        for c, m in metadata.items():
+            weights[c] = old_weights.pop(m.clade, 0) if m.clade else 0
+        assert not old_weights, list(old_weights)
     parents = {c: parent for parent in clades for c in parent.clades}
     assert tree.root not in parents
 
@@ -210,7 +213,6 @@ def prune_mutation_tree(
             cat = mutation + list(m)  # order so as to be compatible with reversions
             del m[:]
             m.extend(cat)
-        old_to_new[clade] = parent
     clades = list(tree.find_clades())
     assert len(clades) == max_num_nodes
 
@@ -223,18 +225,7 @@ def prune_mutation_tree(
     with open(filename_out, "wb") as f:
         f.write(proto.SerializeToString())
 
-    # Collapse chains to keep complexity linear.
-    def union_find(k):
-        v = old_to_new[k]
-        if v in old_to_new:
-            v = old_to_new[k] = union_find(v)
-        return v
-
-    return {
-        metadata[old].clade: metadata[union_find(old)].clade
-        for old in old_to_new
-        if metadata[old].clade
-    }
+    return {metadata[clade].clade for clade in clades if metadata[clade].clade}
 
 
 def apply_mutations(ref: str, mutations: FrozenSet[Mutation]) -> str:
