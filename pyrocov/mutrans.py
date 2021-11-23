@@ -229,6 +229,9 @@ def load_gisaid_data(
     # Generate sparse_data.
     sparse_data: dict = Counter()
     sparse_hist: dict = defaultdict(list)
+    countries = set()
+    states = set()
+    state_to_country_dict = {}
     location_id: dict = OrderedDict()
     skipped_clades = set()
     num_obs = 0
@@ -267,11 +270,21 @@ def load_gisaid_data(
             assert min_region_size
             parts = parts[:2]
         location = " / ".join(parts)
+        # Populate countries on the left and states on the right.
+        if len(parts) == 2:  # country only
+            countries.add(location)
+            p = location_id.setdefault(location, len(countries) - 1)
+        else:  # state and country
+            country = " / ".join(parts[:2])
+            countries.add(country)
+            c = location_id.setdefault(country, len(countries) - 1)
+            states.add(location)
+            p = location_id.setdefault(location, -len(states))
+            state_to_country_dict[p] = c
 
         # Save sparse data.
         num_obs += 1
         t = day // TIMESTEP
-        p = location_id.setdefault(location, len(location_id))
         if clade == histogram or not ambiguous:
             # Save an unambiguous observation.
             c = clade_id[clade]
@@ -285,6 +298,14 @@ def load_gisaid_data(
                 sparse_hist["destin"].append(i)
                 sparse_hist["source"].append((t, p, c))
     logger.warning(f"WARNING skipped {len(skipped_clades)} unsampled clades")
+    state_to_country = torch.full((len(states),), 999999, dtype=torch.long)
+    for s, c in state_to_country_dict.items():
+        state_to_country[s] = c
+    logger.info(f"Found {len(states)} states in {len(countries)} countries")
+    location_id_inv = [None] * len(location_id)
+    for k, i in location_id.items():
+        location_id_inv[i] = k
+    assert all(location_id_inv)
 
     # Generate weekly_clades tensor from sparse_data.
     if end_day is not None:
@@ -303,18 +324,6 @@ def load_gisaid_data(
         f"Keeping {num_obs}/{len(clades)} rows "
         f"(dropped {len(clades) - int(num_obs)})"
     )
-
-    # Filter regions.
-    if ambiguous:
-        pass  # TODO implement region filtering.
-    else:
-        num_times_observed = (weekly_clades > 0).max(2).values.sum(0)
-        ok_regions = (num_times_observed >= 2).nonzero(as_tuple=True)[0]
-        ok_region_set = set(ok_regions.tolist())
-        logger.info(f"Keeping {len(ok_regions)}/{weekly_clades.size(1)} regions")
-        weekly_clades = weekly_clades.index_select(1, ok_regions)
-        locations = [k for k, v in location_id.items() if v in ok_region_set]
-        location_id = OrderedDict(zip(locations, range(len(locations))))
 
     # Construct sparse representation.
     sparse_counts = _make_sparse(weekly_clades)
@@ -343,7 +352,9 @@ def load_gisaid_data(
     num_obs = weekly_clades.sum(-1)
     local_time = torch.arange(float(len(num_obs))) * TIMESTEP / GENERATION_TIME
     local_time = local_time[:, None]
-    local_time = local_time - (local_time * num_obs).sum(0) / num_obs.sum(0)
+    local_time = local_time - (local_time * num_obs).sum(0) / num_obs.sum(0).clamp(
+        min=1
+    )
 
     # Construct lineage <-> clade mappings.
     lineage_to_clade = usher_features["lineage_to_clade"]
@@ -370,10 +381,12 @@ def load_gisaid_data(
         "lineage_to_clade": usher_features["lineage_to_clade"],
         "local_time": local_time,
         "location_id": location_id,
+        "location_id_inv": location_id_inv,
         "mutations": mutations,
         "sparse_counts": sparse_counts,
         "sparse_hist": sparse_hist,
         "weekly_clades": weekly_clades,
+        "state_to_country": state_to_country,
     }
     return dataset
 
@@ -507,8 +520,11 @@ def model(dataset, model_type, *, forecast_steps=None):
     features = dataset["features"]
     local_time = dataset["local_time"]  # [T, P]
     ancestry = dataset["ancestry"]
+    state_to_country = dataset["state_to_country"]
     T, P = local_time.shape
     C, F = features.shape
+    (S,) = state_to_country.shape
+    K = P - S
     assert ancestry.shape == (C, C)
     if forecast_steps is None:  # During inference.
         if "dense" in model_type:
@@ -524,7 +540,9 @@ def model(dataset, model_type, *, forecast_steps=None):
         local_time = t0 + dt * torch.arange(float(T))[:, None]
         assert local_time.shape == (T, P)
     clade_plate = pyro.plate("clade", C, dim=-1)
-    place_plate = pyro.plate("place", P, dim=-2)
+    country_plate = pyro.plate("country", K, dim=-2)
+    state_plate = pyro.plate("state", S, dim=-2)
+    place_plate = pyro.plate("place", P, dim=-2)  # place = cat([country, state])
     time_plate = pyro.plate("time", T, dim=-3)
 
     # Configure reparametrization (which does not affect model density).
@@ -534,8 +552,10 @@ def model(dataset, model_type, *, forecast_steps=None):
         reparam["coef"] = LocScaleReparam()
         reparam["rate_walk"] = LocScaleReparam()
         reparam["init_loc"] = LocScaleReparam()
-        reparam["rate"] = LocScaleReparam()
-        reparam["init"] = LocScaleReparam()
+        reparam["rate_country"] = LocScaleReparam()
+        reparam["init_country"] = LocScaleReparam()
+        reparam["rate_state"] = LocScaleReparam()
+        reparam["init_state"] = LocScaleReparam()
     else:
         time_shift = torch.zeros(P, C)
     with poutine.reparam(config=reparam):
@@ -544,8 +564,10 @@ def model(dataset, model_type, *, forecast_steps=None):
         coef_scale = pyro.sample("coef_scale", dist.LogNormal(-4, 2))
         rate_loc_scale = pyro.sample("rate_loc_scale", dist.LogNormal(-4, 2))
         init_loc_scale = pyro.sample("init_loc_scale", dist.LogNormal(0, 2))
-        rate_scale = pyro.sample("rate_scale", dist.LogNormal(-4, 2))
-        init_scale = pyro.sample("init_scale", dist.LogNormal(0, 2))
+        rate_country_scale = pyro.sample("rate_country_scale", dist.LogNormal(-4, 2))
+        init_country_scale = pyro.sample("init_country_scale", dist.LogNormal(0, 2))
+        rate_state_scale = pyro.sample("rate_state_scale", dist.LogNormal(-4, 2))
+        init_state_scale = pyro.sample("init_state_scale", dist.LogNormal(0, 2))
 
         # Assume relative growth rate depends strongly on mutations and weakly
         # on clade and place. Assume initial infections depend strongly on
@@ -561,9 +583,33 @@ def model(dataset, model_type, *, forecast_steps=None):
                 "rate_loc", 0.01 * coef @ features.T + rate_walk @ ancestry
             )  # [C]
             init_loc = pyro.sample("init_loc", dist.Normal(0, init_loc_scale))  # [C]
+        with country_plate, clade_plate:
+            rate_country = pyro.sample(
+                "rate_country", dist.Normal(rate_loc, rate_country_scale)
+            )  # [K, C]
+            init_country = pyro.sample(
+                "init_country", dist.Normal(init_loc, init_country_scale)
+            )  # [K, C]
+        with state_plate, clade_plate:
+            rate_state = pyro.sample(
+                "rate_state",
+                dist.Normal(
+                    rate_country.index_select(-2, state_to_country), rate_state_scale
+                ),
+            )  # [S, C]
+            init_state = pyro.sample(
+                "init_state",
+                dist.Normal(
+                    init_country.index_select(-2, state_to_country), init_state_scale
+                ),
+            )  # [S, C]
         with place_plate, clade_plate:
-            rate = pyro.sample("rate", dist.Normal(rate_loc, rate_scale))  # [P, C]
-            init = pyro.sample("init", dist.Normal(init_loc, init_scale))  # [P, C]
+            rate = pyro.deterministic(
+                "rate", torch.cat([rate_country, rate_state], -2)
+            )  # [P, C]
+            init = pyro.deterministic(
+                "init", torch.cat([init_country, init_state], -2)
+            )  # [P, C]
 
         # Optionally predict probabilities (during prediction).
         if forecast_steps is not None:
@@ -633,6 +679,8 @@ class InitLocFn:
         init.add_(1 / init.size(-1)).div_(init.sum(-1, True))
         init.log_().sub_(init.median(-1, True).values)
         self.init = init  # [P, C]
+        self.init_country = init[: -len(dataset["state_to_country"])]
+        self.init_state = init[-len(dataset["state_to_country"]) :]
         self.init_decentered = init / 2
         self.init_loc = init.mean(0)  # [C]
         self.init_loc_decentered = self.init_loc / 2
@@ -646,17 +694,34 @@ class InitLocFn:
             result = getattr(self, name)
             assert result.shape == shape
             return result
-        if name in ("coef_scale", "init_scale", "init_loc_scale"):
+        if name in (
+            "coef_scale",
+            "init_scale",
+            "init_loc_scale",
+            "init_state_scale",
+            "init_country_scale",
+        ):
             return torch.ones(shape)
         if name == "logits_scale":
             return torch.full(shape, 0.002)
-        if name in ("rate_loc_scale", "rate_scale", "place_scale", "clade_scale"):
+        if name in (
+            "rate_loc_scale",
+            "rate_scale",
+            "rate_country_scale",
+            "rate_state_scale",
+            "place_scale",
+            "clade_scale",
+        ):
             return torch.full(shape, 0.01)
         if name in (
             "rate_loc",
             "rate_loc_decentered",
             "rate_walk",
             "rate_walk_decentered",
+            "rate_country",
+            "rate_country_decentered",
+            "rate_state",
+            "rate_state_decentered",
             "coef",
             "coef_decentered",
             "rate",

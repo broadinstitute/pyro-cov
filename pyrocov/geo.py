@@ -49,6 +49,7 @@ GISAID_NORMALIZE = {
     "Asia / Vietnam / Vinhphuc": "Asia / Vietnam / Vinh Phuc",
     "Europe / Croatia / Osijek Baranjacounty": "Europe / Croatia / Osijek Baranja",
     "Europe / England": "Europe / United Kingdom / England",
+    "Europe / England / Suffolk": "Europe / United Kingdom / England / Suffolk",
     "Europe / Slovak Republic": "Europe / Slovakia",
     "Europe / Sweden / Vastra Gotalandsregionen": "Europe / Sweden / Vastra Gotalands",
     "North America / U.s Virgin Islands / St Croix": "North America / USA / U.s Virgin Islands / St Croix",
