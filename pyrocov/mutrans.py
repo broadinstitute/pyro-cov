@@ -552,12 +552,11 @@ def model(dataset, model_type, *, forecast_steps=None):
     if "reparam" in model_type:
         time_shift = pyro.param("time_shift", lambda: torch.zeros(P, C))  # [P, C]
         reparam["coef"] = LocScaleReparam()
-        reparam["rate_walk" if "ancest" in model_type else "rate_loc"] = LocScaleReparam()
+        reparam["rate_walk"] = LocScaleReparam()
         reparam["init_loc"] = LocScaleReparam()
-        reparam["rate_country"] = LocScaleReparam()
         reparam["init_country"] = LocScaleReparam()
-        reparam["rate_state"] = LocScaleReparam()
         reparam["init_state"] = LocScaleReparam()
+        reparam["rate"] = LocScaleReparam()
     else:
         time_shift = torch.zeros(P, C)
     with poutine.reparam(config=reparam):
@@ -566,10 +565,8 @@ def model(dataset, model_type, *, forecast_steps=None):
         coef_scale = pyro.sample("coef_scale", dist.LogNormal(-4, 2))
         rate_loc_scale = pyro.sample("rate_loc_scale", dist.LogNormal(-4, 2))
         init_loc_scale = pyro.sample("init_loc_scale", dist.LogNormal(0, 2))
-        rate_country_scale = pyro.sample("rate_country_scale", dist.LogNormal(-4, 2))
-        init_country_scale = pyro.sample("init_country_scale", dist.LogNormal(0, 2))
-        rate_state_scale = pyro.sample("rate_state_scale", dist.LogNormal(-4, 2))
-        init_state_scale = pyro.sample("init_state_scale", dist.LogNormal(0, 2))
+        rate_scale = pyro.sample("rate_scale", dist.LogNormal(-4, 2))
+        country_scale = pyro.sample("country_scale", dist.LogNormal(0, 2))
 
         # Assume relative growth rate depends strongly on mutations and weakly
         # on clade and place. Assume initial infections depend strongly on
@@ -577,43 +574,26 @@ def model(dataset, model_type, *, forecast_steps=None):
         coef = pyro.sample(
             "coef", dist.Logistic(torch.zeros(F), coef_scale).to_event(1)
         )  # [F]
+        with country_plate:
+            state_scale = pyro.sample("state_scale", dist.LogNormal(0, 2))  # [K, 1]
         with clade_plate:
-            if "ancest" in model_type:
-                rate_walk = pyro.sample(
-                    "rate_walk", dist.Logistic(0, rate_loc_scale)
-                )  # [C]
-                rate_loc = pyro.deterministic(
-                    "rate_loc", 0.01 * coef @ features.T + rate_walk @ ancestry
-                )  # [C]
-            else:
-                rate_loc = pyro.sample(
-                    "rate_loc", dist.Normal(0.01 * coef @ features.T, rate_loc_scale)
-                )
+            rate_walk = pyro.sample("rate_walk", dist.Normal(0, rate_loc_scale))  # [C]
+            rate_loc = pyro.deterministic(
+                "rate_loc", 0.01 * (coef @ features.T + rate_walk @ ancestry)
+            )  # [C]
             init_loc = pyro.sample("init_loc", dist.Normal(0, init_loc_scale))  # [C]
         with country_plate, clade_plate:
-            rate_country = pyro.sample(
-                "rate_country", dist.Normal(rate_loc, rate_country_scale)
-            )  # [K, C]
             init_country = pyro.sample(
-                "init_country", dist.Normal(init_loc, init_country_scale)
+                "init_country", dist.Normal(init_loc, country_scale)
             )  # [K, C]
         with state_plate, clade_plate:
-            rate_state = pyro.sample(
-                "rate_state",
-                dist.Normal(
-                    rate_country.index_select(-2, state_to_country), rate_state_scale
-                ),
-            )  # [S, C]
+            init_state_loc = init_country[state_to_country]
+            init_state_scale = state_scale[state_to_country]
             init_state = pyro.sample(
-                "init_state",
-                dist.Normal(
-                    init_country.index_select(-2, state_to_country), init_state_scale
-                ),
+                "init_state", dist.Normal(init_state_loc, init_state_scale)
             )  # [S, C]
         with place_plate, clade_plate:
-            rate = pyro.deterministic(
-                "rate", torch.cat([rate_country, rate_state], -2)
-            )  # [P, C]
+            rate = pyro.sample("rate", dist.Normal(rate_loc, rate_scale))  # [P, C]
             init = pyro.deterministic(
                 "init", torch.cat([init_country, init_state], -2)
             )  # [P, C]
@@ -709,8 +689,8 @@ class InitLocFn:
             "coef_scale",
             "init_scale",
             "init_loc_scale",
-            "init_state_scale",
-            "init_country_scale",
+            "country_scale",
+            "state_scale",
         ):
             return torch.ones(shape)
         if name == "logits_scale":
@@ -718,8 +698,6 @@ class InitLocFn:
         if name in (
             "rate_loc_scale",
             "rate_scale",
-            "rate_country_scale",
-            "rate_state_scale",
             "place_scale",
             "clade_scale",
         ):
@@ -737,6 +715,7 @@ class InitLocFn:
             "coef_decentered",
             "rate",
             "rate_decentered",
+            "state_log_scale",
         ):
             return torch.rand(shape).sub_(0.5).mul_(0.01)
         if name == "coef_loc":
