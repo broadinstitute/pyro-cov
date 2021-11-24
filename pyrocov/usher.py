@@ -150,7 +150,7 @@ def prune_mutation_tree(
 
         value(node) = num_mutations(node) * weights(node)
 
-    Returns a dict mapping old clade names to new clade names.
+    Returns a restricted set of clade names.
     """
     with open(filename_in, "rb") as f:
         proto = parsimony_pb2.data.FromString(f.read())  # type: ignore

@@ -54,7 +54,7 @@ class FineToMeso:
     def __call__(self, fine):
         meso = self._cache.get(fine, None)
         if meso is None:
-            meso = fine if fine in self.meso_set else self(fine.rsplit(".")[0])
+            meso = fine if fine in self.meso_set else self(fine.rsplit(".", 1)[0])
             self._cache[fine] = meso
         return meso
 

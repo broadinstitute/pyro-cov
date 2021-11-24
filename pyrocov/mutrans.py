@@ -267,7 +267,6 @@ def load_gisaid_data(
             continue
         parts = tuple(p.strip() for p in parts[:3])
         if len(parts) == 3 and parts not in fine_regions:
-            assert min_region_size
             parts = parts[:2]
         location = " / ".join(parts)
         # Populate countries on the left and states on the right.
