@@ -71,12 +71,11 @@ analyze: FORCE
 
 push: FORCE
 	gsutil -m -o GSUtil:parallel_composite_upload_threshold=150M \
-	  rsync -r -x '.*\.json$$|.*mutrans\.pt$$' \
+	  rsync -r -x '.*\.json$$|.*mutrans\.pt$$|.*\btemp\b.*' \
 	  $(shell readlink results)/ gs://pyro-cov/$(shell readlink results)/
 
 pull: FORCE
-	gsutil -m -o GSUtil:parallel_composite_upload_threshold=150M \
-	  rsync -r -x '.*\.json$$|.*mutrans\.pt$$' \
+	gsutil rsync -r -x '.*\.json$$|.*mutrans\.pt$$|.*\btemp\b.*' \
 	  gs://pyro-cov/$(shell readlink results)/ $(shell readlink results)/
 
 ###########################################################################
@@ -85,7 +84,10 @@ pull: FORCE
 data:
 	ln -sf ~/Google\ Drive\ File\ Stream/Shared\ drives/Pyro\ CoV data
 
-ssh:
+ssh-cpu:
+	gcloud compute ssh --project pyro-284215 --zone us-central1-c pyro-cov-fritzo-vm -- -AX
+
+ssh-gpu:
 	gcloud compute ssh --project pyro-284215 --zone us-central1-c pyro-fritzo-vm-gpu -- -AX
 
 FORCE:
