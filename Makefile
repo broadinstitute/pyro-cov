@@ -71,12 +71,14 @@ analyze: FORCE
 
 push: FORCE
 	gsutil -m -o GSUtil:parallel_composite_upload_threshold=150M \
-	  rsync -r -x '.*\.json$$|.*mutrans\.pt$$|.*\btemp\b.*' \
-	  $(shell readlink results)/ gs://pyro-cov/$(shell readlink results)/
+	  rsync -r -x '.*\.json$$|.*mutrans\.pt$$|.*temp\..*' \
+	  $(shell readlink results)/ \
+	  gs://pyro-cov/$(shell readlink results | grep -o 'results\.[-0-9]*')/
 
 pull: FORCE
-	gsutil rsync -r -x '.*\.json$$|.*mutrans\.pt$$|.*\btemp\b.*' \
-	  gs://pyro-cov/$(shell readlink results)/ $(shell readlink results)/
+	gsutil rsync -r -x '.*\.json$$|.*mutrans\.pt$$|.*temp\..*' \
+	  gs://pyro-cov/$(shell readlink results | grep -o 'results\.[-0-9]*')/ \
+	  $(shell readlink results)/
 
 ###########################################################################
 # TODO remove these user-specific targets
