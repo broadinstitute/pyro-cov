@@ -31,6 +31,27 @@ def pyro_param(name, shape, constraint=constraints.real):
     return transform(unconstrained)
 
 
+def quotient_central_moments(
+    fine_values: torch.Tensor, fine_to_coarse: torch.Tensor
+) -> torch.Tensor:
+    """
+    Returns (zeroth, first, second) central momemnts of each coarse cluster of
+    fine values, i.e. (count, mean, stddev).
+
+    :returns: A single stacked tensor of shape ``(3,) + fine_values.shape``.
+    """
+    C = 1 + int(fine_to_coarse.max())
+    moments = torch.zeros(3, C)
+    moments[0].scatter_add_(0, fine_to_coarse, torch.ones_like(fine_values))
+    moments[1].scatter_add_(0, fine_to_coarse, fine_values)
+    moments[1] /= moments[0]
+    fine_diff2 = (fine_values - moments[1][fine_to_coarse]).square()
+    moments[2].scatter_add_(0, fine_to_coarse, fine_diff2)
+    moments[2] /= moments[0]
+    moments[2].sqrt_()
+    return moments
+
+
 def weak_memoize_by_id(fn):
     cache = {}
     missing = object()  # An arbitrary value that cannot be returned by fn.
