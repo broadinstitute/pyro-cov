@@ -38,6 +38,7 @@ then postprocessing with the following Jupyter notebooks:
 
 ![Growth rate versus emergence date](strain_emergence.png)
 ![Growth rate versus case count](strain_prevalence.png)
+![PANGO lineage heterogeneity](lineage_heterogeneity.png)
 ![Forecast](forecast.png)
 ![Deep scanning](deep_scanning.png)
 
