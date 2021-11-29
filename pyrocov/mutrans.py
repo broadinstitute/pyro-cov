@@ -519,12 +519,9 @@ def model(dataset, model_type, *, forecast_steps=None):
     features = dataset["features"]
     local_time = dataset["local_time"]  # [T, P]
     ancestry = dataset["ancestry"]
-    state_to_country = dataset["state_to_country"]
     clade_id_to_lineage_id = dataset["clade_id_to_lineage_id"]
     T, P = local_time.shape
     C, F = features.shape
-    (S,) = state_to_country.shape
-    K = P - S
     L = len(dataset["lineage_id"])
     assert ancestry.shape == (C, C)
     assert clade_id_to_lineage_id.shape == (C,)
@@ -542,9 +539,7 @@ def model(dataset, model_type, *, forecast_steps=None):
         local_time = t0 + dt * torch.arange(float(T))[:, None]
         assert local_time.shape == (T, P)
     clade_plate = pyro.plate("clade", C, dim=-1)
-    country_plate = pyro.plate("country", K, dim=-2)
-    state_plate = pyro.plate("state", S, dim=-2)
-    place_plate = pyro.plate("place", P, dim=-2)  # place = cat([country, state])
+    place_plate = pyro.plate("place", P, dim=-2)
     time_plate = pyro.plate("time", T, dim=-3)
 
     # Configure reparametrization (which does not affect model density).
@@ -554,9 +549,8 @@ def model(dataset, model_type, *, forecast_steps=None):
         reparam["coef"] = LocScaleReparam()
         reparam["rate_walk"] = LocScaleReparam()
         reparam["init_loc"] = LocScaleReparam()
-        reparam["init_country"] = LocScaleReparam()
-        reparam["init_state"] = LocScaleReparam()
         reparam["rate"] = LocScaleReparam()
+        reparam["init"] = LocScaleReparam()
     else:
         time_shift = torch.zeros(P, C)
     with poutine.reparam(config=reparam):
@@ -566,7 +560,7 @@ def model(dataset, model_type, *, forecast_steps=None):
         rate_loc_scale = pyro.sample("rate_loc_scale", dist.LogNormal(-4, 2))
         init_loc_scale = pyro.sample("init_loc_scale", dist.LogNormal(0, 2))
         rate_scale = pyro.sample("rate_scale", dist.LogNormal(-4, 2))
-        country_scale = pyro.sample("country_scale", dist.LogNormal(0, 2))
+        init_scale = pyro.sample("init_scale", dist.LogNormal(0, 2))
 
         # Assume relative growth rate depends strongly on mutations and weakly
         # on clade and place. Assume initial infections depend strongly on
@@ -574,29 +568,15 @@ def model(dataset, model_type, *, forecast_steps=None):
         coef = pyro.sample(
             "coef", dist.Logistic(torch.zeros(F), coef_scale).to_event(1)
         )  # [F]
-        with country_plate:
-            state_scale = pyro.sample("state_scale", dist.LogNormal(0, 2))  # [K, 1]
         with clade_plate:
             rate_walk = pyro.sample("rate_walk", dist.Normal(0, rate_loc_scale))  # [C]
             rate_loc = pyro.deterministic(
                 "rate_loc", 0.01 * (coef @ features.T + rate_walk @ ancestry)
             )  # [C]
             init_loc = pyro.sample("init_loc", dist.Normal(0, init_loc_scale))  # [C]
-        with country_plate, clade_plate:
-            init_country = pyro.sample(
-                "init_country", dist.Normal(init_loc, country_scale)
-            )  # [K, C]
-        with state_plate, clade_plate:
-            init_state_loc = init_country[state_to_country]
-            init_state_scale = state_scale[state_to_country]
-            init_state = pyro.sample(
-                "init_state", dist.Normal(init_state_loc, init_state_scale)
-            )  # [S, C]
         with place_plate, clade_plate:
             rate = pyro.sample("rate", dist.Normal(rate_loc, rate_scale))  # [P, C]
-            init = pyro.deterministic(
-                "init", torch.cat([init_country, init_state], -2)
-            )  # [P, C]
+            init = pyro.sample("init", dist.Normal(init_loc, init_scale))  # [P, C]
 
         # Optionally predict probabilities (during prediction).
         if forecast_steps is not None:
@@ -670,8 +650,6 @@ class InitLocFn:
         init.add_(1 / init.size(-1)).div_(init.sum(-1, True))
         init.log_().sub_(init.median(-1, True).values)
         self.init = init  # [P, C]
-        self.init_country = init[: -len(dataset["state_to_country"])]
-        self.init_state = init[-len(dataset["state_to_country"]) :]
         self.init_decentered = init / 2
         self.init_loc = init.mean(0)  # [C]
         self.init_loc_decentered = self.init_loc / 2
@@ -689,8 +667,6 @@ class InitLocFn:
             "coef_scale",
             "init_scale",
             "init_loc_scale",
-            "country_scale",
-            "state_scale",
         ):
             return torch.ones(shape)
         if name == "logits_scale":
@@ -707,15 +683,10 @@ class InitLocFn:
             "rate_loc_decentered",
             "rate_walk",
             "rate_walk_decentered",
-            "rate_country",
-            "rate_country_decentered",
-            "rate_state",
-            "rate_state_decentered",
             "coef",
             "coef_decentered",
             "rate",
             "rate_decentered",
-            "state_log_scale",
         ):
             return torch.rand(shape).sub_(0.5).mul_(0.01)
         if name == "coef_loc":
