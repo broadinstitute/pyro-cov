@@ -42,7 +42,7 @@ from .ops import (
     sparse_categorical_kl,
     sparse_multinomial_likelihood,
 )
-from .util import pearson_correlation
+from .util import pearson_correlation, quotient_central_moments
 
 # Requires https://github.com/pyro-ppl/pyro/pull/2953
 try:
@@ -111,7 +111,9 @@ def rank_loo_lineages(
         lineages.append(child)
 
     # Sort leaf nodes by their distance from parent.
-    rate_loc = full_result["median"]["rate_loc"]
+    rate = quotient_central_moments(
+        full_result["median"]["rate_loc"], full_dataset["clade_id_to_lineage_id"]
+    )[1]
     ranked_lineages = []
     for child in lineages:
         # Allow grandparent to adopt orphan, since e.g. B.1.617 is missing from
@@ -120,7 +122,7 @@ def rank_loo_lineages(
         assert parent is not None
         c = lineage_id[child]
         p = lineage_id[parent]
-        gap = (rate_loc[c] - rate_loc[p]).abs().item()
+        gap = (rate[c] - rate[p]).abs().item()
         ranked_lineages.append((gap, child))
     ranked_lineages.sort(reverse=True)
 

@@ -231,10 +231,8 @@ def vary_leaves(args, default_config):
     Run a leave-one-out experiment over a set of leaf clades, saving results
     to ``results/mutrans.vary_leaves.pt``.
     """
-    # FIXME update using usher_features["coarse_to_fine"]
     # Load a single common dataset.
     dataset = load_data(args)
-    clade_id = {name: i for i, name in enumerate(dataset["clade_id_inv"])}
     descendents = pangolin.find_descendents(dataset["clade_id_inv"])
     if args.only_gene:
         for m in dataset["mutations"]:
@@ -263,18 +261,21 @@ def vary_leaves(args, default_config):
     )
 
     # Run inference for each lineage. This is very expensive.
+    lineage_to_clade = dataset["lineage_to_clade"]
+    clade_id = dataset["clade_id"]
     results = {}
     for lineage in lineages:
         config = make_config(exclude={"lineage": "^" + lineage + "$"})
         logger.info(f"Config: {config}")
 
         # Construct a leave-one-out dataset by zeroing out a subclade.
-        clade = [clade_id[lineage]]
-        for descendent in descendents[lineage]:
-            clade.append(clade_id[descendent])
+        clade = lineage_to_clade[lineage]
+        heldout = [clade_id[clade]]
+        for descendent in descendents[clade]:
+            heldout.append(clade_id[descendent])
         loo_dataset = dataset.copy()
         loo_dataset["weekly_clades"] = dataset["weekly_clades"].clone()
-        loo_dataset["weekly_clades"][:, :, clade] = 0
+        loo_dataset["weekly_clades"][:, :, heldout] = 0
 
         # Run SVI
         result = fit_svi(args, loo_dataset, *config)
@@ -293,7 +294,7 @@ def vary_leaves(args, default_config):
         torch.save(results, "results/mutrans.vary_leaves.pt")
 
 
-def vary_gene(args, default_config):
+def vary_gene(args, default_config, *, exclude_genes=False):
     """
     Train on the whole genome and on various single genes, saving results to
     ``results/mutrans.vary_gene.pt``.
@@ -307,7 +308,8 @@ def vary_gene(args, default_config):
     grid = [{}, {"exclude": {"gene": ".*"}}]  # full and empty sets of genes
     for gene in genes:
         grid.append({"include": {"gene": f"^{gene}:"}})
-        grid.append({"exclude": {"gene": f"^{gene}:"}})
+        if exclude_genes:
+            grid.append({"exclude": {"gene": f"^{gene}:"}})
 
     def make_config(**holdout):
         config = list(default_config)
