@@ -547,20 +547,24 @@ def model(dataset, model_type, *, forecast_steps=None):
     if "reparam" in model_type:
         time_shift = pyro.param("time_shift", lambda: torch.zeros(P, C))  # [P, C]
         reparam["coef"] = LocScaleReparam()
-        reparam["rate_walk"] = LocScaleReparam()
         reparam["init_loc"] = LocScaleReparam()
         reparam["rate"] = LocScaleReparam()
         reparam["init"] = LocScaleReparam()
+        if "walk" in model_type:
+            reparam["rate_walk"] = LocScaleReparam()
+        elif "flat" in model_type:
+            reparam["rate_loc"] = LocScaleReparam()
     else:
         time_shift = torch.zeros(P, C)
     with poutine.reparam(config=reparam):
 
         # Sample global random variables.
         coef_scale = pyro.sample("coef_scale", dist.LogNormal(-4, 2))
-        rate_loc_scale = pyro.sample("rate_loc_scale", dist.LogNormal(-4, 2))
         init_loc_scale = pyro.sample("init_loc_scale", dist.LogNormal(0, 2))
         rate_scale = pyro.sample("rate_scale", dist.LogNormal(-4, 2))
         init_scale = pyro.sample("init_scale", dist.LogNormal(0, 2))
+        if "tree" in model_type or "flat" in model_type:
+            rate_loc_scale = pyro.sample("rate_loc_scale", dist.LogNormal(-4, 2))
 
         # Assume relative growth rate depends strongly on mutations and weakly
         # on clade and place. Assume initial infections depend strongly on
@@ -569,10 +573,19 @@ def model(dataset, model_type, *, forecast_steps=None):
             "coef", dist.Logistic(torch.zeros(F), coef_scale).to_event(1)
         )  # [F]
         with clade_plate:
-            rate_walk = pyro.sample("rate_walk", dist.Normal(0, rate_loc_scale))  # [C]
-            rate_loc = pyro.deterministic(
-                "rate_loc", 0.01 * (coef @ features.T + rate_walk @ ancestry)
-            )  # [C]
+            if "tree" in model_type:
+                rate_walk = pyro.sample(
+                    "rate_walk", dist.Normal(0, rate_loc_scale)
+                )  # [C]
+                rate_loc = pyro.deterministic(
+                    "rate_loc", 0.01 * (coef @ features.T + rate_walk @ ancestry)
+                )  # [C]
+            elif "flat" in model_type:
+                rate_loc = pyro.sample(
+                    "rate_loc", dist.Normal(0.01 * coef @ features.T, rate_loc_scale)
+                )  # [C]
+            else:
+                rate_loc = pyro.deterministic(0.01 * coef @ features.T)  # [C]
             init_loc = pyro.sample("init_loc", dist.Normal(0, init_loc_scale))  # [C]
         with place_plate, clade_plate:
             rate = pyro.sample("rate", dist.Normal(rate_loc, rate_scale))  # [P, C]
