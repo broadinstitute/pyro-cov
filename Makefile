@@ -39,9 +39,11 @@ format: FORCE
 	isort --skip=pyrocov/external .
 	python scripts/update_headers.py
 
-test: lint data FORCE
+test: lint FORCE
+	python scripts/git_pull.py --no-update cov-lineages/pango-designation
+	python scripts/git_pull.py --no-update cov-lineages/pangoLEARN
 	pytest -v -n auto test
-	python mutrans.py --test -n 2 -s 4
+	test -e results/aligndb && python mutrans.py --test -n 2 -s 4
 
 ###########################################################################
 # Main processing workflow

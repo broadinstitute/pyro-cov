@@ -56,5 +56,5 @@ jobs:
           pip freeze
       - name: Run unit tests
         run: |
-          pytest -vx test
+          make test
 
