@@ -520,12 +520,10 @@ def model(dataset, model_type, *, forecast_steps=None):
     # Tensor shapes are commented at at the end of some lines.
     features = dataset["features"]
     local_time = dataset["local_time"]  # [T, P]
-    ancestry = dataset["ancestry"]
     clade_id_to_lineage_id = dataset["clade_id_to_lineage_id"]
     T, P = local_time.shape
     C, F = features.shape
     L = len(dataset["lineage_id"])
-    assert ancestry.shape == (C, C)
     assert clade_id_to_lineage_id.shape == (C,)
     if forecast_steps is None:  # During inference.
         if "dense" in model_type:
@@ -552,10 +550,6 @@ def model(dataset, model_type, *, forecast_steps=None):
         reparam["init_loc"] = LocScaleReparam()
         reparam["rate"] = LocScaleReparam()
         reparam["init"] = LocScaleReparam()
-        if "walk" in model_type:
-            reparam["rate_walk"] = LocScaleReparam()
-        elif "flat" in model_type:
-            reparam["rate_loc"] = LocScaleReparam()
     else:
         time_shift = torch.zeros(P, C)
     with poutine.reparam(config=reparam):
@@ -565,8 +559,6 @@ def model(dataset, model_type, *, forecast_steps=None):
         init_loc_scale = pyro.sample("init_loc_scale", dist.LogNormal(0, 2))
         rate_scale = pyro.sample("rate_scale", dist.LogNormal(-4, 2))
         init_scale = pyro.sample("init_scale", dist.LogNormal(0, 2))
-        if "tree" in model_type or "flat" in model_type:
-            rate_loc_scale = pyro.sample("rate_loc_scale", dist.LogNormal(-4, 2))
 
         # Assume relative growth rate depends strongly on mutations and weakly
         # on clade and place. Assume initial infections depend strongly on
@@ -575,21 +567,7 @@ def model(dataset, model_type, *, forecast_steps=None):
             "coef", dist.Logistic(torch.zeros(F), coef_scale).to_event(1)
         )  # [F]
         with clade_plate:
-            if "tree" in model_type:
-                rate_walk = pyro.sample(
-                    "rate_walk", dist.Normal(0, rate_loc_scale)
-                )  # [C]
-                rate_loc = pyro.deterministic(
-                    "rate_loc", 0.01 * (coef @ features.T + rate_walk @ ancestry)
-                )  # [C]
-            elif "flat" in model_type:
-                rate_loc = pyro.sample(
-                    "rate_loc", dist.Normal(0.01 * coef @ features.T, rate_loc_scale)
-                )  # [C]
-            else:
-                rate_loc = pyro.deterministic(
-                    "rate_loc", 0.01 * coef @ features.T
-                )  # [C]
+            rate_loc = pyro.deterministic("rate_loc", 0.01 * coef @ features.T)  # [C]
             init_loc = pyro.sample("init_loc", dist.Normal(0, init_loc_scale))  # [C]
         with place_plate, clade_plate:
             rate = pyro.sample("rate", dist.Normal(rate_loc, rate_scale))  # [P, C]
@@ -598,9 +576,8 @@ def model(dataset, model_type, *, forecast_steps=None):
         # Optionally predict probabilities (during prediction).
         if forecast_steps is not None:
             logits = init + rate * (time_shift + local_time[..., None])  # [T, P, C]
-            probs = logits.softmax(-1)
             probs = logits.new_zeros(logits.shape[:2] + (L,)).scatter_add_(
-                -1, clade_id_to_lineage_id.expand_as(probs), logits.softmax(-1)
+                -1, clade_id_to_lineage_id.expand_as(logits), logits.softmax(-1)
             )
             with time_plate, place_plate, pyro.plate("lineage", L, dim=-1):
                 pyro.deterministic("probs", probs)
@@ -689,7 +666,6 @@ class InitLocFn:
         if name == "logits_scale":
             return torch.full(shape, 0.002)
         if name in (
-            "rate_loc_scale",
             "rate_scale",
             "place_scale",
             "clade_scale",
@@ -698,8 +674,6 @@ class InitLocFn:
         if name in (
             "rate_loc",
             "rate_loc_decentered",
-            "rate_walk",
-            "rate_walk_decentered",
             "coef",
             "coef_decentered",
             "rate",
@@ -733,8 +707,6 @@ class Guide(AutoGuideList):
             "coef_decentered",
             "rate_loc",
             "rate_loc_decentered",
-            "rate_walk",
-            "rate_walk_decentered",
             "init_loc",
             "init_loc_decentered",
         ]
