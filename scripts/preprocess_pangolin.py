@@ -6,7 +6,7 @@ import logging
 import math
 import os
 import pickle
-from collections import defaultdict
+from collections import Counter, defaultdict
 
 import torch
 
@@ -120,15 +120,21 @@ def main(args):
     # Create dense aa features.
     clades = sorted(nuc_mutations_by_clade)
     clade_ids = {k: i for i, k in enumerate(clades)}
-    aa_mutations = sorted(set(m for ms in aa_mutations_by_clade.values() for m in ms))
+    aa_mutations = Counter()
+    for ms in aa_mutations_by_clade.values():
+        aa_mutations.update(ms)
+    aa_mutations = [
+        m for m, c in aa_mutations.most_common() if c >= args.min_mutation_count
+    ]
     logger.info(f"Found {len(aa_mutations)} amino acid mutations")
     mutation_ids = {k: i for i, k in enumerate(aa_mutations)}
     aa_features = torch.zeros(len(clade_ids), len(mutation_ids), dtype=torch.bool)
     for clade, ms in aa_mutations_by_clade.items():
         i = clade_ids[clade]
         for m in ms:
-            j = mutation_ids[m]
-            aa_features[i, j] = True
+            j = mutation_ids.get(m)
+            if j is not None:
+                aa_features[i, j] = True
 
     # Create a dense ancestry matrix.
     ancestry = torch.eye(len(clades))
@@ -183,5 +189,6 @@ if __name__ == "__main__":
     parser.add_argument("--features-file-out", default="")
     parser.add_argument("--columns-file-out", default="")
     parser.add_argument("-c", "--max-num-clades", type=int, default=5000)
+    parser.add_argument("--min-mutation-count", type=int, default=2)
     args = parser.parse_args()
     main(args)
