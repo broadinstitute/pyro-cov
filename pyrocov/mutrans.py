@@ -1003,16 +1003,12 @@ def log_stats(dataset: dict, result: dict) -> dict:
         stats[f"ΔlogR({name}) std"] = s
 
     # Growth rates of individual clades.
-    try:
-        i = dataset["clade_id"]["A"]
-        rate_A = result["mean"]["rate"][..., i].mean(0)
-    except KeyError:
-        rate_A = result["mean"]["rate"].median()
-    for lineage in ["B.1.1.7", "B.1.617.2"]:
-        clade = dataset["lineage_to_clade"][lineage]
-        i = dataset["clade_id"][clade]
-        rate = result["median"]["rate"][..., i].mean()
-        R_RA = (rate - rate_A).exp()
+    rate = quotient_central_moments(
+        result["mean"]["rate"].mean(0), dataset["clade_id_to_lineage_id"]
+    )[1]
+    rate = rate - rate[dataset["lineage_id"]["A"]]
+    for lineage in ["B.1.1.7", "B.1.617.2", "AY.23.1"]:
+        R_RA = float(rate[dataset["lineage_id"][lineage]])
         logger.info(f"R({lineage})/R(A) = {R_RA:0.3g}")
         stats[f"R({lineage})/R(A)"] = R_RA
 
