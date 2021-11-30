@@ -585,7 +585,9 @@ def model(dataset, model_type, *, forecast_steps=None):
                     "rate_loc", dist.Normal(0.01 * coef @ features.T, rate_loc_scale)
                 )  # [C]
             else:
-                rate_loc = pyro.deterministic(0.01 * coef @ features.T)  # [C]
+                rate_loc = pyro.deterministic(
+                    "rate_loc", 0.01 * coef @ features.T
+                )  # [C]
             init_loc = pyro.sample("init_loc", dist.Normal(0, init_loc_scale))  # [C]
         with place_plate, clade_plate:
             rate = pyro.sample("rate", dist.Normal(rate_loc, rate_scale))  # [P, C]
