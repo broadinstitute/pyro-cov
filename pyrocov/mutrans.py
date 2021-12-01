@@ -37,11 +37,7 @@ from torch.distributions import constraints
 import pyrocov.geo
 
 from . import pangolin, sarscov2
-from .ops import (
-    logistic_logsumexp,
-    sparse_categorical_kl,
-    sparse_multinomial_likelihood,
-)
+from .ops import sparse_categorical_kl, sparse_multinomial_likelihood
 from .util import pearson_correlation, quotient_central_moments
 
 # Requires https://github.com/pyro-ppl/pyro/pull/2953
@@ -351,8 +347,9 @@ def load_gisaid_data(
 
     # Construct region-local time scales centered around observations.
     num_obs = weekly_clades.sum(-1)
-    local_time = torch.arange(float(len(num_obs))) * TIMESTEP / GENERATION_TIME
-    local_time = local_time[:, None]
+    time = torch.arange(float(len(num_obs))) * TIMESTEP / GENERATION_TIME
+    time -= time.mean()
+    local_time = time[:, None]
     local_time = local_time - (local_time * num_obs).sum(0) / num_obs.sum(0).clamp(
         min=1
     )
@@ -386,8 +383,9 @@ def load_gisaid_data(
         "mutations": mutations,
         "sparse_counts": sparse_counts,
         "sparse_hist": sparse_hist,
-        "weekly_clades": weekly_clades,
         "state_to_country": state_to_country,
+        "time": time,
+        "weekly_clades": weekly_clades,
     }
     return dataset
 
@@ -519,25 +517,25 @@ def model(dataset, model_type, *, forecast_steps=None):
     """
     # Tensor shapes are commented at at the end of some lines.
     features = dataset["features"]
-    local_time = dataset["local_time"]  # [T, P]
+    time = dataset["time"]  # [T]
+    weekly_clades = dataset["weekly_clades"]
+    sparse_counts = dataset["sparse_counts"]
+    sparse_hist = dataset["sparse_hist"]
     clade_id_to_lineage_id = dataset["clade_id_to_lineage_id"]
-    T, P = local_time.shape
+    T, P, C = weekly_clades.shape
     C, F = features.shape
     L = len(dataset["lineage_id"])
+    assert time.shape == (T,)
     assert clade_id_to_lineage_id.shape == (C,)
-    if forecast_steps is None:  # During inference.
-        if "dense" in model_type:
-            weekly_clades = dataset["weekly_clades"]
-            assert weekly_clades.shape == (T, P, C)
-        else:
-            sparse_counts = dataset["sparse_counts"]
-            sparse_hist = dataset["sparse_hist"]
-    else:  # During prediction.
+
+    # Optionally extend time axis.
+    if forecast_steps is not None:  # During prediction.
         T = T + forecast_steps
-        t0 = local_time[0]
-        dt = local_time[1] - local_time[0]
-        local_time = t0 + dt * torch.arange(float(T))[:, None]
-        assert local_time.shape == (T, P)
+        t0 = time[0]
+        dt = time[1] - time[0]
+        time = t0 + dt * torch.arange(float(T))
+        assert time.shape == (T,)
+
     clade_plate = pyro.plate("clade", C, dim=-1)
     place_plate = pyro.plate("place", P, dim=-2)
     time_plate = pyro.plate("time", T, dim=-3)
@@ -545,13 +543,10 @@ def model(dataset, model_type, *, forecast_steps=None):
     # Configure reparametrization (which does not affect model density).
     reparam = {}
     if "reparam" in model_type:
-        time_shift = pyro.param("time_shift", lambda: torch.zeros(P, C))  # [P, C]
         reparam["coef"] = LocScaleReparam()
         reparam["init_loc"] = LocScaleReparam()
         reparam["rate"] = LocScaleReparam()
         reparam["init"] = LocScaleReparam()
-    else:
-        time_shift = torch.zeros(P, C)
     with poutine.reparam(config=reparam):
 
         # Sample global random variables.
@@ -572,10 +567,10 @@ def model(dataset, model_type, *, forecast_steps=None):
         with place_plate, clade_plate:
             rate = pyro.sample("rate", dist.Normal(rate_loc, rate_scale))  # [P, C]
             init = pyro.sample("init", dist.Normal(init_loc, init_scale))  # [P, C]
+        logits = init + rate * time[:, None, None]  # [T, P, C]
 
         # Optionally predict probabilities (during prediction).
         if forecast_steps is not None:
-            logits = init + rate * (time_shift + local_time[..., None])  # [T, P, C]
             probs = logits.new_zeros(logits.shape[:2] + (L,)).scatter_add_(
                 -1, clade_id_to_lineage_id.expand_as(logits), logits.softmax(-1)
             )
@@ -586,7 +581,6 @@ def model(dataset, model_type, *, forecast_steps=None):
         # Finally observe counts (during inference).
         if "dense" in model_type:  # equivalent either way
             # Compute a dense likelihood.
-            logits = init + rate * (time_shift + local_time[..., None])  # [T, P, C]
             with time_plate, place_plate:
                 pyro.sample(
                     "obs",
@@ -597,22 +591,7 @@ def model(dataset, model_type, *, forecast_steps=None):
                 raise NotImplementedError
             return
         t, p, c = sparse_counts["index"]
-        if "sparse" in model_type:  # equivalent either way
-            # Compute a cheap sparse likelihood.
-            logits = init[p, c] + rate[p, c] * (time_shift[p, c] + local_time[t, p])
-            log_total = logistic_logsumexp(init, rate, time_shift, local_time)  # [T, P]
-            logits = logits - log_total[t, p]
-            pyro.factor(
-                "obs",
-                sparse_multinomial_likelihood(
-                    sparse_counts["total"], logits, sparse_counts["value"]
-                ),
-            )
-            if sparse_hist:
-                raise NotImplementedError
-            return
         # Compromise between sparse and dense.
-        logits = init + rate * (time_shift + local_time[..., None])  # [T, P, C]
         logits = logits.log_softmax(-1)
         pyro.factor(
             "obs",
