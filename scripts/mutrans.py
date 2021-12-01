@@ -558,7 +558,7 @@ if __name__ == "__main__":
     parser.add_argument("--ambiguous", action="store_true")
     parser.add_argument("-cd", "--cond-data", default="coef_scale=0.5")
     parser.add_argument("-m", "--model-type", default="reparam")
-    parser.add_argument("-g", "--guide-type", default="custom")
+    parser.add_argument("-g", "--guide-type", default="full")
     parser.add_argument("-n", "--num-steps", default=10001, type=int)
     parser.add_argument("-s", "--num-samples", default=1000, type=int)
     parser.add_argument("-lr", "--learning-rate", default=0.05, type=float)
