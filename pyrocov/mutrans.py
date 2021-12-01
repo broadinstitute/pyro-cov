@@ -37,11 +37,7 @@ from torch.distributions import constraints
 import pyrocov.geo
 
 from . import pangolin, sarscov2
-from .ops import (
-    logistic_logsumexp,
-    sparse_categorical_kl,
-    sparse_multinomial_likelihood,
-)
+from .ops import sparse_categorical_kl, sparse_multinomial_likelihood
 from .util import pearson_correlation, quotient_central_moments
 
 # Requires https://github.com/pyro-ppl/pyro/pull/2953
@@ -518,21 +514,18 @@ def model(dataset, model_type, *, forecast_steps=None):
       portions in each (time, regin) bin.
     """
     # Tensor shapes are commented at at the end of some lines.
+    weekly_clades = dataset["weekly_clades"]
+    sparse_counts = dataset["sparse_counts"]
+    sparse_hist = dataset["sparse_hist"]
     features = dataset["features"]
     local_time = dataset["local_time"]  # [T, P]
     clade_id_to_lineage_id = dataset["clade_id_to_lineage_id"]
-    T, P = local_time.shape
+    T, P, C = weekly_clades.shape
     C, F = features.shape
     L = len(dataset["lineage_id"])
+    assert local_time.shape == T, P
     assert clade_id_to_lineage_id.shape == (C,)
-    if forecast_steps is None:  # During inference.
-        if "dense" in model_type:
-            weekly_clades = dataset["weekly_clades"]
-            assert weekly_clades.shape == (T, P, C)
-        else:
-            sparse_counts = dataset["sparse_counts"]
-            sparse_hist = dataset["sparse_hist"]
-    else:  # During prediction.
+    if forecast_steps is not None:  # During prediction.
         T = T + forecast_steps
         t0 = local_time[0]
         dt = local_time[1] - local_time[0]
@@ -572,10 +565,10 @@ def model(dataset, model_type, *, forecast_steps=None):
         with place_plate, clade_plate:
             rate = pyro.sample("rate", dist.Normal(rate_loc, rate_scale))  # [P, C]
             init = pyro.sample("init", dist.Normal(init_loc, init_scale))  # [P, C]
+        logits = init + rate * (time_shift + local_time[..., None])  # [T, P, C]
 
         # Optionally predict probabilities (during prediction).
         if forecast_steps is not None:
-            logits = init + rate * (time_shift + local_time[..., None])  # [T, P, C]
             probs = logits.new_zeros(logits.shape[:2] + (L,)).scatter_add_(
                 -1, clade_id_to_lineage_id.expand_as(logits), logits.softmax(-1)
             )
@@ -596,24 +589,9 @@ def model(dataset, model_type, *, forecast_steps=None):
             if dataset["sparse_hist"]:
                 raise NotImplementedError
             return
-        t, p, c = sparse_counts["index"]
-        if "sparse" in model_type:  # equivalent either way
-            # Compute a cheap sparse likelihood.
-            logits = init[p, c] + rate[p, c] * (time_shift[p, c] + local_time[t, p])
-            log_total = logistic_logsumexp(init, rate, time_shift, local_time)  # [T, P]
-            logits = logits - log_total[t, p]
-            pyro.factor(
-                "obs",
-                sparse_multinomial_likelihood(
-                    sparse_counts["total"], logits, sparse_counts["value"]
-                ),
-            )
-            if sparse_hist:
-                raise NotImplementedError
-            return
         # Compromise between sparse and dense.
-        logits = init + rate * (time_shift + local_time[..., None])  # [T, P, C]
         logits = logits.log_softmax(-1)
+        t, p, c = sparse_counts["index"]
         pyro.factor(
             "obs",
             sparse_multinomial_likelihood(
