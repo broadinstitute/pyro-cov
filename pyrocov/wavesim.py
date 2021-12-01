@@ -1,14 +1,13 @@
 import argparse
-from scipy.stats import spearmanr, pearsonr
+from scipy.stats import pearsonr
 import numpy as np
 
 import torch
-from torch.distributions import Bernoulli, Categorical, Multinomial, Normal
+from torch.distributions import Bernoulli, Multinomial, Normal
 
 import pyro
 from pyro import poutine
 from pyro import distributions as dist
-from pyro.infer.reparam import LocScaleReparam
 
 
 def generate_data(args, seed=0, sigma1=1.0, sigma2=0.1, sigma3=0.25, sigma4=0.1, tau=10.0):
@@ -122,7 +121,8 @@ def main(args):
     num_simulations = 10
     for simulation in range(num_simulations):
         dataset = generate_data(args, seed=args.seed + simulation)
-        pearsons.append( fit_svi(args, dataset) )
+        pearson = fit_svi(args, dataset)
+        pearsons.append(pearson)
 
     print("pearsons", pearsons)
     print("[# waves: {}]  {:.4f} +- {:.4f}".format(args.num_waves, np.mean(pearsons), np.std(pearsons)))
