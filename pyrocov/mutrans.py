@@ -551,7 +551,8 @@ def model(dataset, model_type, *, forecast_steps=None):
 
         # Sample global random variables.
         coef_scale = pyro.sample("coef_scale", dist.LogNormal(-4, 2))
-        init_loc_scale = pyro.sample("init_loc_scale", dist.LogNormal(0, 2))
+        if "noh" not in model_type:
+            init_loc_scale = pyro.sample("init_loc_scale", dist.LogNormal(0, 2))
         rate_scale = pyro.sample("rate_scale", dist.LogNormal(-4, 2))
         init_scale = pyro.sample("init_scale", dist.LogNormal(0, 2))
 
@@ -563,7 +564,12 @@ def model(dataset, model_type, *, forecast_steps=None):
         )  # [F]
         with clade_plate:
             rate_loc = pyro.deterministic("rate_loc", 0.01 * coef @ features.T)  # [C]
-            init_loc = pyro.sample("init_loc", dist.Normal(0, init_loc_scale))  # [C]
+            if "noh" in model_type:
+                init_loc = 0
+            else:
+                init_loc = pyro.sample(
+                    "init_loc", dist.Normal(0, init_loc_scale)
+                )  # [C]
         with place_plate, clade_plate:
             rate = pyro.sample("rate", dist.Normal(rate_loc, rate_scale))  # [P, C]
             init = pyro.sample("init", dist.Normal(init_loc, init_scale))  # [P, C]
@@ -621,7 +627,7 @@ class InitLocFn:
         # Initialize init.
         init = dataset["weekly_clades"].sum(0)  # [P, C]
         init.add_(1 / init.size(-1)).div_(init.sum(-1, True))
-        init.log_().sub_(init.median(-1, True).values)
+        init.log_().sub_(init.median(-1, True).values).add_(torch.randn(init.shape))
         self.init = init  # [P, C]
         self.init_decentered = init / 2
         self.init_loc = init.mean(0)  # [C]
