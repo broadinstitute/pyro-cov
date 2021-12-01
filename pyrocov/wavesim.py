@@ -12,31 +12,35 @@ from pyro import distributions as dist
 
 def generate_data(args, seed=0, sigma1=1.0, sigma2=0.1, sigma3=0.25, sigma4=0.1, tau=10.0):
     torch.manual_seed(seed)
-
     assert args.num_lineages % args.num_waves == 0
 
+    # generate features
     X = Bernoulli(probs=torch.tensor(0.5)).sample(sample_shape=(args.num_lineages, args.num_mutations))
 
+    # generate intercepts
     alpha_s = sigma1 * torch.randn(args.num_lineages)
     alpha_ps = alpha_s + sigma2 * torch.randn(args.num_regions, args.num_lineages)
 
+    # generate coefficients
     beta_f = sigma3 * torch.randn(args.num_mutations)
     beta_f[args.num_causal_mutations:] = 0.0
-
     beta_ps = X @ beta_f + sigma4 * torch.randn(args.num_regions, args.num_lineages)
 
+    # each lineage emerges during a particular wave
     time_shift = args.wave_duration * torch.tile(torch.arange(args.num_waves), (args.num_lineages // args.num_waves,))
 
     time = torch.arange(args.num_waves * args.wave_duration)
     growth_rate = alpha_ps + (time[:, None, None] - time_shift) * beta_ps / tau
     assert growth_rate.shape == time.shape + alpha_ps.shape
 
+    # use a gaussian waveform to modulate counts during each wave
     waveform = Normal(0.5 * args.wave_duration,
                       0.2 * args.wave_duration).log_prob(torch.arange(args.wave_duration).float()).exp()
     waveform = (args.wave_peak * waveform / waveform.max()).round()
     waveform = torch.tile(waveform, (args.num_waves,))
     # print(waveform)
 
+    # workaround pytorch's lack of support for inhomogenous counts in Multinomial
     counts = [Multinomial(total_count=int(waveform[t].item()), logits=growth_rate[t]).sample() for t in time]
     counts = torch.stack(counts)
 
