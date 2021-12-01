@@ -323,6 +323,7 @@ def load_gisaid_data(
     )
 
     # Construct sparse representation.
+    pc_index = weekly_clades.ne(0).any(0).reshape(-1).nonzero(as_tuple=True)[0]
     sparse_counts = _make_sparse(weekly_clades)
     if sparse_hist:
         # Construct a sparse COO matrix for use in the fused gather-scatter:
@@ -381,6 +382,7 @@ def load_gisaid_data(
         "location_id": location_id,
         "location_id_inv": location_id_inv,
         "mutations": mutations,
+        "pc_index": pc_index,
         "sparse_counts": sparse_counts,
         "sparse_hist": sparse_hist,
         "state_to_country": state_to_country,
@@ -525,9 +527,12 @@ def model(dataset, model_type, *, forecast_steps=None):
     sparse_counts = dataset["sparse_counts"]
     sparse_hist = dataset["sparse_hist"]
     clade_id_to_lineage_id = dataset["clade_id_to_lineage_id"]
+    pc_index = dataset["pc_index"]
     T, P, C = weekly_clades.shape
     C, F = features.shape
     L = len(dataset["lineage_id"])
+    PC = len(pc_index)
+    assert PC <= P * C
     assert time.shape == (T,)
     assert clade_id_to_lineage_id.shape == (C,)
 
@@ -542,20 +547,18 @@ def model(dataset, model_type, *, forecast_steps=None):
     clade_plate = pyro.plate("clade", C, dim=-1)
     place_plate = pyro.plate("place", P, dim=-2)
     time_plate = pyro.plate("time", T, dim=-3)
+    pc_plate = pyro.plate("place_clade", PC, dim=-1)
 
     # Configure reparametrization (which does not affect model density).
     reparam = {}
     if "reparam" in model_type:
         reparam["coef"] = LocScaleReparam()
-        reparam["init_loc"] = LocScaleReparam()
-        reparam["rate"] = LocScaleReparam()
-        reparam["init"] = LocScaleReparam()
+        reparam["pc_rate"] = LocScaleReparam()
+        reparam["pc_init"] = LocScaleReparam()
     with poutine.reparam(config=reparam):
 
         # Sample global random variables.
         coef_scale = pyro.sample("coef_scale", dist.LogNormal(-4, 2))
-        if "noh" not in model_type:
-            init_loc_scale = pyro.sample("init_loc_scale", dist.LogNormal(0, 2))
         rate_scale = pyro.sample("rate_scale", dist.LogNormal(-4, 2))
         init_scale = pyro.sample("init_scale", dist.LogNormal(0, 2))
 
@@ -567,15 +570,21 @@ def model(dataset, model_type, *, forecast_steps=None):
         )  # [F]
         with clade_plate:
             rate_loc = pyro.deterministic("rate_loc", 0.01 * coef @ features.T)  # [C]
-            if "noh" in model_type:
-                init_loc = 0
-            else:
-                init_loc = pyro.sample(
-                    "init_loc", dist.Normal(0, init_loc_scale)
-                )  # [C]
+        with pc_plate:
+            pc_rate_loc = rate_loc.expand(P, C).reshape(-1)
+            pc_rate = pyro.sample(
+                "pc_rate", dist.Normal(pc_rate_loc[pc_index], rate_scale)
+            )  # [PC]
+            pc_init = pyro.sample("pc_init", dist.Normal(0, init_scale))  # [PC]
         with place_plate, clade_plate:
-            rate = pyro.sample("rate", dist.Normal(rate_loc, rate_scale))  # [P, C]
-            init = pyro.sample("init", dist.Normal(init_loc, init_scale))  # [P, C]
+            rate = pyro.deterministic(
+                "rate",
+                pc_rate_loc.scatter(0, pc_index, pc_rate).reshape(P, C),
+            )  # [P, C]
+            init = pyro.deterministic(
+                "init",
+                torch.full((P * C,), -1e2).scatter(0, pc_index, pc_init).reshape(P, C),
+            )  # [P, C]
         logits = init + rate * time[:, None, None]  # [T, P, C]
 
         # Optionally predict probabilities (during prediction).
@@ -635,6 +644,8 @@ class InitLocFn:
         self.init_decentered = init / 2
         self.init_loc = init.mean(0)  # [C]
         self.init_loc_decentered = self.init_loc / 2
+        self.pc_init = self.init.reshape(-1)[dataset["pc_index"]]
+        self.pc_init = self.pc_init / 2
         assert not torch.isnan(self.init).any()
         logger.info(f"init stddev = {self.init.std():0.3g}")
 
@@ -666,6 +677,8 @@ class InitLocFn:
             "coef_decentered",
             "rate",
             "rate_decentered",
+            "pc_rate",
+            "pc_rate_decentered",
         ):
             return torch.rand(shape).sub_(0.5).mul_(0.01)
         if name == "coef_loc":
