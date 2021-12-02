@@ -344,14 +344,9 @@ def load_gisaid_data(
             ),
         }
 
-    # Construct region-local time scales centered around observations.
-    num_obs = weekly_clades.sum(-1)
-    time = torch.arange(float(len(num_obs))) * TIMESTEP / GENERATION_TIME
+    # Construct time scales centered around observations.
+    time = torch.arange(float(T)) * TIMESTEP / GENERATION_TIME
     time -= time.mean()
-    local_time = time[:, None]
-    local_time = local_time - (local_time * num_obs).sum(0) / num_obs.sum(0).clamp(
-        min=1
-    )
 
     # Construct lineage <-> clade mappings.
     lineage_to_clade = usher_features["lineage_to_clade"]
@@ -376,7 +371,6 @@ def load_gisaid_data(
         "lineage_id_inv": lineage_id_inv,
         "lineage_id_to_clade_id": lineage_id_to_clade_id,
         "lineage_to_clade": usher_features["lineage_to_clade"],
-        "local_time": local_time,
         "location_id": location_id,
         "location_id_inv": location_id_inv,
         "mutations": mutations,
@@ -416,7 +410,6 @@ def subset_gisaid_data(
         ids = torch.tensor([old["location_id"][location] for location in locations])
         new["location_id"] = {name: i for i, name in enumerate(locations)}
         new["weekly_clades"] = new["weekly_clades"].index_select(1, ids)
-        new["local_time"] = new["local_time"].index_select(1, ids)
 
     # Select clades.
     if new["weekly_clades"].size(-1) > max_clades:
