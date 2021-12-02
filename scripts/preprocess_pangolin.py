@@ -191,6 +191,6 @@ if __name__ == "__main__":
     parser.add_argument("--features-file-out", default="")
     parser.add_argument("--columns-file-out", default="")
     parser.add_argument("-c", "--max-num-clades", type=int, default=5000)
-    parser.add_argument("-m", "--min-num-mutations", type=int, default=2)
+    parser.add_argument("-m", "--min-num-mutations", type=int, default=1)
     args = parser.parse_args()
     main(args)
