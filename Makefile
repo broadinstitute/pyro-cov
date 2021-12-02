@@ -68,14 +68,16 @@ analyze: FORCE
 	python scripts/mutrans.py --vary-nsp
 	python scripts/mutrans.py --vary-leaves=9999
 
+EXCLUDE='.*\.json$$|.*mutrans\.pt$$|.*temp\..*|.*\.[EI](gene|region)=.*\.pt$$|.*__(gene|region|lineage)__.*\.pt$$'
+
 push: FORCE
 	gsutil -m -o GSUtil:parallel_composite_upload_threshold=150M \
-	  rsync -r -x '.*\.json$$|.*mutrans\.pt$$|.*temp\..*' \
+	  rsync -r -x $(EXCLUDE) \
 	  $(shell readlink results)/ \
 	  gs://pyro-cov/$(shell readlink results | grep -o 'results\.[-0-9]*')/
 
 pull: FORCE
-	gsutil -m rsync -r -x '.*\.json$$|.*mutrans\.pt$$|.*temp\..*|.*__gene__.*\.pt$$|.*__region__.*\.pt$$' \
+	gsutil -m rsync -r -x $(EXCLUDE) \
 	  gs://pyro-cov/$(shell readlink results | grep -o 'results\.[-0-9]*')/ \
 	  $(shell readlink results)/
 
