@@ -144,7 +144,7 @@ def fit_svi(
         num_samples=args.num_samples,
     )
 
-    if "clade" in holdout.get("exclude", {}):
+    if "lineage" in holdout.get("exclude", {}):
         # Save only what's needed to evaluate loo predictions.
         result = {
             "median": {
