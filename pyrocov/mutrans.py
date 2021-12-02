@@ -323,6 +323,7 @@ def load_gisaid_data(
     )
 
     # Construct sparse representation.
+    pc_index = weekly_clades.ne(0).any(0).reshape(-1).nonzero(as_tuple=True)[0]
     sparse_counts = _make_sparse(weekly_clades)
     if sparse_hist:
         # Construct a sparse COO matrix for use in the fused gather-scatter:
@@ -347,8 +348,9 @@ def load_gisaid_data(
 
     # Construct region-local time scales centered around observations.
     num_obs = weekly_clades.sum(-1)
-    local_time = torch.arange(float(len(num_obs))) * TIMESTEP / GENERATION_TIME
-    local_time = local_time[:, None]
+    time = torch.arange(float(len(num_obs))) * TIMESTEP / GENERATION_TIME
+    time -= time.mean()
+    local_time = time[:, None]
     local_time = local_time - (local_time * num_obs).sum(0) / num_obs.sum(0).clamp(
         min=1
     )
@@ -380,10 +382,12 @@ def load_gisaid_data(
         "location_id": location_id,
         "location_id_inv": location_id_inv,
         "mutations": mutations,
+        "pc_index": pc_index,
         "sparse_counts": sparse_counts,
         "sparse_hist": sparse_hist,
-        "weekly_clades": weekly_clades,
         "state_to_country": state_to_country,
+        "time": time,
+        "weekly_clades": weekly_clades,
     }
     return dataset
 
@@ -518,38 +522,43 @@ def model(dataset, model_type, *, forecast_steps=None):
     sparse_counts = dataset["sparse_counts"]
     sparse_hist = dataset["sparse_hist"]
     features = dataset["features"]
-    local_time = dataset["local_time"]  # [T, P]
+    time = dataset["time"]  # [T]
+    weekly_clades = dataset["weekly_clades"]
+    sparse_counts = dataset["sparse_counts"]
+    sparse_hist = dataset["sparse_hist"]
     clade_id_to_lineage_id = dataset["clade_id_to_lineage_id"]
+    pc_index = dataset["pc_index"]
     T, P, C = weekly_clades.shape
     C, F = features.shape
     L = len(dataset["lineage_id"])
-    assert local_time.shape == T, P
+    PC = len(pc_index)
+    assert PC <= P * C
+    assert time.shape == (T,)
     assert clade_id_to_lineage_id.shape == (C,)
+
+    # Optionally extend time axis.
     if forecast_steps is not None:  # During prediction.
         T = T + forecast_steps
-        t0 = local_time[0]
-        dt = local_time[1] - local_time[0]
-        local_time = t0 + dt * torch.arange(float(T))[:, None]
-        assert local_time.shape == (T, P)
+        t0 = time[0]
+        dt = time[1] - time[0]
+        time = t0 + dt * torch.arange(float(T))
+        assert time.shape == (T,)
+
     clade_plate = pyro.plate("clade", C, dim=-1)
     place_plate = pyro.plate("place", P, dim=-2)
     time_plate = pyro.plate("time", T, dim=-3)
+    pc_plate = pyro.plate("place_clade", PC, dim=-1)
 
     # Configure reparametrization (which does not affect model density).
     reparam = {}
     if "reparam" in model_type:
-        time_shift = pyro.param("time_shift", lambda: torch.zeros(P, C))  # [P, C]
         reparam["coef"] = LocScaleReparam()
-        reparam["init_loc"] = LocScaleReparam()
-        reparam["rate"] = LocScaleReparam()
-        reparam["init"] = LocScaleReparam()
-    else:
-        time_shift = torch.zeros(P, C)
+        reparam["pc_rate"] = LocScaleReparam()
+        reparam["pc_init"] = LocScaleReparam()
     with poutine.reparam(config=reparam):
 
         # Sample global random variables.
         coef_scale = pyro.sample("coef_scale", dist.LogNormal(-4, 2))
-        init_loc_scale = pyro.sample("init_loc_scale", dist.LogNormal(0, 2))
         rate_scale = pyro.sample("rate_scale", dist.LogNormal(-4, 2))
         init_scale = pyro.sample("init_scale", dist.LogNormal(0, 2))
 
@@ -561,11 +570,22 @@ def model(dataset, model_type, *, forecast_steps=None):
         )  # [F]
         with clade_plate:
             rate_loc = pyro.deterministic("rate_loc", 0.01 * coef @ features.T)  # [C]
-            init_loc = pyro.sample("init_loc", dist.Normal(0, init_loc_scale))  # [C]
+        with pc_plate:
+            pc_rate_loc = rate_loc.expand(P, C).reshape(-1)
+            pc_rate = pyro.sample(
+                "pc_rate", dist.Normal(pc_rate_loc[pc_index], rate_scale)
+            )  # [PC]
+            pc_init = pyro.sample("pc_init", dist.Normal(0, init_scale))  # [PC]
         with place_plate, clade_plate:
-            rate = pyro.sample("rate", dist.Normal(rate_loc, rate_scale))  # [P, C]
-            init = pyro.sample("init", dist.Normal(init_loc, init_scale))  # [P, C]
-        logits = init + rate * (time_shift + local_time[..., None])  # [T, P, C]
+            rate = pyro.deterministic(
+                "rate",
+                pc_rate_loc.scatter(0, pc_index, pc_rate).reshape(P, C),
+            )  # [P, C]
+            init = pyro.deterministic(
+                "init",
+                torch.full((P * C,), -1e2).scatter(0, pc_index, pc_init).reshape(P, C),
+            )  # [P, C]
+        logits = init + rate * time[:, None, None]  # [T, P, C]
 
         # Optionally predict probabilities (during prediction).
         if forecast_steps is not None:
@@ -579,7 +599,6 @@ def model(dataset, model_type, *, forecast_steps=None):
         # Finally observe counts (during inference).
         if "dense" in model_type:  # equivalent either way
             # Compute a dense likelihood.
-            logits = init + rate * (time_shift + local_time[..., None])  # [T, P, C]
             with time_plate, place_plate:
                 pyro.sample(
                     "obs",
@@ -620,11 +639,13 @@ class InitLocFn:
         # Initialize init.
         init = dataset["weekly_clades"].sum(0)  # [P, C]
         init.add_(1 / init.size(-1)).div_(init.sum(-1, True))
-        init.log_().sub_(init.median(-1, True).values)
+        init.log_().sub_(init.median(-1, True).values).add_(torch.randn(init.shape))
         self.init = init  # [P, C]
         self.init_decentered = init / 2
         self.init_loc = init.mean(0)  # [C]
         self.init_loc_decentered = self.init_loc / 2
+        self.pc_init = self.init.reshape(-1)[dataset["pc_index"]]
+        self.pc_init = self.pc_init / 2
         assert not torch.isnan(self.init).any()
         logger.info(f"init stddev = {self.init.std():0.3g}")
 
@@ -656,6 +677,8 @@ class InitLocFn:
             "coef_decentered",
             "rate",
             "rate_decentered",
+            "pc_rate",
+            "pc_rate_decentered",
         ):
             return torch.rand(shape).sub_(0.5).mul_(0.01)
         if name == "coef_loc":
