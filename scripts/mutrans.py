@@ -66,7 +66,7 @@ def _load_data_filename(args, **kwargs):
     parts.append(str(args.max_num_clades))
     parts.append(str(args.min_num_mutations))
     parts.append(str(args.min_region_size))
-    parts.append("ambi" if args.ambiguous else "best")
+    parts.append("ambi" if args.ambiguous else "")
     for k, v in sorted(kwargs.get("include", {}).items()):
         parts.append(f"I{k}={_safe_str(v)}")
     for k, v in sorted(kwargs.get("exclude", {}).items()):
