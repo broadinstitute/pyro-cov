@@ -137,7 +137,6 @@ def load_gisaid_data(
     *,
     device="cpu",
     min_region_size=50,
-    max_num_clades=5000,
     include={},
     exclude={},
     end_day=None,
@@ -311,7 +310,6 @@ def load_gisaid_data(
         T = 1 + max(columns["day"]) // TIMESTEP
     P = len(location_id)
     C = len(clade_id)
-    assert C <= max_num_clades, (C, max_num_clades)
     weekly_clades = torch.zeros(T, P, C)
     for tps, n in sparse_data.items():
         weekly_clades[tps] = n

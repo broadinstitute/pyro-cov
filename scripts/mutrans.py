@@ -64,6 +64,7 @@ def hashable_to_holdout(holdout):
 def _load_data_filename(args, **kwargs):
     parts = ["data", "double" if args.double else "single"]
     parts.append(str(args.max_num_clades))
+    parts.append(str(args.min_num_mutations))
     parts.append(str(args.min_region_size))
     parts.append("ambi" if args.ambiguous else "best")
     for k, v in sorted(kwargs.get("include", {}).items()):
@@ -82,9 +83,8 @@ def load_data(args, **kwargs):
     return mutrans.load_gisaid_data(
         device=args.device,
         columns_filename=f"results/columns.{args.max_num_clades}.pkl",
-        features_filename=f"results/features.{args.max_num_clades}.pt",
+        features_filename=f"results/features.{args.max_num_clades}.{args.min_num_mutations}.pt",
         min_region_size=args.min_region_size,
-        max_num_clades=args.max_num_clades,
         ambiguous=args.ambiguous,
         **kwargs,
     )
@@ -92,9 +92,10 @@ def load_data(args, **kwargs):
 
 def _fit_filename(name, *args):
     parts = [name]
-    parts.append(str(args[0].min_region_size))
     parts.append(str(args[0].max_num_clades))
-    parts.append("ambi" if args[0].ambiguous else "best")
+    parts.append(str(args[0].min_num_mutations))
+    parts.append(str(args[0].min_region_size))
+    parts.append("ambi" if args[0].ambiguous else "")
     for arg in args[2:]:
         if isinstance(arg, tuple):
             parts.append("-".join(f"{k}={_safe_str(v)}" for k, v in arg))
@@ -553,8 +554,9 @@ if __name__ == "__main__":
     parser.add_argument("--vary-gene", action="store_true")
     parser.add_argument("--vary-nsp", action="store_true")
     parser.add_argument("--only-gene")
-    parser.add_argument("--min-region-size", default=50, type=int)
     parser.add_argument("--max-num-clades", default=5000, type=int)
+    parser.add_argument("--min-num-mutations", default=2, type=int)
+    parser.add_argument("--min-region-size", default=50, type=int)
     parser.add_argument("--ambiguous", action="store_true")
     parser.add_argument("-cd", "--cond-data", default="coef_scale=0.05")
     parser.add_argument("-m", "--model-type", default="reparam")

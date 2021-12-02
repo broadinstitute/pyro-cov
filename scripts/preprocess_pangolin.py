@@ -124,7 +124,7 @@ def main(args):
     for ms in aa_mutations_by_clade.values():
         aa_mutations.update(ms)
     aa_mutations = [
-        m for m, c in aa_mutations.most_common() if c >= args.min_mutation_count
+        m for m, c in aa_mutations.most_common() if c >= args.min_num_mutations
     ]
     logger.info(f"Found {len(aa_mutations)} amino acid mutations")
     mutation_ids = {k: i for i, k in enumerate(aa_mutations)}
@@ -162,7 +162,9 @@ def main(args):
 
     # Save features.
     if not args.features_file_out:
-        args.features_file_out = f"results/features.{args.max_num_clades}.pt"
+        args.features_file_out = (
+            f"results/features.{args.max_num_clades}.{args.min_num_mutations}.pt"
+        )
     features = {
         "clades": clades,
         "ancestry": ancestry,
@@ -189,6 +191,6 @@ if __name__ == "__main__":
     parser.add_argument("--features-file-out", default="")
     parser.add_argument("--columns-file-out", default="")
     parser.add_argument("-c", "--max-num-clades", type=int, default=5000)
-    parser.add_argument("--min-mutation-count", type=int, default=2)
+    parser.add_argument("-m", "--min-num-mutations", type=int, default=2)
     args = parser.parse_args()
     main(args)
