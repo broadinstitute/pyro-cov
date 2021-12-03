@@ -14,7 +14,7 @@ PANGOLIN_REPO = os.path.expanduser(
     os.environ.get("PANGOLIN_REPO", "~/github/cov-lineages/pango-designation")
 )
 
-# See https://cov-lineages.org/lineages_list.html or
+# See https://cov-lineages.org/lineage_list.html or
 # https://github.com/cov-lineages/pango-designation/blob/master/pango_designation/alias_key.json
 # This list can be updated via update_aliases() below.
 PANGOLIN_ALIASES = {
@@ -63,6 +63,7 @@ PANGOLIN_ALIASES = {
     "Z": "B.1.177.50",
     "XA": "B.1.1.7",
     "XB": "B.1.634",
+    "XC": "AY.29",
 }
 
 # From https://www.who.int/en/activities/tracking-SARS-CoV-2-variants/
@@ -72,6 +73,7 @@ WHO_ALIASES = {
     "Beta": ["B.1.351", "B.1.351.2", "B.1.351.3"],
     "Gamma": ["P.1", "P.1.1", "P.1.2"],
     "Delta": ["B.1.617.2", "AY"],
+    "Omicron": ["B.1.1.529"],
     # Variants of interest.
     "Lambda": ["C.37"],
     "Mu": ["B.1.621"],
@@ -81,7 +83,7 @@ WHO_ALIASES = {
     "Iota": ["B.1.526"],
     "Kappa": ["B.1.617.1"],
 }
-WHO_VOC = ["Alpha", "Beta", "Gamma", "Delta"]
+WHO_VOC = ["Alpha", "Beta", "Gamma", "Delta", "Omicron"]
 WHO_VOI = ["Lambda", "Mu"]
 
 
