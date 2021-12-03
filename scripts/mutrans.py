@@ -279,7 +279,13 @@ def vary_leaves(args, default_config):
         loo_dataset["weekly_clades"][:, :, heldout] = 0
 
         # Run SVI
-        result = fit_svi(args, loo_dataset, *config)
+        try:
+            result = fit_svi(args, loo_dataset, *config)
+        except ValueError as e:
+            if not args.no_new:
+                raise e from None
+            logger.info(f"Skipping {config}")
+            continue
         result["mutations"] = dataset["mutations"]
         result["location_id"] = dataset["location_id"]
         result["clade_id_inv"] = dataset["clade_id_inv"]
