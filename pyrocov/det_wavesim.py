@@ -122,9 +122,21 @@ def main(args):
     print(args)
 
     pearsons = []
-    num_simulations = 10
+    num_simulations = 5
+    split_waves = False
     for simulation in range(num_simulations):
         dataset = generate_data(args, seed=args.seed + simulation)
+        if split_waves:
+            counts = dataset['counts']
+            new_counts = torch.zeros(counts.size(0) // args.num_waves,
+                                     counts.size(1) * args.num_waves, counts.size(2))
+            for r in range(args.num_regions):
+                new_counts[0:100, 4 * r + 0] = counts[0:100, r]
+                new_counts[0:100, 4 * r + 1] = counts[100:200, r]
+                new_counts[0:100, 4 * r + 2] = counts[200:300, r]
+                new_counts[0:100, 4 * r + 3] = counts[300:400, r]
+            dataset['counts'] = new_counts
+
         pearson = fit_svi(args, dataset)
         pearsons.append(pearson)
 
@@ -135,18 +147,18 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Simulate multiple pandemic waves")
     parser.add_argument("--num-svi-steps", default=3000, type=int)
-    parser.add_argument("--report-frequency", default=200, type=int)
+    parser.add_argument("--report-frequency", default=1000, type=int)
     parser.add_argument("--lr", default=0.01, type=float)
     parser.add_argument("--lrd", default=0.1, type=float)
     parser.add_argument("--num-mutations", default=20, type=int)
     parser.add_argument("--num-causal-mutations", default=5, type=int)
     parser.add_argument("--num-lineages", default=32, type=int)
     parser.add_argument("--num-regions", default=32, type=int)
-    parser.add_argument("--num-waves", default=1, type=int)
+    parser.add_argument("--num-waves", default=4, type=int)
     parser.add_argument("--wave-peak", default=1000, type=int)
     parser.add_argument("--seed", default=0, type=int)
     parser.add_argument("--wave-duration", default=100, type=int)
-    parser.add_argument("--device", default='gpu', type=str, choices=['cpu', 'gpu'])
+    parser.add_argument("--device", default='cpu', type=str, choices=['cpu', 'gpu'])
     args = parser.parse_args()
 
     if args.device == 'gpu':
