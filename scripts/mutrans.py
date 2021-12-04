@@ -277,6 +277,10 @@ def vary_leaves(args, default_config):
         loo_dataset = dataset.copy()
         loo_dataset["weekly_clades"] = dataset["weekly_clades"].clone()
         loo_dataset["weekly_clades"][:, :, heldout] = 0
+        loo_dataset["sparse_counts"] = mutrans.dense_to_sparse(
+            loo_dataset["weekly_clades"]
+        )
+        loo_dataset["sparse_hist"] = NotImplemented
 
         # Run SVI
         try:

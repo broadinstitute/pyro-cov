@@ -126,7 +126,7 @@ def rank_loo_lineages(
     return [pangolin.compress(name) for gap, name in ranked_lineages]
 
 
-def _make_sparse(x):
+def dense_to_sparse(x):
     index = x.nonzero(as_tuple=False).T.contiguous()
     value = x[tuple(index)]
     total = x.sum(-1)
@@ -322,7 +322,7 @@ def load_gisaid_data(
 
     # Construct sparse representation.
     pc_index = weekly_clades.ne(0).any(0).reshape(-1).nonzero(as_tuple=True)[0]
-    sparse_counts = _make_sparse(weekly_clades)
+    sparse_counts = dense_to_sparse(weekly_clades)
     if sparse_hist:
         # Construct a sparse COO matrix for use in the fused gather-scatter:
         # torch.mv(sparse_hist["matrix"], probs.reshape(-1))
@@ -423,7 +423,7 @@ def subset_gisaid_data(
         new["features"] = new["features"].index_select(0, ids)
         new["clade_id_inv"] = [new["clade_id_inv"][i] for i in ids.tolist()]
         new["clade_id"] = {name: i for i, name in enumerate(new["clade_id_inv"])}
-        new["sparse_counts"] = _make_sparse(new["weekly_clades"])
+        new["sparse_counts"] = dense_to_sparse(new["weekly_clades"])
 
     # Select mutations.
     gaps = new["features"].max(0).values - new["features"].min(0).values
