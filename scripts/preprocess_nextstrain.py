@@ -44,10 +44,13 @@ def main(args):
         day = (date - args.start_date).days
 
         # Parse location.
-        location = row["location"]
+        location = row["country"]
         if location in ("", "?"):
             skipped["location"] += 1
             continue
+        division = row["division"]
+        if division not in ("", "?"):
+            location += " / " + division
 
         # Parse lineage.
         lineage = row["pango_lineage"]
@@ -70,7 +73,10 @@ def main(args):
             stats["lineage_aa"][lineage, aa] += 1
     columns = dict(columns)
     stats = dict(stats)
-    logger.info(f"Skipped {sum(skipped.values())} due to:\n{dict(skipped)}")
+    logger.info(f"kepy {len(columns['location'])} rows")
+    logger.info(f"skipped {sum(skipped.values())} due to:\n{dict(skipped)}")
+    for k, v in stats.items():
+        logger.info(f"found {len(v)} {k}s")
 
     logger.info(f"Saving {args.stats_file_out}")
     with open(args.stats_file_out, "wb") as f:
