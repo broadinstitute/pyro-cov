@@ -509,9 +509,6 @@ def model(dataset, model_type, *, forecast_steps=None):
       portions in each (time, regin) bin.
     """
     # Tensor shapes are commented at at the end of some lines.
-    weekly_clades = dataset["weekly_clades"]
-    sparse_counts = dataset["sparse_counts"]
-    sparse_hist = dataset["sparse_hist"]
     features = dataset["features"]
     time = dataset["time"]  # [T]
     weekly_clades = dataset["weekly_clades"]

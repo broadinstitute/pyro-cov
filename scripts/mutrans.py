@@ -238,6 +238,8 @@ def vary_leaves(args, default_config):
     if args.only_gene:
         for m in dataset["mutations"]:
             assert m.startswith(args.only_gene + ":"), m
+    if dataset["sparse_hist"]:
+        raise NotImplementedError
 
     # Run default config to get a ranking of leaves.
     def make_config(**holdout):
@@ -280,7 +282,6 @@ def vary_leaves(args, default_config):
         loo_dataset["sparse_counts"] = mutrans.dense_to_sparse(
             loo_dataset["weekly_clades"]
         )
-        loo_dataset["sparse_hist"] = NotImplemented
 
         # Run SVI
         try:
