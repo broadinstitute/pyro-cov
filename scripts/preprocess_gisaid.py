@@ -102,8 +102,6 @@ if __name__ == "__main__":
     parser.add_argument("--gisaid-file-in", default="results/gisaid.json")
     parser.add_argument("--columns-file-out", default="results/gisaid.columns.pkl")
     parser.add_argument("--stats-file-out", default="results/gisaid.stats.pkl")
-    parser.add_argument("--subset-file-out", default="results/gisaid.subset.tsv")
-    parser.add_argument("--subset-dir-out", default="results/fasta")
     parser.add_argument("--start-date", default=START_DATE)
     parser.add_argument("--truncate", default=int(1e10), type=int)
     args = parser.parse_args()

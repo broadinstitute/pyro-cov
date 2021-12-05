@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import functools
+import gzip
 import itertools
 import operator
 import os
@@ -155,4 +156,18 @@ def open_tqdm(*args, **kwargs):
         ) as pbar:
             for line in f:
                 pbar.update(len(line))
+                yield line
+
+
+def gzip_open_tqdm(filename, mode="rb"):
+    with open(filename, "rb") as f, gzip.open(f, mode) as g:
+        with tqdm.tqdm(
+            total=os.stat(f.fileno()).st_size,
+            unit="B",
+            unit_scale=True,
+            unit_divisor=1024,
+        ) as pbar:
+            for line in g:
+                pbar.n = f.tell()
+                pbar.update(0)
                 yield line
