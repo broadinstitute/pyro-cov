@@ -78,15 +78,16 @@ def main(args):
     for k, v in stats.items():
         logger.info(f"found {len(v)} {k}s")
 
-    logger.info(f"Saving {args.stats_file_out}")
+    logger.info(f"saving {args.stats_file_out}")
     with open(args.stats_file_out, "wb") as f:
         pickle.dump(stats, f)
 
-    logger.info(f"Saving {args.columns_file_out}")
+    logger.info(f"saving {args.columns_file_out}")
     with open(args.columns_file_out, "wb") as f:
         pickle.dump(columns, f)
 
     # Create contiguous coordinates.
+    locations = sorted(stats["location"])
     lineages = sorted(stats["lineage"])
     aa_counts = Counter()
     for (lineage, aa), count in stats["lineage_aa"].most_common():
@@ -98,7 +99,7 @@ def main(args):
     # Create a dense feature matrix.
     aa_features = torch.zeros(len(lineages), len(aa_mutations), dtype=torch.float)
     logger.info(
-        f"Saving {tuple(aa_features.shape)} features to {args.features_file_out}"
+        f"saving {tuple(aa_features.shape)} features to {args.features_file_out}"
     )
     for s, lineage in enumerate(lineages):
         for f, aa in enumerate(aa_mutations):
@@ -114,6 +115,34 @@ def main(args):
     with open(args.features_file_out, "wb") as f:
         torch.save(features, f)
 
+    # Create a dense dataset.
+    location_id = {location: i for i, location in enumerate(locations)}
+    lineage_id = {lineage: i for i, lineage in enumerate(lineages)}
+    T = max(stats["day"]) // args.time_step_days + 1
+    P = len(locations)
+    S = len(lineages)
+    counts = torch.zeros(T, P, S)
+    for day, location, lineage in zip(
+        columns["day"], columns["location"], columns["lineage"]
+    ):
+        t = day // args.time_step_days
+        p = location_id[location]
+        s = lineage_id[lineage]
+        counts[t, p, s] += 1
+    logger.info(f"counts data is {counts.ne(0).float().mean().item()*100:0.3g}% dense")
+    logger.info(f"saving {tuple(counts.shape)} counts to {args.dataset_file_out}")
+    dataset = {
+        "start_date": args.start_date,
+        "time_step_days": args.time_step_days,
+        "locations": locations,
+        "lineages": lineages,
+        "mutations": aa_mutations,
+        "features": aa_features,
+        "counts": counts,
+    }
+    with open(args.dataset_file_out, "wb") as f:
+        torch.save(dataset, f)
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Preprocess Nextstrain open data")
@@ -123,7 +152,9 @@ if __name__ == "__main__":
     parser.add_argument("--columns-file-out", default="results/nextstrain.columns.pkl")
     parser.add_argument("--stats-file-out", default="results/nextstrain.stats.pkl")
     parser.add_argument("--features-file-out", default="results/nextstrain.features.pt")
+    parser.add_argument("--dataset-file-out", default="results/nextstrain.data.pt")
     parser.add_argument("--start-date", default=START_DATE)
+    parser.add_argument("--time-step-days", default=28, type=int)
     args = parser.parse_args()
     args.start_date = parse_date(args.start_date)
     main(args)
