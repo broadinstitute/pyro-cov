@@ -257,15 +257,15 @@ def vary_leaves(args, default_config):
     lineages = mutrans.rank_loo_lineages(dataset, result)
     lineages = lineages[: args.vary_leaves]
     logger.info(
-        "\n".join(
-            [f"Leave-one-out predicting growth rate of {len(lineages)} lineages:"]
-            + lineages
+        "Leave-one-out predicting growth rate of {} lineages: {}".format(
+            len(lineages), ", ".join(lineages)
         )
     )
 
     # Run inference for each lineage. This is very expensive.
     lineage_to_clade = dataset["lineage_to_clade"]
     clade_id = dataset["clade_id"]
+    num_obs = int(dataset["weekly_clades"].sum())
     results = {}
     for lineage in lineages:
         config = make_config(exclude={"lineage": "^" + lineage + "$"})
@@ -279,6 +279,8 @@ def vary_leaves(args, default_config):
         loo_dataset = dataset.copy()
         loo_dataset["weekly_clades"] = dataset["weekly_clades"].clone()
         loo_dataset["weekly_clades"][:, :, heldout] = 0
+        loo_num_obs = int(loo_dataset["weekly_clades"].sum())
+        logger.info(f"Holding out {num_obs - loo_num_obs}/{num_obs} samples")
         loo_dataset["sparse_counts"] = mutrans.dense_to_sparse(
             loo_dataset["weekly_clades"]
         )
