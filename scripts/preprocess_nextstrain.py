@@ -9,7 +9,7 @@ from collections import Counter, defaultdict
 
 import torch
 
-from pyrocov.mutrans import START_DATE
+from pyrocov.mutrans import START_DATE, dense_to_sparse
 from pyrocov.util import gzip_open_tqdm
 
 logger = logging.getLogger(__name__)
@@ -18,6 +18,24 @@ logging.basicConfig(format="%(relativeCreated) 9d %(message)s", level=logging.IN
 
 def parse_date(string):
     return datetime.datetime.strptime(string, "%Y-%m-%d")
+
+
+def coarsen_locations(args, counts):
+    """
+    Select regions that have at least ``args.min_region_size`` samples.
+    Remaining regions will be coarsely aggregated up to country level.
+    """
+    locations = set()
+    coarsen_location = {}
+    for location, count in counts.items():
+        if " / " in location and counts[location] < args.min_region_size:
+            old = location
+            location = location.split(" / ")[0]
+            coarsen_location[old] = location
+        locations.add(location)
+    locations = sorted(locations)
+    logger.info(f"kept {len(locations)}/{len(counts)} locations")
+    return locations, coarsen_location
 
 
 def main(args):
@@ -73,7 +91,7 @@ def main(args):
             stats["lineage_aa"][lineage, aa] += 1
     columns = dict(columns)
     stats = dict(stats)
-    logger.info(f"kepy {len(columns['location'])} rows")
+    logger.info(f"kept {len(columns['location'])} rows")
     logger.info(f"skipped {sum(skipped.values())} due to:\n{dict(skipped)}")
     for k, v in stats.items():
         logger.info(f"found {len(v)} {k}s")
@@ -116,6 +134,7 @@ def main(args):
         torch.save(features, f)
 
     # Create a dense dataset.
+    locations, coarsen_location = coarsen_locations(args, stats["location"])
     location_id = {location: i for i, location in enumerate(locations)}
     lineage_id = {lineage: i for i, lineage in enumerate(lineages)}
     T = max(stats["day"]) // args.time_step_days + 1
@@ -125,11 +144,13 @@ def main(args):
     for day, location, lineage in zip(
         columns["day"], columns["location"], columns["lineage"]
     ):
+        location = coarsen_location.get(location, location)
         t = day // args.time_step_days
         p = location_id[location]
         s = lineage_id[lineage]
         counts[t, p, s] += 1
     logger.info(f"counts data is {counts.ne(0).float().mean().item()*100:0.3g}% dense")
+    sparse_counts = dense_to_sparse(counts)
     logger.info(f"saving {tuple(counts.shape)} counts to {args.dataset_file_out}")
     dataset = {
         "start_date": args.start_date,
@@ -139,6 +160,7 @@ def main(args):
         "mutations": aa_mutations,
         "features": aa_features,
         "counts": counts,
+        "sparse_counts": sparse_counts,
     }
     with open(args.dataset_file_out, "wb") as f:
         torch.save(dataset, f)
@@ -155,6 +177,7 @@ if __name__ == "__main__":
     parser.add_argument("--dataset-file-out", default="results/nextstrain.data.pt")
     parser.add_argument("--start-date", default=START_DATE)
     parser.add_argument("--time-step-days", default=28, type=int)
+    parser.add_argument("--min-region-size", default=500, type=int)
     args = parser.parse_args()
     args.start_date = parse_date(args.start_date)
     main(args)
