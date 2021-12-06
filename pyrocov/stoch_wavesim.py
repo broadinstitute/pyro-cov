@@ -9,7 +9,7 @@ import pyro
 from pyro import distributions as dist
 
 
-def generate_data(args, seed=0, sigma3=0.25, sigma4=0.1, tau=10.0):
+def generate_data(args, seed=0, sigma3=0.1, sigma4=0.01, tau=10.0):
     torch.manual_seed(seed)
     assert args.num_lineages % args.num_waves == 0
 
@@ -17,9 +17,10 @@ def generate_data(args, seed=0, sigma3=0.25, sigma4=0.1, tau=10.0):
     X = Bernoulli(probs=torch.tensor(0.5)).sample(sample_shape=(args.num_lineages, args.num_mutations))
 
     # generate coefficients
-    beta_f = sigma3 * torch.randn(args.num_mutations)
-    beta_f[args.num_causal_mutations:] = 0.0
+    beta_f = sigma3 * torch.randn(args.num_mutations).abs()
+    # beta_f[args.num_causal_mutations:] = 0.0
     dataset = {'true_rate_loc': X @ beta_f}
+    print("true_rate_loc min/max", dataset['true_rate_loc'].min().item(),  dataset['true_rate_loc'].max().item())
     beta_ps = dataset['true_rate_loc'] + sigma4 * torch.randn(args.num_regions, args.num_lineages)
     beta_ps /= tau
 
@@ -36,13 +37,12 @@ def generate_data(args, seed=0, sigma3=0.25, sigma4=0.1, tau=10.0):
     lineage_status = lineage_status.bool()
 
     for wave in range(args.num_waves):
-        print("wave", wave, lineage_status.sum().item())
         prev_counts = None
         probs = beta_ps.exp() * lineage_status.float()
         probs /= probs.sum(-1, keepdim=True)
 
         for t in range(wave * args.wave_duration, (wave + 1) * args.wave_duration):
-            print("t", t, lineage_status.sum().item())
+            print("wave", wave, "t", t, lineage_status.sum().item())
             if prev_counts is not None:
                 probs = beta_ps.exp() * lineage_status.float() * prev_counts
                 probs /= probs.sum(-1, keepdim=True)
@@ -187,7 +187,7 @@ if __name__ == "__main__":
     parser.add_argument("--lrd", default=0.1, type=float)
     parser.add_argument("--num-mutations", default=20, type=int)
     parser.add_argument("--num-causal-mutations", default=5, type=int)
-    parser.add_argument("--num-lineages", default=128, type=int)
+    parser.add_argument("--num-lineages", default=64, type=int)
     parser.add_argument("--num-regions", default=64, type=int)
     parser.add_argument("--num-waves", default=1, type=int)
     parser.add_argument("--wave-peak", default=2000, type=int)
