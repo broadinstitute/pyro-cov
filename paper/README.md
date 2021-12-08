@@ -24,6 +24,7 @@ then postprocessing with the following Jupyter notebooks:
 ![Manhattan plot of S gene](manhattan_S.png)
 ![Manhattan plot of ORF1a gene](manhattan_ORF1a.png)
 ![Manhattan plot of ORF1b gene](manhattan_ORF1b.png)
+![Manhattan plot of ORF3a gene](manhattan_ORF3a.png)
 
 ## Information density plots
 
