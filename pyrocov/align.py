@@ -9,9 +9,9 @@ import math
 import os
 import pickle
 import shutil
+import subprocess
 import warnings
 from collections import Counter, defaultdict
-from subprocess import check_call
 
 from .usher import load_usher_clades, refine_mutation_tree
 from .util import open_tqdm
@@ -27,8 +27,10 @@ PANGOLEARN_DATA = os.path.expanduser("~/github/cov-lineages/pangoLEARN/pangoLEAR
 
 
 def _log_call(*args):
-    logger.info(" ".join(args))
-    return check_call(args)
+    log_filename = os.path.join("results/aligndb", os.path.basename(args[0]) + ".log")
+    logger.info(" ".join(args) + " > " + log_filename)
+    with open(log_filename, "at") as f:
+        subprocess.run(args, stdout=f, stderr=f, check=True)
 
 
 def fingerprint_sequence(seq: str) -> str:
