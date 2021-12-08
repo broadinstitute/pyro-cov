@@ -21,7 +21,8 @@ logger = logging.getLogger(__name__)
 # Source: https://samtools.github.io/hts-specs/SAMv1.pdf
 CIGAR_CODES = "MIDNSHP=X"  # Note minimap2 uses only "MIDNSH"
 
-NEXTSTRAIN_DATA = os.path.expanduser("~/github/nextstrain/nextclade/data/sars-cov-2")
+ROOT = os.path.dirname(os.path.dirname(__file__))
+NEXTCLADE_DATA = os.path.join(ROOT, "results", "nextclade_data")
 PANGOLEARN_DATA = os.path.expanduser("~/github/cov-lineages/pangoLEARN/pangoLEARN/data")
 
 
@@ -194,12 +195,12 @@ class AlignDB:
         # Align via nextclade.
         _log_call(
             "./nextclade",
-            f"--input-root-seq={NEXTSTRAIN_DATA}/reference.fasta",
+            f"--input-root-seq={NEXTCLADE_DATA}/reference.fasta",
             "--genes=E,M,N,ORF1a,ORF1b,ORF3a,ORF6,ORF7a,ORF7b,ORF8,ORF9b,S",
-            f"--input-gene-map={NEXTSTRAIN_DATA}/genemap.gff",
-            f"--input-tree={NEXTSTRAIN_DATA}/tree.json",
-            f"--input-qc-config={NEXTSTRAIN_DATA}/qc.json",
-            f"--input-pcr-primers={NEXTSTRAIN_DATA}/primers.csv",
+            f"--input-gene-map={NEXTCLADE_DATA}/genemap.gff",
+            f"--input-tree={NEXTCLADE_DATA}/tree.json",
+            f"--input-qc-config={NEXTCLADE_DATA}/qc.json",
+            f"--input-pcr-primers={NEXTCLADE_DATA}/primers.csv",
             f"--input-fasta={self.fasta_filename}",
             f"--output-tsv={self.tsv_filename}",
             f"--output-dir={self.dirname}",
@@ -213,7 +214,7 @@ class AlignDB:
         else:
             # Concatenate reference to aligned sequences.
             with open(self.usher_fasta_filename, "wt") as fout:
-                with open(f"{NEXTSTRAIN_DATA}/reference.fasta") as fin:
+                with open(f"{NEXTCLADE_DATA}/reference.fasta") as fin:
                     shutil.copyfileobj(fin, fout)
                 with open(aligned_filename) as fin:
                     shutil.copyfileobj(fin, fout)

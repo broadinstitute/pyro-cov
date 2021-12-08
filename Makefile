@@ -13,16 +13,16 @@ install-usher:
 	conda install -y -c bioconda -c conda-forge -c defaults usher
 
 install-nextalign:
-	curl -fsSL "https://github.com/nextstrain/nextclade/releases/latest/download/nextalign-MacOS-x86_64" -o "nextalign" && chmod +x nextalign
+	curl -fsSL "https://github.com/nextstrain/nextclade/releases/1.6.0/download/nextalign-MacOS-x86_64" -o "nextalign" && chmod +x nextalign
 
 install-nextclade:
-	curl -fsSL "https://github.com/nextstrain/nextclade/releases/latest/download/nextclade-MacOS-x86_64" -o "nextclade" && chmod +x nextclade
+	curl -fsSL "https://github.com/nextstrain/nextclade/releases/1.6.0/download/nextclade-MacOS-x86_64" -o "nextclade" && chmod +x nextclade
     
 install-nextalign-linux:
-	curl -fsSL "https://github.com/nextstrain/nextclade/releases/download/1.2.0/nextalign-Linux-x86_64" -o nextalign && chmod +x nextalign
+	curl -fsSL "https://github.com/nextstrain/nextclade/releases/download/1.6.0/nextalign-Linux-x86_64" -o nextalign && chmod +x nextalign
 
 install-nextclade-linux:
-	curl -fsSL "https://github.com/nextstrain/nextclade/releases/download/1.2.0/nextclade-Linux-x86_64" -o nextclade && chmod +x nextclade
+	curl -fsSL "https://github.com/nextstrain/nextclade/releases/download/1.6.0/nextclade-Linux-x86_64" -o nextclade && chmod +x nextclade
 
 ###########################################################################
 # ci tasks
@@ -53,7 +53,8 @@ update: FORCE
 	python scripts/git_pull.py cov-lineages/pango-designation
 	python scripts/git_pull.py cov-lineages/pangoLEARN
 	python scripts/git_pull.py CSSEGISandData/COVID-19
-	python scripts/git_pull.py nextstrain/nextclade
+	nextclade dataset get --name sars-cov-2 --output-dir results/nextclade_data
+
 
 preprocess: FORCE
 	time nice python scripts/preprocess_gisaid.py

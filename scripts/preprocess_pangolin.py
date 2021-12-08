@@ -11,7 +11,7 @@ from collections import Counter, defaultdict
 import torch
 
 from pyrocov import pangolin
-from pyrocov.align import NEXTSTRAIN_DATA, AlignDB
+from pyrocov.align import NEXTCLADE_DATA, AlignDB
 from pyrocov.usher import apply_mutations, load_mutation_tree, prune_mutation_tree
 
 logger = logging.getLogger(__name__)
@@ -100,7 +100,7 @@ def main(args):
     )
 
     # Load reference sequence.
-    with open(os.path.join(NEXTSTRAIN_DATA, "reference.fasta")) as f:
+    with open(os.path.join(NEXTCLADE_DATA, "reference.fasta")) as f:
         ref = "".join(line.strip() for line in f if not line.startswith(">"))
     assert len(ref) == 29903, len(ref)
 
