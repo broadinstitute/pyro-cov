@@ -251,10 +251,8 @@ def vary_leaves(args, default_config):
         config = tuple(config)
         return config
 
-    result = fit_svi(args, dataset, *make_config())
-
-    # Rank lineages by divergence from parent.
-    lineages = mutrans.rank_loo_lineages(dataset, result)
+    # Rank lineages by cut size.
+    lineages = mutrans.rank_loo_lineages(dataset)
     lineages = lineages[: args.vary_leaves]
     logger.info(
         "Leave-one-out predicting growth rate of {} lineages: {}".format(

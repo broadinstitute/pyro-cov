@@ -78,48 +78,42 @@ def get_fine_regions(columns, min_samples):
     return frozenset(parts for parts, count in counts.items() if count >= min_samples)
 
 
-def rank_loo_lineages(
-    full_dataset: dict,
-    full_result: dict,
-    min_samples: int = 100,
-) -> List[str]:
+def rank_loo_lineages(full_dataset: dict, min_samples: int = 50) -> List[str]:
     """
-    Compute a list of lineages ranked in descending order of how much their
-    growth rate differs from their parents' growth rate. This is used in growth
-    rate leave-one-out prediction experiments.
+    Compute a list of lineages ranked in descending order of cut size.
+    This is used in growth rate leave-one-out prediction experiments.
     """
     # Decompress lineage names before computing parents.
     lineage_id_inv = [
         pangolin.decompress(name) for name in full_dataset["lineage_id_inv"]
     ]
     lineage_id = {name: i for i, name in enumerate(lineage_id_inv)}
-    ancestors = set(lineage_id)
 
-    # Filter to often-observed lineages.
+    # Compute sample counts.
+    clade_counts = full_dataset["weekly_clades"].sum([0, 1])
+    lineage_counts = clade_counts.new_zeros(len(lineage_id)).scatter_add_(
+        0, full_dataset["clade_id_to_lineage_id"], clade_counts
+    )
     weekly_clades = full_dataset["weekly_clades"]  # [T, P, C]
     lineage_counts = weekly_clades.sum([0, 1])  # [C]
-    lineages = []
-    for c, child in enumerate(lineage_id_inv):
-        if child in ("A", "B", "B.1"):
-            continue  # ignore very early lineages
-        if lineage_counts[c] < min_samples:
-            continue  # ignore rare lineages
-        lineages.append(child)
+    descendent_counts = lineage_counts.clone()
+    for c, lineage in enumerate(lineage_id_inv):
+        ancestor = pangolin.get_parent(lineage)
+        while ancestor is not None:
+            a = lineage_id.get(ancestor)
+            if a is not None:
+                descendent_counts[c] += lineage_counts[a]
+            ancestor = pangolin.get_parent(ancestor)
+    total = lineage_counts.sum().item()
+    cut_size = torch.min(descendent_counts, total - descendent_counts)
 
-    # Sort leaf nodes by their distance from parent.
-    rate = quotient_central_moments(
-        full_result["median"]["rate_loc"], full_dataset["clade_id_to_lineage_id"]
-    )[1]
-    ranked_lineages = []
-    for child in lineages:
-        # Allow grandparent to adopt orphan, since e.g. B.1.617 is missing from
-        # lineage_id, but B.1.617.2 is very important.
-        parent = pangolin.get_most_recent_ancestor(child, ancestors)
-        assert parent is not None
-        c = lineage_id[child]
-        p = lineage_id[parent]
-        gap = (rate[c] - rate[p]).abs().item()
-        ranked_lineages.append((gap, child))
+    # Filter and sort lineages by cut size.
+    ranked_lineages = [
+        (size, lineage)
+        for size, lineage in zip(cut_size.tolist(), lineage_id_inv)
+        if lineage not in ("A", "B", "B.1")
+        if size >= min_samples
+    ]
     ranked_lineages.sort(reverse=True)
 
     # Compress lineage names before returning.
