@@ -235,17 +235,11 @@ def vary_leaves(args, default_config):
     # Load a single common dataset.
     dataset = load_data(args)
     descendents = pangolin.find_descendents(dataset["clade_id_inv"])
-    if args.only_gene:
-        for m in dataset["mutations"]:
-            assert m.startswith(args.only_gene + ":"), m
     if dataset["sparse_hist"]:
         raise NotImplementedError
 
     # Run default config to get a ranking of leaves.
     def make_config(**holdout):
-        if args.only_gene:
-            include = holdout.setdefault("include", {})
-            include["gene"] = args.only_gene
         config = list(default_config)
         config[-1] = holdout_to_hashable(holdout)
         config = tuple(config)
@@ -265,25 +259,29 @@ def vary_leaves(args, default_config):
     clade_id = dataset["clade_id"]
     num_obs = int(dataset["weekly_clades"].sum())
     results = {}
-    for lineage in lineages:
-        config = make_config(exclude={"lineage": "^" + lineage + "$"})
-        logger.info(f"Config: {config}")
-
-        # Construct a leave-one-out dataset by zeroing out a subclade.
-        clade = lineage_to_clade[lineage]
-        heldout = [clade_id[clade]]
-        for descendent in descendents[clade]:
-            heldout.append(clade_id[descendent])
-        loo_dataset = dataset.copy()
-        loo_dataset["weekly_clades"] = dataset["weekly_clades"].clone()
-        loo_dataset["weekly_clades"][:, :, heldout] = 0
-        loo_num_obs = int(loo_dataset["weekly_clades"].sum())
-        logger.info(f"Holding out {num_obs - loo_num_obs}/{num_obs} samples")
-        loo_dataset["sparse_counts"] = mutrans.dense_to_sparse(
-            loo_dataset["weekly_clades"]
-        )
+    for lineage in [None] + lineages:
+        if lineage is None:
+            # Run with the full dataset.
+            config = default_config
+            loo_dataset = dataset
+        else:
+            # Construct a leave-one-out dataset by zeroing out a subclade.
+            config = make_config(exclude={"lineage": "^" + lineage + "$"})
+            clade = lineage_to_clade[lineage]
+            heldout = [clade_id[clade]]
+            for descendent in descendents[clade]:
+                heldout.append(clade_id[descendent])
+            loo_dataset = dataset.copy()
+            loo_dataset["weekly_clades"] = dataset["weekly_clades"].clone()
+            loo_dataset["weekly_clades"][:, :, heldout] = 0
+            loo_num_obs = int(loo_dataset["weekly_clades"].sum())
+            logger.info(f"Holding out {num_obs - loo_num_obs}/{num_obs} samples")
+            loo_dataset["sparse_counts"] = mutrans.dense_to_sparse(
+                loo_dataset["weekly_clades"]
+            )
 
         # Run SVI
+        logger.info(f"Config: {config}")
         try:
             result = fit_svi(args, loo_dataset, *config)
         except ValueError as e:
@@ -478,9 +476,6 @@ def main(args):
             # {"include": {"virus_name": "^hCoV-19/USA/..-CDC-2-"}},
         ]
         for holdout in grid:
-            if args.only_gene:
-                include = holdout.setdefault("include", {})
-                include["gene"] = f"^{args.only_gene}:"
             configs.append(
                 (
                     args.cond_data,
@@ -564,7 +559,6 @@ if __name__ == "__main__":
     )
     parser.add_argument("--vary-gene", action="store_true")
     parser.add_argument("--vary-nsp", action="store_true")
-    parser.add_argument("--only-gene")
     parser.add_argument("--max-num-clades", default=5000, type=int)
     parser.add_argument("--min-num-mutations", default=1, type=int)
     parser.add_argument("--min-region-size", default=50, type=int)
