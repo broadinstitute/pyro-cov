@@ -153,6 +153,7 @@ def open_tqdm(*args, **kwargs):
             unit="B",
             unit_scale=True,
             unit_divisor=1024,
+            smoothing=0,
         ) as pbar:
             for line in f:
                 pbar.update(len(line))
@@ -166,6 +167,7 @@ def gzip_open_tqdm(filename, mode="rb"):
             unit="B",
             unit_scale=True,
             unit_divisor=1024,
+            smoothing=0,
         ) as pbar:
             for line in g:
                 pbar.n = f.tell()
