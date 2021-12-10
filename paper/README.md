@@ -59,10 +59,6 @@ The following plots assess robustness via 2-fold crossvalidation, splitting data
 ![Distribution of samples among regions](region_distribution.png)
 ![Distribution of samples among clades](clade_distribution.png)
 
-## Misc plots
-
-![Logistic distribution](logistic_distribution.png)
-
 ## Acknowledgements
 
 The aggregated model outputs in this directory were generated from data inputs

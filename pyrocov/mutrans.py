@@ -548,7 +548,7 @@ def model(dataset, model_type, *, forecast_steps=None):
         # on clade and place. Assume initial infections depend strongly on
         # clade and place.
         coef = pyro.sample(
-            "coef", dist.Logistic(torch.zeros(F), coef_scale).to_event(1)
+            "coef", dist.Laplace(torch.zeros(F), coef_scale).to_event(1)
         )  # [F]
         with clade_plate:
             rate_loc = pyro.deterministic("rate_loc", 0.01 * coef @ features.T)  # [C]
