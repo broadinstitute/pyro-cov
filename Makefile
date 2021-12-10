@@ -67,7 +67,7 @@ analyze: FORCE
 	python scripts/mutrans.py --vary-holdout
 	python scripts/mutrans.py --vary-gene
 	python scripts/mutrans.py --vary-nsp
-	python scripts/mutrans.py --vary-leaves=9999
+	python scripts/mutrans.py --vary-leaves=9999 --num-steps=2001 -lrd=1
 
 EXCLUDE='.*\.json$$|.*mutrans\.pt$$|.*temp\..*|.*\.[EI](gene|region)=.*\.pt$$|.*__(gene|region|lineage)__.*\.pt$$'
 
