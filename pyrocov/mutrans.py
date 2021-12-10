@@ -993,7 +993,7 @@ def log_stats(dataset: dict, result: dict) -> dict:
     )[1]
     rate = rate - rate[dataset["lineage_id"]["A"]]
     for lineage in ["B.1.1.7", "B.1.617.2", "AY.23.1"]:
-        R_RA = float(rate[dataset["lineage_id"][lineage]])
+        R_RA = float(rate[dataset["lineage_id"][lineage]].exp())
         logger.info(f"R({lineage})/R(A) = {R_RA:0.3g}")
         stats[f"R({lineage})/R(A)"] = R_RA
 
