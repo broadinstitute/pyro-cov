@@ -159,10 +159,8 @@ def generate_colors(num_points=100, lb=0.5, ub=2.5):
     rgb = rgb[(lb <= total) & (total <= ub)]
     rgb = rgb[:num_points]
     assert len(rgb) == num_points
-    return [
-        f"#{r:02x}{g:02x}{b:02x}"
-        for r, g, b in rgb.mul(256).long().tolist()
-    ]
+    return [f"#{r:02x}{g:02x}{b:02x}" for r, g, b in rgb.mul(256).long().tolist()]
+
 
 def open_tqdm(*args, **kwargs):
     with open(*args, **kwargs) as f:

@@ -11,6 +11,7 @@ from typing import Callable, Union
 
 import pyro
 import torch
+import tqdm
 
 from pyrocov import mutrans, pangolin, sarscov2
 from pyrocov.util import torch_map
@@ -259,7 +260,7 @@ def vary_leaves(args, default_config):
     clade_id = dataset["clade_id"]
     num_obs = int(dataset["weekly_clades"].sum())
     results = {}
-    for lineage in [None] + lineages:
+    for lineage in tqdm.tqdm([None] + lineages):
         if lineage is None:
             # Run with the full dataset.
             config = default_config
@@ -328,7 +329,7 @@ def vary_gene(args, default_config, *, exclude_genes=False):
         return config
 
     results = {}
-    for holdout in grid:
+    for holdout in tqdm.tqdm(grid):
         # Fit a single model.
         logger.info(f"Holdout: {holdout}")
         dataset = load_data(args, **holdout)
@@ -366,7 +367,7 @@ def vary_nsp(args, default_config):
         return config
 
     results = {}
-    for holdout in grid:
+    for holdout in tqdm.tqdm(grid):
         # Fit a single model.
         logger.info(f"Holdout: {holdout}")
         dataset = load_data(args, **holdout)
