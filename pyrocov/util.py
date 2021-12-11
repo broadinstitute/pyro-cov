@@ -146,6 +146,24 @@ def pretty_print(x, *, name="", max_items=10):
         print(f"{name}: {type(x).__name__}")
 
 
+def generate_colors(num_points=100, lb=0.5, ub=2.5):
+    """
+    Constructs a quasirandom collection of colors for plotting.
+    """
+    # http://extremelearning.com.au/unreasonable-effectiveness-of-quasirandom-sequences/
+    phi3 = 1.2207440846
+    alpha = torch.tensor([1 / phi3 ** 3, 1 / phi3 ** 2, 1 / phi3])
+    t = torch.arange(float(2 * num_points))
+    rgb = alpha.mul(t[:, None]).add(torch.tensor([0.8, 0.2, 0.1])).fmod(1)
+    total = rgb.sum(-1)
+    rgb = rgb[(lb <= total) & (total <= ub)]
+    rgb = rgb[:num_points]
+    assert len(rgb) == num_points
+    return [
+        f"#{r:02x}{g:02x}{b:02x}"
+        for r, g, b in rgb.mul(256).long().tolist()
+    ]
+
 def open_tqdm(*args, **kwargs):
     with open(*args, **kwargs) as f:
         with tqdm.tqdm(
