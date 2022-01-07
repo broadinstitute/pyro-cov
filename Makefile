@@ -53,7 +53,7 @@ update: FORCE
 	python scripts/git_pull.py cov-lineages/pango-designation
 	python scripts/git_pull.py cov-lineages/pangoLEARN
 	python scripts/git_pull.py CSSEGISandData/COVID-19
-	nextclade dataset get --name sars-cov-2 --output-dir results/nextclade_data
+	./nextclade dataset get --name sars-cov-2 --output-dir results/nextclade_data
 
 
 preprocess: FORCE
