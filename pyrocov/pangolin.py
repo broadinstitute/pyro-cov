@@ -75,7 +75,7 @@ WHO_ALIASES = {
     "Beta": ["B.1.351", "B.1.351.2", "B.1.351.3"],
     "Gamma": ["P.1", "P.1.1", "P.1.2"],
     "Delta": ["B.1.617.2", "AY"],
-    "Omicron": ["B.1.1.529"],
+    "Omicron": ["B.1.1.529", "BA"],
     # Variants of interest.
     "Lambda": ["C.37"],
     "Mu": ["B.1.621"],
