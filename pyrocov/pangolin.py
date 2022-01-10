@@ -41,6 +41,7 @@ PANGOLIN_ALIASES = {
     "AY": "B.1.617.2",
     "AZ": "B.1.1.318",
     "BA": "B.1.1.529",
+    "BB": "B.1.621.1",
     "C": "B.1.1.1",
     "D": "B.1.1.25",
     "E": "B.1.416",
@@ -64,7 +65,7 @@ PANGOLIN_ALIASES = {
     "Z": "B.1.177.50",
     "XA": "B.1.1.7",
     "XB": "B.1.634",
-    "XC": "AY.29",
+    "XC": "B.1.617.2.29",  # i.e. AY.29
 }
 
 # From https://www.who.int/en/activities/tracking-SARS-CoV-2-variants/
