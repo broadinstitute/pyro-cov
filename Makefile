@@ -69,6 +69,9 @@ analyze: FORCE
 	python scripts/mutrans.py --vary-nsp
 	python scripts/mutrans.py --vary-leaves=9999 --num-steps=2001
 
+backtesting: FORCE
+	python scripts/mutrans.py --backtesting-max-day `seq -s, 150 14 550` --forecast-steps 12
+
 EXCLUDE='.*\.json$$|.*mutrans\.pt$$|.*temp\..*|.*\.[EI](gene|region)=.*\.pt$$|.*__(gene|region|lineage)__.*\.pt$$'
 
 push: FORCE
