@@ -207,6 +207,9 @@ def backtesting(args, default_config):
         result["weekly_clades_shape"] = tuple(dataset["weekly_clades"].shape)
         result["location_id"] = dataset["location_id"]
         result["clade_id_inv"] = dataset["clade_id_inv"]
+        
+        result["location_id_inv"] = dataset["location_id_inv"]
+        result["lineage_id_inv"] = dataset["lineage_id_inv"]
 
         result = torch_map(result, device="cpu", dtype=torch.float)  # to save space
         results[config] = result
