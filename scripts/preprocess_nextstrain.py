@@ -188,7 +188,7 @@ if __name__ == "__main__":
     parser.add_argument("--dataset-file-out", default="results/nextstrain.data.pt")
     parser.add_argument("--start-date", default=START_DATE)
     parser.add_argument("--time-step-days", default=14, type=int)
-    parser.add_argument("--min-region-size", default=100, type=int)
+    parser.add_argument("--min-region-size", default=50, type=int)
     args = parser.parse_args()
     args.start_date = parse_date(args.start_date)
     main(args)
