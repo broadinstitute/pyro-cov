@@ -1,6 +1,17 @@
 # Copyright Contributors to the Pyro-Cov project.
 # SPDX-License-Identifier: Apache-2.0
 
+"""
+Preprocess Nextstrain open data.
+
+This script aggregates the metadata.tsv.gz file available from:
+https://docs.nextstrain.org/projects/ncov/en/latest/reference/remote_inputs.html
+This file is mirrored on S3 and GCP:
+https://data.nextstrain.org/files/ncov/open/metadata.tsv.gz
+s3://nextstrain-data/files/ncov/open/metadata.tsv.gz
+gs://nextstrain-data/files/ncov/open/metadata.tsv.gz
+"""
+
 import argparse
 import datetime
 import logging
@@ -167,7 +178,7 @@ def main(args):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Preprocess Nextstrain open data")
+    parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--metadata-file-in", default="results/nextstrain/metadata.tsv.gz"
     )
@@ -176,8 +187,8 @@ if __name__ == "__main__":
     parser.add_argument("--features-file-out", default="results/nextstrain.features.pt")
     parser.add_argument("--dataset-file-out", default="results/nextstrain.data.pt")
     parser.add_argument("--start-date", default=START_DATE)
-    parser.add_argument("--time-step-days", default=28, type=int)
-    parser.add_argument("--min-region-size", default=500, type=int)
+    parser.add_argument("--time-step-days", default=14, type=int)
+    parser.add_argument("--min-region-size", default=100, type=int)
     args = parser.parse_args()
     args.start_date = parse_date(args.start_date)
     main(args)
