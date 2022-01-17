@@ -49,6 +49,7 @@ test: lint FORCE
 # Main processing workflow
 
 update: FORCE
+	scripts/pull_usher.sh
 	scripts/pull_gisaid.sh
 	python scripts/git_pull.py cov-lineages/pango-designation
 	python scripts/git_pull.py cov-lineages/pangoLEARN
