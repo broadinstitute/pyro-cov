@@ -1,9 +1,15 @@
 # Copyright Contributors to the Pyro-Cov project.
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import re
-from collections import OrderedDict
-from typing import Dict, Tuple
+from collections import OrderedDict, defaultdict
+from typing import Dict, Tuple, List
+
+from .aa import DNA_TO_AA
+from .align import NEXTCLADE_DATA
+
+REFERENCE_SEQ = None  # loaded lazily
 
 # Adapted from https://github.com/nextstrain/ncov/blob/50ceffa/defaults/annotation.gff
 annotation_tsv = """\
@@ -163,3 +169,49 @@ def aa_mutation_to_position(m: str) -> int:
     assert match is not None
     aa_offset = int(match.group(0)) - 1
     return start + aa_offset * 3
+
+
+def nuc_mutations_to_aa_mutations(ms: List[str]) -> List[str]:
+    global REFERENCE_SEQ
+    if REFERENCE_SEQ is None:
+        REFERENCE_SEQ = load_reference_sequence()
+
+    ms_by_aa = defaultdict(list)
+
+    for m in ms:
+        # Parse a nucleotide mutation such as "A1234G" -> ("A", 1234, "G").
+        position_nuc = int(m[1:-1])
+        new_nuc = m[-1]
+
+        # Find the first matching gene.
+        for gene, (start, end) in GENE_TO_POSITION.items():
+            if start <= position_nuc < end:  # FIXME is end bound right?
+                position_aa = (position_nuc - start) // 3
+                position_codon = (position_nuc - start) % 3
+                ms_by_aa[gene, position_aa].append((position_codon, new_nuc))
+
+    # Format cumulative amino acid changes.
+    result = []
+    for (gene, position_aa), ms in ms_by_aa.items():
+        start, end = GENE_TO_POSITION[gene]
+
+        # Apply mutation to determine new aa.
+        pos = start + position_aa * 3
+        old_codon = REFERENCE_SEQ[pos:pos + 3]
+        new_codon = list(old_codon)
+        for position_codon, new_nuc in ms:
+            new_codon[position_codon] = new_nuc
+        new_codon = "".join(new_codon)
+
+        # Format.
+        old_aa = DNA_TO_AA[old_codon]
+        new_aa = DNA_TO_AA[new_codon]
+        result.append(f"{gene}:{old_aa}{position_aa}{new_aa}")
+    return result
+
+
+def load_reference_sequence():
+    with open(os.path.join(NEXTCLADE_DATA, "reference.fasta")) as f:
+        ref = "".join(line.strip() for line in f if not line.startswith(">"))
+    assert len(ref) == 29903, len(ref)
+    return ref

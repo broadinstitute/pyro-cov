@@ -240,3 +240,21 @@ def apply_mutations(ref: str, mutations: FrozenSet[Mutation]) -> str:
             warnings.warn(f"invalid reference: {m.ref} vs {seq[m.position - 1]}")
         seq[m.position - 1] = m.mut
     return "".join(seq)
+
+
+class FineToMeso:
+    """
+    Mapping from fine clade names like ``fine.1...3.`` to ancestors in
+    ``meso_set`` like ``fine.1..`` .
+    """
+
+    def __init__(self, meso_set):
+        self.meso_set = frozenset(meso_set)
+        self._cache = {}
+
+    def __call__(self, fine):
+        meso = self._cache.get(fine, None)
+        if meso is None:
+            meso = fine if fine in self.meso_set else self(fine.rsplit(".", 1)[0])
+            self._cache[fine] = meso
+        return meso
