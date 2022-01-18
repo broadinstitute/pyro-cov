@@ -4,7 +4,7 @@
 import os
 import re
 from collections import OrderedDict, defaultdict
-from typing import Dict, Tuple, List
+from typing import Dict, List, Tuple
 
 from .aa import DNA_TO_AA
 from .align import NEXTCLADE_DATA
@@ -197,7 +197,7 @@ def nuc_mutations_to_aa_mutations(ms: List[str]) -> List[str]:
 
         # Apply mutation to determine new aa.
         pos = start + position_aa * 3
-        old_codon = REFERENCE_SEQ[pos:pos + 3]
+        old_codon = REFERENCE_SEQ[pos : pos + 3]
         new_codon = list(old_codon)
         for position_codon, new_nuc in ms:
             new_codon[position_codon] = new_nuc

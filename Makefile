@@ -46,8 +46,9 @@ test: lint FORCE
 	test -e results/aligndb && python scripts/mutrans.py --test -n 2 -s 2
 
 ###########################################################################
-# Main processing workflow
-# Note *-nextstrain is a cheaper simpler workflow replacing *-gisaid
+# Main processing workflows
+# Note *-nextstrain is a cheaper simpler workflow replacing *-gisaid.
+# Note *-usher joins usher trees with nextstrain data.
 
 update-gisaid: FORCE
 	scripts/pull_gisaid.sh
@@ -83,6 +84,22 @@ analyze-nextstrain: FORCE
 	python scripts/analyze_nextstrain.py --vary-gene
 	python scripts/analyze_nextstrain.py --vary-nsp
 	python scripts/analyze_nextstrain.py --vary-leaves=9999 --num-steps=2001
+
+update-usher: FORCE
+	scripts/pull_nextstrain.sh
+	scripts/pull_usher.sh
+	python scripts/git_pull.py cov-lineages/pango-designation
+	python scripts/git_pull.py cov-lineages/pangoLEARN
+	python scripts/git_pull.py CSSEGISandData/COVID-19
+
+preprocess-usher: FORCE
+	python scripts/preprocess_usher.py
+
+analyze-usher: FORCE
+	python scripts/analyze_usher.py --vary-holdout
+	python scripts/analyze_usher.py --vary-gene
+	python scripts/analyze_usher.py --vary-nsp
+	python scripts/analyze_usher.py --vary-leaves=9999 --num-steps=2001
 
 backtesting: FORCE
 	python scripts/mutrans.py --backtesting-max-day `seq -s, 150 14 625` --forecast-steps 12

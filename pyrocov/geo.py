@@ -334,3 +334,11 @@ def gisaid_to_jhu_location(
     matrix[~(matrix > 0)] = 0  # remove NANs
 
     return matrix
+
+
+def nextstrain_to_jhu_location(
+    gisaid_locations: typing.List[str],
+    jhu_us_df: pd.DataFrame,
+    jhu_global_df: pd.DataFrame,
+):
+    raise NotImplementedError("TODO")
