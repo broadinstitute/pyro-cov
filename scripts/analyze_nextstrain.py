@@ -242,8 +242,7 @@ def vary_leaves(args, default_config):
     )
 
     # Run inference for each lineage. This is very expensive.
-    lineage_to_clade = dataset["lineage_to_clade"]
-    clade_id = dataset["clade_id"]
+    lineage_id = dataset["lineage_id"]
     num_obs = int(dataset["weekly_counts"].sum())
     results = {}
     for lineage in tqdm.tqdm([None] + lineages):
@@ -252,12 +251,11 @@ def vary_leaves(args, default_config):
             config = default_config
             loo_dataset = dataset
         else:
-            # Construct a leave-one-out dataset by zeroing out a subclade.
+            # Construct a leave-one-out dataset by zeroing out a sublineage.
             config = make_config(exclude={"lineage": "^" + lineage + "$"})
-            clade = lineage_to_clade[lineage]
-            heldout = [clade_id[clade]]
-            for descendent in descendents[clade]:
-                heldout.append(clade_id[descendent])
+            heldout = [lineage_id[lineage]]
+            for descendent in descendents[lineage]:
+                heldout.append(lineage_id[descendent])
             loo_dataset = dataset.copy()
             loo_dataset["weekly_counts"] = dataset["weekly_counts"].clone()
             loo_dataset["weekly_counts"][:, :, heldout] = 0
@@ -278,7 +276,7 @@ def vary_leaves(args, default_config):
             continue
         result["mutations"] = dataset["mutations"]
         result["location_id"] = dataset["location_id"]
-        result["clade_id_inv"] = dataset["clade_id_inv"]
+        result["lineage_id_inv"] = dataset["lineage_id_inv"]
         results[config] = result
 
         # Cleanup
@@ -511,7 +509,8 @@ def main(args):
         result["weekly_cases"] = dataset["weekly_cases"]
         result["weekly_counts_shape"] = tuple(dataset["weekly_counts"].shape)
         result["location_id"] = dataset["location_id"]
-        result["clade_id_inv"] = dataset["clade_id_inv"]
+        result["location_id_inv"] = dataset["location_id_inv"]
+        result["lineage_id_inv"] = dataset["lineage_id_inv"]
 
         result = torch_map(result, device="cpu", dtype=torch.float)  # to save space
         results[config] = result

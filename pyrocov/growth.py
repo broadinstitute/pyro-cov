@@ -62,6 +62,45 @@ def get_fine_regions(columns, min_samples):
     return frozenset(parts for parts, count in counts.items() if count >= min_samples)
 
 
+def rank_loo_lineages(full_dataset: dict, min_samples: int = 50) -> List[str]:
+    """
+    Compute a list of lineages ranked in descending order of cut size.
+    This is used in growth rate leave-one-out prediction experiments.
+    """
+
+    def get_parent(lineage):
+        lineage = pangolin.decompress(lineage)
+        parent = pangolin.get_parent(lineage)
+        if parent is not None:
+            parent = pangolin.compress(parent)
+        return parent
+
+    # Compute sample counts.
+    lineage_id_inv = full_dataset["lineage_id_inv"]
+    lineage_id = full_dataset["lineage_id"]
+    lineage_counts = full_dataset["weekly_counts"].sum([0, 1])
+    descendent_counts = lineage_counts.clone()
+    for c, lineage in enumerate(lineage_id_inv):
+        ancestor = get_parent(lineage)
+        while ancestor is not None:
+            a = lineage_id.get(ancestor)
+            if a is not None:
+                descendent_counts[a] += lineage_counts[c]
+            ancestor = get_parent(ancestor)
+    total = lineage_counts.sum().item()
+    cut_size = torch.min(descendent_counts, total - descendent_counts)
+
+    # Filter and sort lineages by cut size.
+    ranked_lineages = [
+        (size, lineage)
+        for size, lineage in zip(cut_size.tolist(), lineage_id_inv)
+        if lineage not in ("A", "B", "B.1")
+        if size >= min_samples
+    ]
+    ranked_lineages.sort(reverse=True)
+    return [name for gap, name in ranked_lineages]
+
+
 def dense_to_sparse(x):
     index = x.nonzero(as_tuple=False).T.contiguous()
     value = x[tuple(index)]
@@ -795,42 +834,3 @@ def log_holdout_stats(fits: dict) -> dict:
             stats["lineage_stdev"] = lineage_std
 
     return {k: float(v) for k, v in stats.items()}
-
-
-def rank_loo_lineages(full_dataset: dict, min_samples: int = 50) -> List[str]:
-    """
-    Compute a list of lineages ranked in descending order of cut size.
-    This is used in growth rate leave-one-out prediction experiments.
-    """
-
-    def get_parent(lineage):
-        lineage = pangolin.decompress(lineage)
-        parent = pangolin.get_parent(lineage)
-        if parent is not None:
-            parent = pangolin.compress(parent)
-        return parent
-
-    # Compute sample counts.
-    lineage_id_inv = full_dataset["lineage_id_inv"]
-    lineage_id = full_dataset["lineage_id"]
-    lineage_counts = full_dataset["weekly_counts"].sum([0, 1])
-    descendent_counts = lineage_counts.clone()
-    for c, lineage in enumerate(lineage_id_inv):
-        ancestor = get_parent(lineage)
-        while ancestor is not None:
-            a = lineage_id.get(ancestor)
-            if a is not None:
-                descendent_counts[a] += lineage_counts[c]
-            ancestor = get_parent(ancestor)
-    total = lineage_counts.sum().item()
-    cut_size = torch.min(descendent_counts, total - descendent_counts)
-
-    # Filter and sort lineages by cut size.
-    ranked_lineages = [
-        (size, lineage)
-        for size, lineage in zip(cut_size.tolist(), lineage_id_inv)
-        if lineage not in ("A", "B", "B.1")
-        if size >= min_samples
-    ]
-    ranked_lineages.sort(reverse=True)
-    return [name for gap, name in ranked_lineages]
