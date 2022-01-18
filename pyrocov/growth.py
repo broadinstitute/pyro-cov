@@ -1,6 +1,7 @@
 # Copyright Contributors to the Pyro-Cov project.
 # SPDX-License-Identifier: Apache-2.0
 
+import datetime
 import functools
 import logging
 import math
@@ -136,12 +137,12 @@ def load_nextstrain_data(
     exclude = exclude.copy()
 
     if end_day:
-        logger.info(f"Load gisaid data end_day: {end_day}")
+        logger.info(f"Load nextstrain data end_day: {end_day}")
 
     # Load column data.
     with open(columns_filename, "rb") as f:
         columns = pickle.load(f)
-    # Clean up location ids (temporary; this should be done in preprocess_gisaid.py).
+    # Clean up location ids.
     columns["location"] = list(map(pyrocov.geo.gisaid_normalize, columns["location"]))
     logger.info(f"Training on {len(columns['day'])} rows with columns:")
     logger.info(", ".join(columns.keys()))
@@ -276,6 +277,58 @@ def load_nextstrain_data(
         "weekly_counts": weekly_counts,
     }
     return dataset
+
+
+def load_jhu_data(nextstrain_data: dict) -> dict:
+    """
+    Load case count time series.
+
+    This is used for plotting but is not used for fitting a model.
+    """
+    # Load raw JHU case count data.
+    us_cases_df = pyrocov.geo.read_csv("time_series_covid19_confirmed_US.csv")
+    global_cases_df = pyrocov.geo.read_csv("time_series_covid19_confirmed_global.csv")
+    daily_cases = torch.cat(
+        [
+            pyrocov.geo.pd_to_torch(us_cases_df, columns=slice(11, None)),
+            pyrocov.geo.pd_to_torch(global_cases_df, columns=slice(4, None)),
+        ]
+    ).T
+    logger.info(
+        "Loaded {} x {} daily case data, totaling {}".format(
+            *daily_cases.shape, daily_cases[-1].sum().item()
+        )
+    )
+
+    # Convert JHU locations to GISAID locations.
+    locations = list(nextstrain_data["location_id"])
+    matrix = pyrocov.geo.nextstrain_to_jhu_location(
+        locations, us_cases_df, global_cases_df
+    )
+    assert matrix.shape == (len(locations), daily_cases.shape[-1])
+    daily_cases = daily_cases @ matrix.T
+    daily_cases[1:] -= daily_cases[:-1].clone()  # cumulative -> density
+    daily_cases.clamp_(min=0)
+    assert daily_cases.shape[1] == len(nextstrain_data["location_id"])
+
+    # Convert daily counts to TIMESTEP counts (e.g. weekly).
+    start_date = datetime.datetime.strptime(START_DATE, "%Y-%m-%d")
+    jhu_start_date = pyrocov.geo.parse_date(us_cases_df.columns[11])
+    assert start_date < jhu_start_date
+    dt = (jhu_start_date - start_date).days
+    T = len(nextstrain_data["weekly_clades"])
+    weekly_cases = daily_cases.new_zeros(T, len(locations))
+    for w in range(TIMESTEP):
+        t0 = (w + dt) // TIMESTEP
+        source = daily_cases[w::TIMESTEP]
+        destin = weekly_cases[t0 : t0 + len(source)]
+        destin[:] += source[: len(destin)]
+    assert weekly_cases.sum() > 0
+
+    return {
+        "daily_cases": daily_cases.clamp(min=0),
+        "weekly_cases": weekly_cases.clamp(min=0),
+    }
 
 
 def model(dataset, model_type, *, forecast_steps=None):
