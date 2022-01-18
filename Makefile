@@ -47,27 +47,43 @@ test: lint FORCE
 
 ###########################################################################
 # Main processing workflow
+# Note *-nextstrain is a cheaper simpler workflow replacing *-gisaid
 
-update: FORCE
+update-gisaid: FORCE
 	scripts/pull_gisaid.sh
 	python scripts/git_pull.py cov-lineages/pango-designation
 	python scripts/git_pull.py cov-lineages/pangoLEARN
 	python scripts/git_pull.py CSSEGISandData/COVID-19
 	./nextclade dataset get --name sars-cov-2 --output-dir results/nextclade_data
 
-
-preprocess: FORCE
+preprocess-gisaid: FORCE
 	time nice python scripts/preprocess_gisaid.py
 	time nice python scripts/preprocess_nextclade.py
 	time nice python scripts/preprocess_pangolin.py --max-num-clades=2000
 	time nice python scripts/preprocess_pangolin.py --max-num-clades=5000
 	time nice python scripts/preprocess_pangolin.py --max-num-clades=10000
 
-analyze: FORCE
+analyze-gisaid: FORCE
 	python scripts/mutrans.py --vary-holdout
 	python scripts/mutrans.py --vary-gene
 	python scripts/mutrans.py --vary-nsp
 	python scripts/mutrans.py --vary-leaves=9999 --num-steps=2001
+
+update-nextstrain: FORCE
+	scripts/pull_nextstrain.sh
+	python scripts/git_pull.py cov-lineages/pango-designation
+	python scripts/git_pull.py cov-lineages/pangoLEARN
+	python scripts/git_pull.py CSSEGISandData/COVID-19
+	./nextclade dataset get --name sars-cov-2 --output-dir results/nextclade_data
+
+preprocess-nextstrain: FORCE
+	python scripts/preprocess_nextstrain.py
+
+analyze-nextstrain: FORCE
+	python scripts/analyze_nextstrain.py --vary-holdout
+	python scripts/analyze_nextstrain.py --vary-gene
+	python scripts/analyze_nextstrain.py --vary-nsp
+	python scripts/analyze_nextstrain.py --vary-leaves=9999 --num-steps=2001
 
 backtesting: FORCE
 	python scripts/mutrans.py --backtesting-max-day `seq -s, 150 14 625` --forecast-steps 12

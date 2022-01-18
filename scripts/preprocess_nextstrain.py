@@ -1,6 +1,17 @@
 # Copyright Contributors to the Pyro-Cov project.
 # SPDX-License-Identifier: Apache-2.0
 
+"""
+Preprocess Nextstrain open data.
+
+This script aggregates the metadata.tsv.gz file available from:
+https://docs.nextstrain.org/projects/ncov/en/latest/reference/remote_inputs.html
+This file is mirrored on S3 and GCP:
+https://data.nextstrain.org/files/ncov/open/metadata.tsv.gz
+s3://nextstrain-data/files/ncov/open/metadata.tsv.gz
+gs://nextstrain-data/files/ncov/open/metadata.tsv.gz
+"""
+
 import argparse
 import datetime
 import logging
@@ -9,7 +20,7 @@ from collections import Counter, defaultdict
 
 import torch
 
-from pyrocov.mutrans import START_DATE, dense_to_sparse
+from pyrocov.growth import START_DATE, dense_to_sparse
 from pyrocov.util import gzip_open_tqdm
 
 logger = logging.getLogger(__name__)
@@ -151,6 +162,7 @@ def main(args):
         counts[t, p, s] += 1
     logger.info(f"counts data is {counts.ne(0).float().mean().item()*100:0.3g}% dense")
     sparse_counts = dense_to_sparse(counts)
+    place_lineage_index = counts.ne(0).any(0).reshape(-1).nonzero(as_tuple=True)[0]
     logger.info(f"saving {tuple(counts.shape)} counts to {args.dataset_file_out}")
     dataset = {
         "start_date": args.start_date,
@@ -159,15 +171,16 @@ def main(args):
         "lineages": lineages,
         "mutations": aa_mutations,
         "features": aa_features,
-        "counts": counts,
+        "weekly_counts": counts,
         "sparse_counts": sparse_counts,
+        "place_lineage_index": place_lineage_index,
     }
     with open(args.dataset_file_out, "wb") as f:
         torch.save(dataset, f)
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Preprocess Nextstrain open data")
+    parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--metadata-file-in", default="results/nextstrain/metadata.tsv.gz"
     )
@@ -176,8 +189,8 @@ if __name__ == "__main__":
     parser.add_argument("--features-file-out", default="results/nextstrain.features.pt")
     parser.add_argument("--dataset-file-out", default="results/nextstrain.data.pt")
     parser.add_argument("--start-date", default=START_DATE)
-    parser.add_argument("--time-step-days", default=28, type=int)
-    parser.add_argument("--min-region-size", default=500, type=int)
+    parser.add_argument("--time-step-days", default=14, type=int)
+    parser.add_argument("--min-region-size", default=50, type=int)
     args = parser.parse_args()
     args.start_date = parse_date(args.start_date)
     main(args)

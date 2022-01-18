@@ -13,7 +13,7 @@ import pyro
 import torch
 import tqdm
 
-from pyrocov import mutrans, pangolin, sarscov2
+from pyrocov import growth, pangolin, sarscov2
 from pyrocov.util import torch_map
 
 logger = logging.getLogger(__name__)
@@ -64,45 +64,30 @@ def hashable_to_holdout(holdout):
 
 def _load_data_filename(args, **kwargs):
     parts = ["data", "double" if args.double else "single"]
-    parts.append(str(args.max_num_clades))
-    parts.append(str(args.min_num_mutations))
-    parts.append(str(args.min_region_size))
-    parts.append("ambi" if args.ambiguous else "")
     for k, v in sorted(kwargs.get("include", {}).items()):
         parts.append(f"I{k}={_safe_str(v)}")
     for k, v in sorted(kwargs.get("exclude", {}).items()):
         parts.append(f"E{k}={_safe_str(v)}")
     parts.append(str(kwargs.get("end_day")))
-    return "results/mutrans.{}.pt".format(".".join(parts))
+    return "results/growth.{}.pt".format(".".join(parts))
 
 
 @cached(_load_data_filename)
 def load_data(args, **kwargs):
     """
-    Cached wrapper to load GISAID data.
+    Cached wrapper to load and subset data.
     """
-    return mutrans.load_gisaid_data(
-        device=args.device,
-        columns_filename=f"results/columns.{args.max_num_clades}.pkl",
-        features_filename=f"results/features.{args.max_num_clades}.{args.min_num_mutations}.pt",
-        min_region_size=args.min_region_size,
-        ambiguous=args.ambiguous,
-        **kwargs,
-    )
+    return growth.load_nextstrain_data(device=args.device, **kwargs)
 
 
 def _fit_filename(name, *args):
     parts = [name]
-    parts.append(str(args[0].max_num_clades))
-    parts.append(str(args[0].min_num_mutations))
-    parts.append(str(args[0].min_region_size))
-    parts.append("ambi" if args[0].ambiguous else "")
     for arg in args[2:]:
         if isinstance(arg, tuple):
             parts.append("-".join(f"{k}={_safe_str(v)}" for k, v in arg))
         else:
             parts.append(str(arg))
-    return "results/mutrans.{}.pt".format(".".join(parts))
+    return "results/growth.{}.pt".format(".".join(parts))
 
 
 @cached(lambda *args: _fit_filename("svi", *args))
@@ -111,7 +96,7 @@ def fit_svi(
     dataset,
     cond_data="",
     model_type="reparam",
-    guide_type="mvn_dependent",
+    guide_type="custom",
     n=1001,
     lr=0.01,
     lrd=0.1,
@@ -128,7 +113,7 @@ def fit_svi(
     cond_data = {k: float(v) for k, v in cond_data}
     holdout = hashable_to_holdout(holdout)
 
-    result = mutrans.fit_svi(
+    result = growth.fit_svi(
         dataset,
         cond_data=cond_data,
         model_type=model_type,
@@ -150,7 +135,7 @@ def fit_svi(
         result = {
             "median": {
                 "coef": result["median"]["coef"].float(),  # [F]
-                "rate_loc": result["median"]["rate_loc"].float(),  # [S]
+                "rate_loc": result["median"]["rate_loc"].float(),  # [L]
             },
         }
 
@@ -193,21 +178,19 @@ def backtesting(args, default_config):
 
         # Run SVI
         result = fit_svi(args, dataset, *config)
-        mutrans.log_stats(dataset, result)
+        growth.log_stats(dataset, result)
 
         # Save the results for this config
 
         # Augment gisaid dataset with JHU timeseries counts
-        dataset.update(mutrans.load_jhu_data(dataset))
+        dataset.update(growth.load_jhu_data(dataset))
 
         # Generate results
         result["mutations"] = dataset["mutations"]
-        result["weekly_clades"] = dataset["weekly_clades"]
+        result["weekly_counts"] = dataset["weekly_counts"]
         result["weekly_cases"] = dataset["weekly_cases"]
-        result["weekly_clades_shape"] = tuple(dataset["weekly_clades"].shape)
+        result["weekly_counts_shape"] = tuple(dataset["weekly_counts"].shape)
         result["location_id"] = dataset["location_id"]
-        result["clade_id_inv"] = dataset["clade_id_inv"]
-
         result["location_id_inv"] = dataset["location_id_inv"]
         result["lineage_id_inv"] = dataset["lineage_id_inv"]
 
@@ -215,7 +198,7 @@ def backtesting(args, default_config):
         results[config] = result
 
         # Ensure number of regions match
-        assert dataset["weekly_clades"].shape[1] == result["mean"]["probs"].shape[1]
+        assert dataset["weekly_counts"].shape[1] == result["mean"]["probs"].shape[1]
         assert dataset["weekly_cases"].shape[1] == result["mean"]["probs"].shape[1]
 
         # Cleanup
@@ -224,21 +207,21 @@ def backtesting(args, default_config):
         gc.collect()
 
     if args.vary_holdout:
-        mutrans.log_holdout_stats({k[-1]: v for k, v in results.items()})
+        growth.log_holdout_stats({k[-1]: v for k, v in results.items()})
 
     if not args.test:
-        logger.info("saving results/mutrans.backtesting.pt")
-        torch.save(results, "results/mutrans.backtesting.pt")
+        logger.info("saving results/growth.backtesting.pt")
+        torch.save(results, "results/growth.backtesting.pt")
 
 
 def vary_leaves(args, default_config):
     """
-    Run a leave-one-out experiment over a set of leaf clades, saving results
-    to ``results/mutrans.vary_leaves.pt``.
+    Run a leave-one-out experiment over a set of lineages, saving results
+    to ``results/growth.vary_leaves.pt``.
     """
     # Load a single common dataset.
     dataset = load_data(args)
-    descendents = pangolin.find_descendents(dataset["clade_id_inv"])
+    descendents = pangolin.find_descendents(dataset["lineage_id_inv"])
     if dataset["sparse_hist"]:
         raise NotImplementedError
 
@@ -250,7 +233,7 @@ def vary_leaves(args, default_config):
         return config
 
     # Rank lineages by cut size.
-    lineages = mutrans.rank_loo_lineages(dataset)
+    lineages = growth.rank_loo_lineages(dataset)
     lineages = lineages[: args.vary_leaves]
     logger.info(
         "Leave-one-out predicting growth rate of {} lineages: {}".format(
@@ -259,9 +242,8 @@ def vary_leaves(args, default_config):
     )
 
     # Run inference for each lineage. This is very expensive.
-    lineage_to_clade = dataset["lineage_to_clade"]
-    clade_id = dataset["clade_id"]
-    num_obs = int(dataset["weekly_clades"].sum())
+    lineage_id = dataset["lineage_id"]
+    num_obs = int(dataset["weekly_counts"].sum())
     results = {}
     for lineage in tqdm.tqdm([None] + lineages):
         if lineage is None:
@@ -269,19 +251,18 @@ def vary_leaves(args, default_config):
             config = default_config
             loo_dataset = dataset
         else:
-            # Construct a leave-one-out dataset by zeroing out a subclade.
+            # Construct a leave-one-out dataset by zeroing out a sublineage.
             config = make_config(exclude={"lineage": "^" + lineage + "$"})
-            clade = lineage_to_clade[lineage]
-            heldout = [clade_id[clade]]
-            for descendent in descendents[clade]:
-                heldout.append(clade_id[descendent])
+            heldout = [lineage_id[lineage]]
+            for descendent in descendents[lineage]:
+                heldout.append(lineage_id[descendent])
             loo_dataset = dataset.copy()
-            loo_dataset["weekly_clades"] = dataset["weekly_clades"].clone()
-            loo_dataset["weekly_clades"][:, :, heldout] = 0
-            loo_num_obs = int(loo_dataset["weekly_clades"].sum())
+            loo_dataset["weekly_counts"] = dataset["weekly_counts"].clone()
+            loo_dataset["weekly_counts"][:, :, heldout] = 0
+            loo_num_obs = int(loo_dataset["weekly_counts"].sum())
             logger.info(f"Holding out {num_obs - loo_num_obs}/{num_obs} samples")
-            loo_dataset["sparse_counts"] = mutrans.dense_to_sparse(
-                loo_dataset["weekly_clades"]
+            loo_dataset["sparse_counts"] = growth.dense_to_sparse(
+                loo_dataset["weekly_counts"]
             )
 
         # Run SVI
@@ -295,7 +276,7 @@ def vary_leaves(args, default_config):
             continue
         result["mutations"] = dataset["mutations"]
         result["location_id"] = dataset["location_id"]
-        result["clade_id_inv"] = dataset["clade_id_inv"]
+        result["lineage_id_inv"] = dataset["lineage_id_inv"]
         results[config] = result
 
         # Cleanup
@@ -304,14 +285,14 @@ def vary_leaves(args, default_config):
         gc.collect()
 
     if not args.test:
-        logger.info("saving results/mutrans.vary_leaves.pt")
-        torch.save(results, "results/mutrans.vary_leaves.pt")
+        logger.info("saving results/growth.vary_leaves.pt")
+        torch.save(results, "results/growth.vary_leaves.pt")
 
 
 def vary_gene(args, default_config, *, exclude_genes=False):
     """
     Train on the whole genome and on various single genes, saving results to
-    ``results/mutrans.vary_gene.pt``.
+    ``results/growth.vary_gene.pt``.
     """
     # Collect a set of genes.
     mutations = load_data(args)["mutations"]
@@ -340,7 +321,7 @@ def vary_gene(args, default_config, *, exclude_genes=False):
 
         # Save metrics.
         key = holdout_to_hashable(holdout)
-        results[key] = mutrans.log_stats(dataset, result)
+        results[key] = growth.log_stats(dataset, result)
 
         # Clean up to save memory.
         del dataset, result
@@ -348,14 +329,14 @@ def vary_gene(args, default_config, *, exclude_genes=False):
         gc.collect()
 
     if not args.test:
-        logger.info("saving results/mutrans.vary_gene.pt")
-        torch.save(results, "results/mutrans.vary_gene.pt")
+        logger.info("saving results/growth.vary_gene.pt")
+        torch.save(results, "results/growth.vary_gene.pt")
 
 
 def vary_nsp(args, default_config):
     """
     Train on ORF1 and on various single nsps, saving results to
-    ``results/mutrans.vary_nsp.pt``.
+    ``results/growth.vary_nsp.pt``.
     """
     # Construct a grid of holdouts, including full ORF1, empty, and each nsp.
     grid = [{"include": {"gene": "^ORF1[ab]:"}}, {"exclude": {"gene": ".*"}}]
@@ -378,7 +359,7 @@ def vary_nsp(args, default_config):
 
         # Save metrics.
         key = holdout_to_hashable(holdout)
-        results[key] = mutrans.log_stats(dataset, result)
+        results[key] = growth.log_stats(dataset, result)
 
         # Clean up to save memory.
         del dataset, result
@@ -386,8 +367,8 @@ def vary_nsp(args, default_config):
         gc.collect()
 
     if not args.test:
-        logger.info("saving results/mutrans.vary_nsp.pt")
-        torch.save(results, "results/mutrans.vary_nsp.pt")
+        logger.info("saving results/growth.vary_nsp.pt")
+        torch.save(results, "results/growth.vary_nsp.pt")
 
 
 def main(args):
@@ -515,28 +496,27 @@ def main(args):
 
         # Run SVI
         result = fit_svi(args, dataset, *config)
-        mutrans.log_stats(dataset, result)
+        growth.log_stats(dataset, result)
 
         # Save the results for this config
 
         # Augment gisaid dataset with JHU timeseries counts
-        dataset.update(mutrans.load_jhu_data(dataset))
+        dataset.update(growth.load_jhu_data(dataset))
 
         # Generate results
         result["mutations"] = dataset["mutations"]
-        result["weekly_clades"] = dataset["weekly_clades"]
+        result["weekly_counts"] = dataset["weekly_counts"]
         result["weekly_cases"] = dataset["weekly_cases"]
-        result["weekly_clades_shape"] = tuple(dataset["weekly_clades"].shape)
+        result["weekly_counts_shape"] = tuple(dataset["weekly_counts"].shape)
         result["location_id"] = dataset["location_id"]
-        result["clade_id_inv"] = dataset["clade_id_inv"]
-        result["clade_to_lineage"] = dataset["clade_to_lineage"]
-        result["lineage_to_clade"] = dataset["lineage_to_clade"]
+        result["location_id_inv"] = dataset["location_id_inv"]
+        result["lineage_id_inv"] = dataset["lineage_id_inv"]
 
         result = torch_map(result, device="cpu", dtype=torch.float)  # to save space
         results[config] = result
 
         # Ensure number of regions match
-        assert dataset["weekly_clades"].shape[1] == result["mean"]["probs"].shape[1]
+        assert dataset["weekly_counts"].shape[1] == result["mean"]["probs"].shape[1]
         assert dataset["weekly_cases"].shape[1] == result["mean"]["probs"].shape[1]
 
         # Cleanup
@@ -545,11 +525,11 @@ def main(args):
         gc.collect()
 
     if args.vary_holdout:
-        mutrans.log_holdout_stats({k[-1]: v for k, v in results.items()})
+        growth.log_holdout_stats({k[-1]: v for k, v in results.items()})
 
     if not args.test:
-        logger.info("saving results/mutrans.pt")
-        torch.save(results, "results/mutrans.pt")
+        logger.info("saving results/growth.pt")
+        torch.save(results, "results/growth.pt")
 
 
 if __name__ == "__main__":
@@ -563,10 +543,6 @@ if __name__ == "__main__":
     )
     parser.add_argument("--vary-gene", action="store_true")
     parser.add_argument("--vary-nsp", action="store_true")
-    parser.add_argument("--max-num-clades", default=5000, type=int)
-    parser.add_argument("--min-num-mutations", default=1, type=int)
-    parser.add_argument("--min-region-size", default=50, type=int)
-    parser.add_argument("--ambiguous", action="store_true")
     parser.add_argument("-cd", "--cond-data", default="coef_scale=0.05")
     parser.add_argument("-m", "--model-type", default="reparam")
     parser.add_argument("-g", "--guide-type", default="full")
