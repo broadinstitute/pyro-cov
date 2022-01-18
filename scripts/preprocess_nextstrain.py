@@ -20,7 +20,7 @@ from collections import Counter, defaultdict
 
 import torch
 
-from pyrocov.mutrans import START_DATE, dense_to_sparse
+from pyrocov.growth import START_DATE, dense_to_sparse
 from pyrocov.util import gzip_open_tqdm
 
 logger = logging.getLogger(__name__)
@@ -162,6 +162,7 @@ def main(args):
         counts[t, p, s] += 1
     logger.info(f"counts data is {counts.ne(0).float().mean().item()*100:0.3g}% dense")
     sparse_counts = dense_to_sparse(counts)
+    place_lineage_index = counts.ne(0).any(0).reshape(-1).nonzero(as_tuple=True)[0]
     logger.info(f"saving {tuple(counts.shape)} counts to {args.dataset_file_out}")
     dataset = {
         "start_date": args.start_date,
@@ -170,8 +171,9 @@ def main(args):
         "lineages": lineages,
         "mutations": aa_mutations,
         "features": aa_features,
-        "counts": counts,
+        "weekly_counts": counts,
         "sparse_counts": sparse_counts,
+        "place_lineage_index": place_lineage_index,
     }
     with open(args.dataset_file_out, "wb") as f:
         torch.save(dataset, f)
