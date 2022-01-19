@@ -105,15 +105,9 @@ def load_metadata(args):
         if date < args.start_date:
             date = args.start_date  # Clip rows before start date.
 
-        # Create a standard location.
-        strain = row.strain
-        region = row.region
-        country = row.country
-        division = row.division
-        location = row.location
-        
-        location = get_canonical_location(strain, region, country, division, location)
-        if not location:
+        # Create a standard location.        
+        location = get_canonical_location(row.strain, row.region, row.country,  row.division,  row.location)
+        if location is None:
             skipped["country"] += 1
             continue
 
