@@ -24,6 +24,8 @@ from pyrocov.usher import (
     refine_mutation_tree,
 )
 
+from pyrocov.geo import get_canonical_location_generator
+
 logger = logging.getLogger(__name__)
 logging.basicConfig(format="%(relativeCreated) 9d %(message)s", level=logging.INFO)
 
@@ -79,6 +81,7 @@ def load_metadata(args):
 
     # Read date, location, and stats from nextstrain metadata.
     logger.info("Loading nextstrain metadata")
+    get_canonical_location = get_canonical_location_generator()
     stats = defaultdict(Counter)
     nextstrain_df = pd.read_csv("results/nextstrain/metadata.tsv", sep="\t", dtype=str)
     columns = defaultdict(list)
@@ -103,15 +106,16 @@ def load_metadata(args):
             date = args.start_date  # Clip rows before start date.
 
         # Create a standard location.
+        strain = row.strain
+        region = row.region
         country = row.country
         division = row.division
-        if not isinstance(country, str):
+        location = row.location
+        
+        location = get_canonical_location(strain, region, country, division, location)
+        if not location:
             skipped["country"] += 1
             continue
-        if isinstance(division, str) and division != country:
-            location = f"{country} / {division}"
-        else:
-            location = country
 
         # Add a row.
         columns["genbank_accession"] = genbank_accession

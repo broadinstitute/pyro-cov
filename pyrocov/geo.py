@@ -342,3 +342,107 @@ def nextstrain_to_jhu_location(
     jhu_global_df: pd.DataFrame,
 ):
     raise NotImplementedError("TODO")
+
+
+# From https://gist.github.com/rogerallen/1583593
+us_state_to_abbrev = {
+    "Alabama": "AL",
+    "Alaska": "AK",
+    "Arizona": "AZ",
+    "Arkansas": "AR",
+    "California": "CA",
+    "Colorado": "CO",
+    "Connecticut": "CT",
+    "Delaware": "DE",
+    "Florida": "FL",
+    "Georgia": "GA",
+    "Hawaii": "HI",
+    "Idaho": "ID",
+    "Illinois": "IL",
+    "Indiana": "IN",
+    "Iowa": "IA",
+    "Kansas": "KS",
+    "Kentucky": "KY",
+    "Louisiana": "LA",
+    "Maine": "ME",
+    "Maryland": "MD",
+    "Massachusetts": "MA",
+    "Michigan": "MI",
+    "Minnesota": "MN",
+    "Mississippi": "MS",
+    "Missouri": "MO",
+    "Montana": "MT",
+    "Nebraska": "NE",
+    "Nevada": "NV",
+    "New Hampshire": "NH",
+    "New Jersey": "NJ",
+    "New Mexico": "NM",
+    "New York": "NY",
+    "North Carolina": "NC",
+    "North Dakota": "ND",
+    "Ohio": "OH",
+    "Oklahoma": "OK",
+    "Oregon": "OR",
+    "Pennsylvania": "PA",
+    "Rhode Island": "RI",
+    "South Carolina": "SC",
+    "South Dakota": "SD",
+    "Tennessee": "TN",
+    "Texas": "TX",
+    "Utah": "UT",
+    "Vermont": "VT",
+    "Virginia": "VA",
+    "Washington": "WA",
+    "West Virginia": "WV",
+    "Wisconsin": "WI",
+    "Wyoming": "WY",
+    "District of Columbia": "DC",
+    "American Samoa": "AS",
+    "Guam": "GU",
+    "Northern Mariana Islands": "MP",
+    "Puerto Rico": "PR",
+    "United States Minor Outlying Islands": "UM",
+    "U.S. Virgin Islands": "VI",
+}
+    
+# invert the dictionary
+abbrev_to_us_state = dict(map(reversed, us_state_to_abbrev.items()))
+
+def get_canonical_location_generator():
+    """Generates a function that processes nextstrain metadata locations and converts them to 
+    canonical location strings, or None if they can't be resolved"""
+    
+    # Pre-compile regex
+    re_type1 = re.compile('(?:USA|UnitedStates)\/([A-Z]{2})-[-_0-9A-Z]+/[0-9]{4}')
+
+    def get_canonical_location_generator_inner(strain, region, country, division, location):
+        if country == "USA":
+            if division == "USA":
+                # Division information incorrect, extract state from 'strain'
+                match_obj = re_type1.match(strain)
+                if match_obj:
+                    state = match_obj.groups()[0]
+                    if state in abbrev_to_us_state.keys():
+                        return "".join([region,'/',country,'/',state])
+                    else:
+                        return None
+            else:
+                # Division information provided, convert to state abbr
+                try:
+                    state = us_state_to_abbrev[division]
+                    return "".join([region,'/',country,'/',state])
+                except KeyError:
+                    return None
+        elif country == "United Kingdom":
+            if division in ('England','Scotland','Northern Ireland','Wales'):
+                return "".join([region,'/',country,'/',division])
+            else:
+                # These could also be discarded (n=622)
+                return "".join([region,'/',country])
+        elif country == "Germany":
+            return "".join([region,'/',country,'/',division])
+        else:
+            # For all other countries only return region and country
+            return "".join([region,'/',country])
+    
+    return get_canonical_location_generator_inner
