@@ -179,9 +179,14 @@ def nuc_mutations_to_aa_mutations(ms: List[str]) -> List[str]:
     ms_by_aa = defaultdict(list)
 
     for m in ms:
-        # Parse a nucleotide mutation such as "A1234G" -> ("A", 1234, "G").
-        position_nuc = int(m[1:-1])
-        new_nuc = m[-1]
+        # Parse a nucleotide mutation such as "A1234G" -> (1234, "G").
+        if isinstance(m, str):
+            position_nuc = int(m[1:-1])
+            new_nuc = m[-1]
+        else:
+            # assert isinstance(m, pyrocov.usher.Mutation)
+            position_nuc = m.position
+            new_nuc = m.mut
 
         # Find the first matching gene.
         for gene, (start, end) in GENE_TO_POSITION.items():

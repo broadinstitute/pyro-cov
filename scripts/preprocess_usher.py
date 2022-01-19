@@ -2,13 +2,20 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import argparse
+import datetime
 import logging
 import math
 import pickle
-from collections import defaultdict
+import re
+from collections import Counter, defaultdict
 
+import pandas as pd
 import torch
+import tqdm
+from Bio.Phylo.NewickIO import Parser
 
+from pyrocov.external.usher import parsimony_pb2
+from pyrocov.mutrans import START_DATE
 from pyrocov.sarscov2 import nuc_mutations_to_aa_mutations
 from pyrocov.usher import (
     FineToMeso,
@@ -20,31 +27,133 @@ from pyrocov.usher import (
 logger = logging.getLogger(__name__)
 logging.basicConfig(format="%(relativeCreated) 9d %(message)s", level=logging.INFO)
 
+DATE_FORMATS = {4: "%Y", 7: "%Y-%m", 10: "%Y-%m-%d"}
 
-def prune_tree(args, coarse_to_fine, columns):
+
+def parse_date(string):
+    fmt = DATE_FORMATS.get(len(string))
+    if fmt is None:
+        # Attempt to fix poorly formated dates like 2020-09-1.
+        parts = string.split("-")
+        parts = parts[:1] + [f"{int(p):>02d}" for p in parts[1:]]
+        string = "-".join(parts)
+        fmt = DATE_FORMATS[len(string)]
+    return datetime.datetime.strptime(string, fmt)
+
+
+def load_metadata(args):
+    # Collect all names appearing in the usher tree.
+    logger.info("Loading usher tree")
+    with open(args.tree_file_in, "rb") as f:
+        proto = parsimony_pb2.data.FromString(f.read())
+    tree = next(Parser.from_string(proto.newick).parse())
+
+    # Collect condensed samples.
+    usher_strains = set()
+    condensed_counts = {}
+    for node in proto.condensed_nodes:
+        usher_strains.update(node.condensed_leaves)
+        condensed_counts[node.node_name] = len(node.condensed_leaves)
+
+    # Collect info from each node in the tree.
+    clade_to_sample_count = []
+    for node in tree.find_clades():
+        count = 0
+        if node.name:
+            if "_condensed_" in node.name:
+                count += condensed_counts[node.name]
+            else:
+                count += 1
+                usher_strains.add(node.name)
+        clade_to_sample_count.append(count)
+    logger.info(f"Found {len(usher_strains)} strains in the usher tree")
+    usher_genbanks = set()
+    skipped = Counter()
+    for strain in usher_strains:
+        match = re.search(r"([A-Z]+[0-9]+)\.[0-9]", strain)
+        if match:
+            usher_genbanks.add(match.group(1))
+        else:
+            skipped["strain re"] += 1
+    logger.info(f"Found {len(usher_genbanks)} genbank accessions in the usher tree")
+
+    # Read date, location, and stats from nextstrain metadata.
+    logger.info("Loading nextstrain metadata")
+    stats = defaultdict(Counter)
+    nextstrain_df = pd.read_csv("results/nextstrain/metadata.tsv", sep="\t", dtype=str)
+    columns = defaultdict(list)
+    for row in tqdm.tqdm(nextstrain_df.itertuples(), total=len(nextstrain_df)):
+        # Collect background mutation statistics for dN/dS etc.
+        for key in ["aaSubstitutions", "insertions", "substitutions"]:
+            values = getattr(row, key)
+            if isinstance(values, str) and values:
+                stats[key].update(values.split(","))
+
+        genbank_accession = row.genbank_accession
+        if genbank_accession not in usher_genbanks:
+            skipped["unknown genbank_accession"] += 1
+            continue
+
+        date = row.date
+        if not isinstance(date, str) or date == "?":
+            skipped["no date"] += 1
+            continue
+        date = parse_date(date)
+        if date < args.start_date:
+            date = args.start_date  # Clip rows before start date.
+
+        # Create a standard location.
+        country = row.country
+        division = row.division
+        if not isinstance(country, str):
+            skipped["country"] += 1
+            continue
+        if isinstance(division, str) and division != country:
+            location = f"{country} / {division}"
+        else:
+            location = country
+
+        # Add a row.
+        columns["genbank_accession"] = genbank_accession
+        columns["day"].append((date - args.start_date).days)
+        columns["location"] = location
+    assert sum(skipped.values()) < 2e6, f"suspicious skippage:\n{skipped}"
+    logger.info(f"Skipped {sum(skipped.values())} nodes because:\n{skipped}")
+    logger.info(f"Kept {len(columns['day'])} rows")
+
+    with open(args.stats_file_out, "wb") as f:
+        pickle.dump(stats, f)
+    logger.info(f"Saved {args.stats_file_out}")
+
+    return columns, clade_to_sample_count
+
+
+def prune_tree(args, coarse_to_fine, clade_to_sample_count):
     # To ensure pango lineages remain distinct, set their weights to infinity.
     weights = defaultdict(float, {fine: math.inf for fine in coarse_to_fine.values()})
 
-    # Add weights of ambiguous clades.
-    for clades in columns["clades"]:
-        clades = clades.split(",")
-        weight = 1 / len(clades)
-        for clade in clades:
-            weights[clade] += weight
-    for clade in columns["clade"]:
-        assert clade in weights
+    # Add weight of 1 for each sampled genome.
+    with open(args.tree_file_out, "rb") as f:
+        proto = parsimony_pb2.data.FromString(f.read())
+    for meta, count in zip(proto.metadata, clade_to_sample_count):
+        assert isinstance(meta.clade, str)
+        weights[meta.clade] += count
+    weights.pop("", None)
 
     # Prune the tree, minimizing the number of incorrect mutations.
     args.max_num_clades = max(args.max_num_clades, len(coarse_to_fine))
-    tree_filename = f"results/lineageTree.{args.max_num_clades}.pb"
+    pruned_tree_filename = f"results/lineageTree.{args.max_num_clades}.pb"
     meso_set = prune_mutation_tree(
-        args.tree_file_in, tree_filename, args.max_num_clades, weights
+        args.tree_file_out, pruned_tree_filename, args.max_num_clades, weights
     )
     assert len(meso_set) == args.max_num_clades
-    return FineToMeso(meso_set), tree_filename
+    return FineToMeso(meso_set), pruned_tree_filename
 
 
 def main(args):
+    # Create columns.
+    columns, clade_to_sample_count = load_metadata(args)
+
     # Extract mappings between coarse lineages and fine clades.
     coarse_proto = args.tree_file_in
     fine_proto = args.tree_file_out
@@ -53,34 +162,26 @@ def main(args):
     for fine, coarse in fine_to_coarse.items():
         coarse_to_fines[coarse].append(fine)
     # Choose the basal representative.
-    # FIXME is this actually the most recent common ancestor?
     coarse_to_fine = {c: min(fs) for c, fs in coarse_to_fines.items()}
 
     # Prune tree, updating data structures to use meso-scale clades.
-    logger.info(f"Loading {args.columns_file_in}")
-    with open(args.columns_file_in, "rb") as f:
-        columns = pickle.load(f)
-    fine_to_meso, tree_filename = prune_tree(args, coarse_to_fine, columns)
-
+    fine_to_meso, pruned_tree_filename = prune_tree(
+        args, coarse_to_fine, clade_to_sample_count
+    )
     fine_to_coarse = {fine_to_meso(f): c for f, c in fine_to_coarse.items()}
     coarse_to_fine = {c: fine_to_meso(f) for c, f in coarse_to_fine.items()}
     columns["clade"] = [fine_to_meso(c) for c in columns["clade"]]
     clade_set = set(columns["clade"])
-    assert len(clade_set) <= args.max_num_clades
-    columns["clades"] = [
-        ",".join(fine_to_meso(c) for c in cs.split(",")) for cs in columns["clades"]
-    ]
-    clade_set.update(*(c.split(",") for c in columns["clades"]))
     assert len(clade_set) <= args.max_num_clades
     with open(args.columns_file_out, "wb") as f:
         pickle.dump(columns, f)
     logger.info(f"Saved {args.columns_file_out}")
 
     # Convert from nucleotide mutations to amino acid mutations.
-    nuc_mutations_by_clade = load_mutation_tree(tree_filename)
+    nuc_mutations_by_clade = load_mutation_tree(pruned_tree_filename)
     assert nuc_mutations_by_clade
     aa_mutations_by_clade = {
-        clade: nuc_mutations_to_aa_mutations(mutations)  # FIXME type error
+        clade: nuc_mutations_to_aa_mutations(mutations)
         for clade, mutations in nuc_mutations_by_clade.items()
     }
 
@@ -114,13 +215,21 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Preprocess pangolin mutations")
-    parser.add_argument("--columns-file-in", default="results/usher.columns.pkl")
+    parser.add_argument(
+        "--usher-metadata-file-in", default="results/usher/metadata.tsv"
+    )
+    parser.add_argument(
+        "--nextstrain-metadata-file-in", default="results/nextstrain/metadata.tsv"
+    )
     parser.add_argument("--tree-file-in", default="results/usher/all.masked.pb")
     parser.add_argument("--tree-file-out", default="results/lineageTree.fine.pb")
-    parser.add_argument("--features-file-out", default="")
+    parser.add_argument("--stats-file-out", default="results/stats.pkl")
     parser.add_argument("--columns-file-out", default="")
+    parser.add_argument("--features-file-out", default="")
     parser.add_argument("-c", "--max-num-clades", type=int, default=5000)
+    parser.add_argument("--start-date", default=START_DATE)
     args = parser.parse_args()
+    args.start_date = parse_date(args.start_date)
     if not args.features_file_out:
         args.features_file_out = f"results/features.{args.max_num_clades}.pt"
     if not args.columns_file_out:
