@@ -113,13 +113,22 @@ def load_metadata(args):
         else:
             location = country
 
+        lineage = row.pango_lineage
+        if not isinstance(lineage, str) or not lineage or lineage == "?":
+            lineage = None
+
         # Add a row.
-        columns["genbank_accession"] = genbank_accession
+        columns["genbank_accession"].append(genbank_accession)
         columns["day"].append((date - args.start_date).days)
-        columns["location"] = location
+        columns["location"].append(location)
+        columns["lineage"].append(lineage)
     assert sum(skipped.values()) < 2e6, f"suspicious skippage:\n{skipped}"
     logger.info(f"Skipped {sum(skipped.values())} nodes because:\n{skipped}")
     logger.info(f"Kept {len(columns['day'])} rows")
+
+    with open("results/columns.pkl", "wb") as f:
+        pickle.dump(columns, f)
+    logger.info("Saved results/columns.pkl")
 
     with open(args.stats_file_out, "wb") as f:
         pickle.dump(stats, f)
@@ -170,7 +179,8 @@ def main(args):
     )
     fine_to_coarse = {fine_to_meso(f): c for f, c in fine_to_coarse.items()}
     coarse_to_fine = {c: fine_to_meso(f) for c, f in coarse_to_fine.items()}
-    columns["clade"] = [fine_to_meso(c) for c in columns["clade"]]
+    columns["lineage"] = [fine_to_coarse[f] for f in columns["clade"]]
+    columns["clade"] = [fine_to_meso(f) for f in columns["clade"]]
     clade_set = set(columns["clade"])
     assert len(clade_set) <= args.max_num_clades
     with open(args.columns_file_out, "wb") as f:
