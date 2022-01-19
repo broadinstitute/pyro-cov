@@ -171,6 +171,7 @@ def main(args):
     coarse_proto = args.tree_file_in
     fine_proto = args.tree_file_out
     fine_to_coarse = refine_mutation_tree(coarse_proto, fine_proto)
+    columns["lineage"] = [fine_to_coarse[f] for f in columns["clade"]]
     coarse_to_fines = defaultdict(list)
     for fine, coarse in fine_to_coarse.items():
         coarse_to_fines[coarse].append(fine)
@@ -183,7 +184,6 @@ def main(args):
     )
     fine_to_coarse = {fine_to_meso(f): c for f, c in fine_to_coarse.items()}
     coarse_to_fine = {c: fine_to_meso(f) for c, f in coarse_to_fine.items()}
-    columns["lineage"] = [fine_to_coarse[f] for f in columns["clade"]]
     columns["clade"] = [fine_to_meso(f) for f in columns["clade"]]
     clade_set = set(columns["clade"])
     assert len(clade_set) <= args.max_num_clades
