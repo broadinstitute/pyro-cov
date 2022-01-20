@@ -7,7 +7,7 @@ import os
 import re
 import typing
 from collections import OrderedDict, defaultdict
-from typing import List
+from typing import Dict, List
 
 import pandas as pd
 import torch
@@ -345,7 +345,7 @@ def nextstrain_to_jhu_location(
 
 
 # From https://gist.github.com/rogerallen/1583593
-us_state_to_abbrev = {
+us_state_to_abbrev: Dict[str, str] = {
     "Alabama": "AL",
     "Alaska": "AK",
     "Arizona": "AZ",
@@ -404,18 +404,21 @@ us_state_to_abbrev = {
     "United States Minor Outlying Islands": "UM",
     "U.S. Virgin Islands": "VI",
 }
-    
+
 # invert the dictionary
-abbrev_to_us_state = dict(map(reversed, us_state_to_abbrev.items()))
+abbrev_to_us_state: Dict[str, str] = {v: k for k, v in us_state_to_abbrev.items()}
+
 
 def get_canonical_location_generator(recover_missing_USA_state = True):
     """Generates a function that processes nextstrain metadata locations and converts them to 
     canonical location strings, or None if they can't be resolved"""
-    
-    # Pre-compile regex
-    re_type1 = re.compile('(?:USA|UnitedStates)\/([A-Z]{2})-[-_0-9A-Z]+/[0-9]{4}')
 
-    def get_canonical_location_generator_inner(strain, region, country, division, location):
+    # Pre-compile regex
+    re_type1 = re.compile(r"(?:USA|UnitedStates)\/([A-Z]{2})-[-_0-9A-Z]+/[0-9]{4}")
+
+    def get_canonical_location_generator_inner(
+        strain, region, country, division, location
+    ):
         if country == "USA":
             if division == "USA":
                 if recover_missing_USA_state:
@@ -433,19 +436,19 @@ def get_canonical_location_generator(recover_missing_USA_state = True):
                 # Division information provided, convert to state abbr
                 try:
                     state = us_state_to_abbrev[division]
-                    return "".join([region,'/',country,'/',state])
+                    return "".join([region, "/", country, "/", state])
                 except KeyError:
                     return None
         elif country == "United Kingdom":
-            if division in ('England','Scotland','Northern Ireland','Wales'):
-                return "".join([region,'/',country,'/',division])
+            if division in ("England", "Scotland", "Northern Ireland", "Wales"):
+                return "".join([region, "/", country, "/", division])
             else:
                 # These could also be discarded (n=622)
-                return "".join([region,'/',country])
+                return "".join([region, "/", country])
         elif country == "Germany":
-            return "".join([region,'/',country,'/',division])
+            return "".join([region, "/", country, "/", division])
         else:
             # For all other countries only return region and country
-            return "".join([region,'/',country])
-    
+            return "".join([region, "/", country])
+
     return get_canonical_location_generator_inner
