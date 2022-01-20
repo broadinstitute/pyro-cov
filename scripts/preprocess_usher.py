@@ -42,41 +42,61 @@ def parse_date(string):
     return datetime.datetime.strptime(string, fmt)
 
 
+def try_parse_genbank(strain):
+    match = re.search(r"([A-Z]+[0-9]+)\.[0-9]", strain)
+    if match:
+        return match.group(1)
+
+
 def load_metadata(args):
     # Collect all names appearing in the usher tree.
-    logger.info("Loading usher tree")
-    with open(args.tree_file_in, "rb") as f:
+    logger.info("Loading fine tree")
+    with open(args.tree_file_out, "rb") as f:
         proto = parsimony_pb2.data.FromString(f.read())
     tree = next(Parser.from_string(proto.newick).parse())
+    skipped = Counter()
 
     # Collect condensed samples.
     usher_strains = set()
-    condensed_counts = {}
+    nodename_to_genbanks = {}
     for node in proto.condensed_nodes:
         usher_strains.update(node.condensed_leaves)
-        condensed_counts[node.node_name] = len(node.condensed_leaves)
+        genbanks = []
+        for strain in node.condensed_leaves:
+            usher_strains.add(strain)
+            genbank = try_parse_genbank(strain)
+            if genbank is None:
+                skipped["strain re"] += 1
+            else:
+                genbanks.append(genbank)
+        nodename_to_genbanks[node.node_name] = genbanks
 
     # Collect info from each node in the tree.
-    clade_to_sample_count = []
     for node in tree.find_clades():
-        count = 0
-        if node.name:
-            if "_condensed_" in node.name:
-                count += condensed_counts[node.name]
+        if node.name and node.name not in nodename_to_genbanks:
+            usher_strains.add(node.name)
+            genbank = try_parse_genbank(node.name)
+            if genbank is None:
+                skipped["strain re"] += 1
             else:
-                count += 1
-                usher_strains.add(node.name)
-        clade_to_sample_count.append(count)
+                nodename_to_genbanks[node.name] = [genbank]
     logger.info(f"Found {len(usher_strains)} strains in the usher tree")
-    usher_genbanks = set()
-    skipped = Counter()
-    for strain in usher_strains:
-        match = re.search(r"([A-Z]+[0-9]+)\.[0-9]", strain)
-        if match:
-            usher_genbanks.add(match.group(1))
-        else:
-            skipped["strain re"] += 1
-    logger.info(f"Found {len(usher_genbanks)} genbank accessions in the usher tree")
+
+    # Collate.
+    genbank_to_nodename = {k: v for v, ks in nodename_to_genbanks.items() for k in ks}
+    logger.info(
+        f"Found {len(genbank_to_nodename)} genbank accessions in the usher tree"
+    )
+    node_to_clade = {}
+    for clade, meta in zip(tree.find_clades(), proto.metadata):
+        if meta.clade:
+            node_to_clade[clade] = meta.clade
+        # Propagate down to descendent clones.
+        for child in clade.clades:
+            node_to_clade[child] = node_to_clade[clade]
+    nodename_to_clade = {
+        node.name: clade for node, clade in node_to_clade.items() if node.name
+    }
 
     # Read date, location, and stats from nextstrain metadata.
     logger.info("Loading nextstrain metadata")
@@ -94,9 +114,11 @@ def load_metadata(args):
                 stats[key].update(values.split(","))
 
         genbank_accession = row.genbank_accession
-        if genbank_accession not in usher_genbanks:
+        nodename = genbank_to_nodename.get(genbank_accession)
+        if nodename is None:
             skipped["unknown genbank_accession"] += 1
             continue
+        clade = nodename_to_clade[nodename]
 
         date = row.date
         if not isinstance(date, str) or date == "?":
@@ -123,13 +145,12 @@ def load_metadata(args):
         columns["day"].append((date - args.start_date).days)
         columns["location"].append(location)
         columns["lineage"].append(lineage)
+        columns["nodename"].append(nodename)
+        columns["clade"].append(clade)
+    columns = dict(columns)
+    assert len(set(map(len, columns.values()))) == 1, "columns have unequal length"
     assert sum(skipped.values()) < 2e6, f"suspicious skippage:\n{skipped}"
     logger.info(f"Skipped {sum(skipped.values())} nodes because:\n{skipped}")
-
-    assert len(columns["day"]) == len(columns["genbank_accession"])
-    assert len(columns["day"]) == len(columns["location"])
-    assert len(columns["day"]) == len(columns["lineage"])
-
     logger.info(f"Kept {len(columns['day'])} rows")
 
     with open("results/columns.pkl", "wb") as f:
@@ -140,20 +161,52 @@ def load_metadata(args):
         pickle.dump(stats, f)
     logger.info(f"Saved {args.stats_file_out}")
 
-    return columns, clade_to_sample_count
+    return columns, nodename_to_genbanks
 
 
-def prune_tree(args, coarse_to_fine, clade_to_sample_count):
-    # To ensure pango lineages remain distinct, set their weights to infinity.
-    weights = defaultdict(float, {fine: math.inf for fine in coarse_to_fine.values()})
-
-    # Add weight of 1 for each sampled genome.
+def prune_tree(args, coarse_to_fine, nodename_to_genbanks):
+    logger.info(f"Loading fine tree {args.tree_file_out}")
     with open(args.tree_file_out, "rb") as f:
         proto = parsimony_pb2.data.FromString(f.read())
-    for meta, count in zip(proto.metadata, clade_to_sample_count):
+    tree = next(Parser.from_string(proto.newick).parse())
+
+    # Add weights for leaves.
+    cum_weights = {}
+    mrca_weights = {}
+    for clade in tree.find_clades():
+        genbanks = nodename_to_genbanks.get(clade.name, [])
+        count = len(genbanks)
+        cum_weights[clade] = count
+        mrca_weights[clade] = count ** 2
+
+    # Add weights of MRCA pairs.
+    reverse_clades = list(tree.find_clades())
+    reverse_clades.reverse()  # from leaves to root
+    for parent in reverse_clades:
+        for child in parent.clades:
+            cum_weights[parent] += cum_weights[child]
+        for child in parent.clades:
+            mrca_weights[parent] += cum_weights[child] * (
+                cum_weights[parent] - cum_weights[child]
+            )
+    num_samples = sum(map(len, nodename_to_genbanks.values()))
+    assert cum_weights[tree.root] == num_samples
+    assert sum(mrca_weights.values()) == num_samples ** 2
+
+    # Aggregate among clones to basal representative.
+    weights = defaultdict(float)
+    for meta, parent in zip(reversed(proto.metadata), reverse_clades):
+        for child in parent.clades:
+            mrca_weights[parent] += mrca_weights.get(child, 0)
         assert isinstance(meta.clade, str)
-        weights[meta.clade] += count
-    weights.pop("", None)
+        if meta.clade:
+            weights[meta.clade] = mrca_weights.pop(parent)
+    assert sum(weights.values()) == num_samples ** 2
+
+    # To ensure pango lineages remain distinct, set their weights to infinity.
+    for fine in coarse_to_fine.values():
+        weights[fine] = math.inf
+    assert "" not in weights
 
     # Prune the tree, minimizing the number of incorrect mutations.
     args.max_num_clades = max(args.max_num_clades, len(coarse_to_fine))
@@ -166,23 +219,23 @@ def prune_tree(args, coarse_to_fine, clade_to_sample_count):
 
 
 def main(args):
-    # Create columns.
-    columns, clade_to_sample_count = load_metadata(args)
-
     # Extract mappings between coarse lineages and fine clades.
     coarse_proto = args.tree_file_in
     fine_proto = args.tree_file_out
     fine_to_coarse = refine_mutation_tree(coarse_proto, fine_proto)
-    columns["lineage"] = [fine_to_coarse[f] for f in columns["clade"]]
     coarse_to_fines = defaultdict(list)
     for fine, coarse in fine_to_coarse.items():
         coarse_to_fines[coarse].append(fine)
     # Choose the basal representative.
     coarse_to_fine = {c: min(fs) for c, fs in coarse_to_fines.items()}
 
+    # Create columns.
+    columns, nodename_to_genbanks = load_metadata(args)
+    columns["lineage"] = [fine_to_coarse[f] for f in columns["clade"]]
+
     # Prune tree, updating data structures to use meso-scale clades.
     fine_to_meso, pruned_tree_filename = prune_tree(
-        args, coarse_to_fine, clade_to_sample_count
+        args, coarse_to_fine, nodename_to_genbanks
     )
     fine_to_coarse = {fine_to_meso(f): c for f, c in fine_to_coarse.items()}
     coarse_to_fine = {c: fine_to_meso(f) for c, f in coarse_to_fine.items()}

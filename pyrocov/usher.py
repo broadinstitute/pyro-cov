@@ -85,8 +85,9 @@ def load_mutation_tree(filename: str) -> Dict[str, FrozenSet[Mutation]]:
 def refine_mutation_tree(filename_in: str, filename_out: str) -> Dict[str, str]:
     """
     Refines a mutation tree clade metadata from pango lineages like B.1.1 to
-    full node addresses like fine.0.12.4.1. The tree structure remains
-    unchanged.
+    full node addresses like fine.0.12.4.1. Among clones, only the basal clade
+    with have a .clade attribute, all descendents will have metadata.clade ==
+    "". The tree structure remains unchanged.
     """
     with open(filename_in, "rb") as f:
         proto = parsimony_pb2.data.FromString(f.read())  # type: ignore
