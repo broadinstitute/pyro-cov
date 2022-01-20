@@ -15,6 +15,7 @@ import tqdm
 from Bio.Phylo.NewickIO import Parser
 
 from pyrocov.external.usher import parsimony_pb2
+from pyrocov.geo import get_canonical_location_generator
 from pyrocov.mutrans import START_DATE
 from pyrocov.sarscov2 import nuc_mutations_to_aa_mutations
 from pyrocov.usher import (
@@ -23,8 +24,6 @@ from pyrocov.usher import (
     prune_mutation_tree,
     refine_mutation_tree,
 )
-
-from pyrocov.geo import get_canonical_location_generator
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(format="%(relativeCreated) 9d %(message)s", level=logging.INFO)
@@ -81,7 +80,9 @@ def load_metadata(args):
 
     # Read date, location, and stats from nextstrain metadata.
     logger.info("Loading nextstrain metadata")
-    get_canonical_location = get_canonical_location_generator(args.recover_missing_usa_state)
+    get_canonical_location = get_canonical_location_generator(
+        args.recover_missing_usa_state
+    )
     stats = defaultdict(Counter)
     nextstrain_df = pd.read_csv("results/nextstrain/metadata.tsv", sep="\t", dtype=str)
     columns = defaultdict(list)
@@ -105,8 +106,10 @@ def load_metadata(args):
         if date < args.start_date:
             date = args.start_date  # Clip rows before start date.
 
-        # Create a standard location.        
-        location = get_canonical_location(row.strain, row.region, row.country,  row.division,  row.location)
+        # Create a standard location.
+        location = get_canonical_location(
+            row.strain, row.region, row.country, row.division, row.location
+        )
         if location is None:
             skipped["country"] += 1
             continue
@@ -122,11 +125,11 @@ def load_metadata(args):
         columns["lineage"].append(lineage)
     assert sum(skipped.values()) < 2e6, f"suspicious skippage:\n{skipped}"
     logger.info(f"Skipped {sum(skipped.values())} nodes because:\n{skipped}")
-      
-    assert len(columns['day']) == len(columns['genbank_accession'])
-    assert len(columns['day']) == len(columns['location'])
-    assert len(columns['day']) == len(columns['lineage'])
-    
+
+    assert len(columns["day"]) == len(columns["genbank_accession"])
+    assert len(columns["day"]) == len(columns["location"])
+    assert len(columns["day"]) == len(columns["lineage"])
+
     logger.info(f"Kept {len(columns['day'])} rows")
 
     with open("results/columns.pkl", "wb") as f:

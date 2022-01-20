@@ -409,8 +409,8 @@ us_state_to_abbrev: Dict[str, str] = {
 abbrev_to_us_state: Dict[str, str] = {v: k for k, v in us_state_to_abbrev.items()}
 
 
-def get_canonical_location_generator(recover_missing_USA_state = True):
-    """Generates a function that processes nextstrain metadata locations and converts them to 
+def get_canonical_location_generator(recover_missing_USA_state=True):
+    """Generates a function that processes nextstrain metadata locations and converts them to
     canonical location strings, or None if they can't be resolved"""
 
     # Pre-compile regex
@@ -427,7 +427,7 @@ def get_canonical_location_generator(recover_missing_USA_state = True):
                     if match_obj:
                         state = match_obj.groups()[0]
                         if state in abbrev_to_us_state.keys():
-                            return "".join([region,'/',country,'/',state])
+                            return "".join([region, "/", country, "/", state])
                         else:
                             return None
                 else:
