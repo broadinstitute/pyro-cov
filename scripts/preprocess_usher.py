@@ -81,7 +81,7 @@ def load_metadata(args):
 
     # Read date, location, and stats from nextstrain metadata.
     logger.info("Loading nextstrain metadata")
-    get_canonical_location = get_canonical_location_generator()
+    get_canonical_location = get_canonical_location_generator(args.recover_missing_usa_state)
     stats = defaultdict(Counter)
     nextstrain_df = pd.read_csv("results/nextstrain/metadata.tsv", sep="\t", dtype=str)
     columns = defaultdict(list)
@@ -122,6 +122,11 @@ def load_metadata(args):
         columns["lineage"].append(lineage)
     assert sum(skipped.values()) < 2e6, f"suspicious skippage:\n{skipped}"
     logger.info(f"Skipped {sum(skipped.values())} nodes because:\n{skipped}")
+      
+    assert len(columns['day']) == len(columns['genbank_accession'])
+    assert len(columns['day']) == len(columns['location'])
+    assert len(columns['day']) == len(columns['lineage'])
+    
     logger.info(f"Kept {len(columns['day'])} rows")
 
     with open("results/columns.pkl", "wb") as f:
@@ -234,6 +239,7 @@ if __name__ == "__main__":
     parser.add_argument("--stats-file-out", default="results/stats.pkl")
     parser.add_argument("--columns-file-out", default="")
     parser.add_argument("--features-file-out", default="")
+    parser.add_argument("--recover-missing-usa-state", action="store_true")
     parser.add_argument("-c", "--max-num-clades", type=int, default=5000)
     parser.add_argument("--start-date", default=START_DATE)
     args = parser.parse_args()

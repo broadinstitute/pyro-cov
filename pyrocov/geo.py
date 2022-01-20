@@ -408,7 +408,7 @@ us_state_to_abbrev = {
 # invert the dictionary
 abbrev_to_us_state = dict(map(reversed, us_state_to_abbrev.items()))
 
-def get_canonical_location_generator():
+def get_canonical_location_generator(recover_missing_USA_state = True):
     """Generates a function that processes nextstrain metadata locations and converts them to 
     canonical location strings, or None if they can't be resolved"""
     
@@ -418,14 +418,17 @@ def get_canonical_location_generator():
     def get_canonical_location_generator_inner(strain, region, country, division, location):
         if country == "USA":
             if division == "USA":
-                # Division information incorrect, extract state from 'strain'
-                match_obj = re_type1.match(strain)
-                if match_obj:
-                    state = match_obj.groups()[0]
-                    if state in abbrev_to_us_state.keys():
-                        return "".join([region,'/',country,'/',state])
-                    else:
-                        return None
+                if recover_missing_USA_state:
+                    # Division information incorrect, extract state from 'strain'
+                    match_obj = re_type1.match(strain)
+                    if match_obj:
+                        state = match_obj.groups()[0]
+                        if state in abbrev_to_us_state.keys():
+                            return "".join([region,'/',country,'/',state])
+                        else:
+                            return None
+                else:
+                    return None
             else:
                 # Division information provided, convert to state abbr
                 try:
