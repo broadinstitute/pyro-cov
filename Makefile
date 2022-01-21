@@ -93,7 +93,9 @@ update-usher: FORCE
 	python scripts/git_pull.py CSSEGISandData/COVID-19
 
 preprocess-usher: FORCE
-	python scripts/preprocess_usher.py
+	python scripts/preprocess_usher.py --max-num-clades=2000
+	python scripts/preprocess_usher.py --max-num-clades=5000
+	python scripts/preprocess_usher.py --max-num-clades=10000
 
 analyze-usher: FORCE
 	python scripts/mutrans.py --vary-holdout
