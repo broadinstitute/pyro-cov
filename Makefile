@@ -65,10 +65,10 @@ preprocess-gisaid: FORCE
 	time nice python scripts/preprocess_pangolin.py --max-num-clades=10000
 
 analyze-gisaid: FORCE
-	python scripts/mutrans.py --vary-holdout
-	python scripts/mutrans.py --vary-gene
-	python scripts/mutrans.py --vary-nsp
-	python scripts/mutrans.py --vary-leaves=9999 --num-steps=2001
+	python scripts/mutrans.py --gisaid --vary-holdout
+	python scripts/mutrans.py --gisaid --vary-gene
+	python scripts/mutrans.py --gisaid --vary-nsp
+	python scripts/mutrans.py --gisaid --vary-leaves=9999 --num-steps=2001
 
 update-nextstrain: FORCE
 	scripts/pull_nextstrain.sh
@@ -96,10 +96,10 @@ preprocess-usher: FORCE
 	python scripts/preprocess_usher.py
 
 analyze-usher: FORCE
-	python scripts/analyze_usher.py --vary-holdout
-	python scripts/analyze_usher.py --vary-gene
-	python scripts/analyze_usher.py --vary-nsp
-	python scripts/analyze_usher.py --vary-leaves=9999 --num-steps=2001
+	python scripts/mutrans.py --vary-holdout
+	python scripts/mutrans.py --vary-gene
+	python scripts/mutrans.py --vary-nsp
+	python scripts/mutrans.py --vary-leaves=9999 --num-steps=2001
 
 backtesting: FORCE
 	python scripts/mutrans.py --backtesting-max-day `seq -s, 150 14 625` --forecast-steps 12

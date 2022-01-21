@@ -67,7 +67,6 @@ def _load_data_filename(args, **kwargs):
     parts.append(str(args.max_num_clades))
     parts.append(str(args.min_num_mutations))
     parts.append(str(args.min_region_size))
-    parts.append("ambi" if args.ambiguous else "")
     for k, v in sorted(kwargs.get("include", {}).items()):
         parts.append(f"I{k}={_safe_str(v)}")
     for k, v in sorted(kwargs.get("exclude", {}).items()):
@@ -79,14 +78,18 @@ def _load_data_filename(args, **kwargs):
 @cached(_load_data_filename)
 def load_data(args, **kwargs):
     """
-    Cached wrapper to load GISAID data.
+    Cached wrapper to load GENBANK or GISAID data.
     """
+    features_filename = (
+        f"results/features.{args.max_num_clades}.{args.min_num_mutations}.pt"
+        if args.gisaid
+        else f"results/features.{args.max_num_clades}.pt"
+    )
     return mutrans.load_gisaid_data(
         device=args.device,
         columns_filename=f"results/columns.{args.max_num_clades}.pkl",
-        features_filename=f"results/features.{args.max_num_clades}.{args.min_num_mutations}.pt",
+        features_filename=features_filename,
         min_region_size=args.min_region_size,
-        ambiguous=args.ambiguous,
         **kwargs,
     )
 
@@ -96,7 +99,6 @@ def _fit_filename(name, *args):
     parts.append(str(args[0].max_num_clades))
     parts.append(str(args[0].min_num_mutations))
     parts.append(str(args[0].min_region_size))
-    parts.append("ambi" if args[0].ambiguous else "")
     for arg in args[2:]:
         if isinstance(arg, tuple):
             parts.append("-".join(f"{k}={_safe_str(v)}" for k, v in arg))
@@ -563,10 +565,10 @@ if __name__ == "__main__":
     )
     parser.add_argument("--vary-gene", action="store_true")
     parser.add_argument("--vary-nsp", action="store_true")
+    parser.add_argument("--gisaid", action="store_true", default=False)
     parser.add_argument("--max-num-clades", default=5000, type=int)
     parser.add_argument("--min-num-mutations", default=1, type=int)
     parser.add_argument("--min-region-size", default=50, type=int)
-    parser.add_argument("--ambiguous", action="store_true")
     parser.add_argument("-cd", "--cond-data", default="coef_scale=0.05")
     parser.add_argument("-m", "--model-type", default="reparam")
     parser.add_argument("-g", "--guide-type", default="full")
