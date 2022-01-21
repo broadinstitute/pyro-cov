@@ -409,7 +409,7 @@ us_state_to_abbrev: Dict[str, str] = {
 abbrev_to_us_state: Dict[str, str] = {v: k for k, v in us_state_to_abbrev.items()}
 
 
-def get_canonical_location_generator(recover_missing_USA_state=True):
+def get_canonical_location_generator(recover_missing_USA_state=True, sep=" / "):
     """Generates a function that processes nextstrain metadata locations and converts them to
     canonical location strings, or None if they can't be resolved"""
 
@@ -427,7 +427,7 @@ def get_canonical_location_generator(recover_missing_USA_state=True):
                     if match_obj:
                         state = match_obj.groups()[0]
                         if state in abbrev_to_us_state.keys():
-                            return "".join([region, "/", country, "/", state])
+                            return sep.join([region, country, state])
                         else:
                             return None
                 else:
@@ -436,19 +436,19 @@ def get_canonical_location_generator(recover_missing_USA_state=True):
                 # Division information provided, convert to state abbr
                 try:
                     state = us_state_to_abbrev[division]
-                    return "".join([region, "/", country, "/", state])
+                    return sep.join([region, country, state])
                 except KeyError:
                     return None
         elif country == "United Kingdom":
             if division in ("England", "Scotland", "Northern Ireland", "Wales"):
-                return "".join([region, "/", country, "/", division])
+                return sep.join([region, country, division])
             else:
                 # These could also be discarded (n=622)
-                return "".join([region, "/", country])
+                return sep.join([region, country])
         elif country == "Germany":
-            return "".join([region, "/", country, "/", division])
+            return sep.join([region, country, division])
         else:
             # For all other countries only return region and country
-            return "".join([region, "/", country])
+            return sep.join([region, country])
 
     return get_canonical_location_generator_inner
