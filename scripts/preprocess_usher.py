@@ -28,18 +28,13 @@ from pyrocov.usher import (
 logger = logging.getLogger(__name__)
 logging.basicConfig(format="%(relativeCreated) 9d %(message)s", level=logging.INFO)
 
-DATE_FORMATS = {4: "%Y", 7: "%Y-%m", 10: "%Y-%m-%d"}
+DATE_FORMATS = {7: "%Y-%m", 10: "%Y-%m-%d"}
 
 
-def parse_date(string):
+def try_parse_date(string):
     fmt = DATE_FORMATS.get(len(string))
-    if fmt is None:
-        # Attempt to fix poorly formated dates like 2020-09-1.
-        parts = string.split("-")
-        parts = parts[:1] + [f"{int(p):>02d}" for p in parts[1:]]
-        string = "-".join(parts)
-        fmt = DATE_FORMATS[len(string)]
-    return datetime.datetime.strptime(string, fmt)
+    if fmt is not None:
+        return datetime.datetime.strptime(string, fmt)
 
 
 def try_parse_genbank(strain):
@@ -124,7 +119,10 @@ def load_metadata(args):
         if not isinstance(date, str) or date == "?":
             skipped["no date"] += 1
             continue
-        date = parse_date(date)
+        date = try_parse_date(date)
+        if date is None:
+            skipped["no date"] += 1
+            continue
         if date < args.start_date:
             date = args.start_date  # Clip rows before start date.
 
@@ -299,7 +297,7 @@ if __name__ == "__main__":
     parser.add_argument("-c", "--max-num-clades", type=int, default=5000)
     parser.add_argument("--start-date", default=START_DATE)
     args = parser.parse_args()
-    args.start_date = parse_date(args.start_date)
+    args.start_date = try_parse_date(args.start_date)
     if not args.features_file_out:
         args.features_file_out = f"results/features.{args.max_num_clades}.pt"
     if not args.columns_file_out:
