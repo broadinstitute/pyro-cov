@@ -294,7 +294,7 @@ if __name__ == "__main__":
     parser.add_argument("--columns-file-out", default="")
     parser.add_argument("--features-file-out", default="")
     parser.add_argument("--recover-missing-usa-state", action="store_true")
-    parser.add_argument("-c", "--max-num-clades", type=int, default=5000)
+    parser.add_argument("-c", "--max-num-clades", type=int, default=3000)
     parser.add_argument("--start-date", default=START_DATE)
     args = parser.parse_args()
     args.start_date = try_parse_date(args.start_date)

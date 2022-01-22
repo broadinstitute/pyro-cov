@@ -61,6 +61,7 @@ preprocess-gisaid: FORCE
 	time nice python scripts/preprocess_gisaid.py
 	time nice python scripts/preprocess_nextclade.py
 	time nice python scripts/preprocess_pangolin.py --max-num-clades=2000
+	time nice python scripts/preprocess_pangolin.py --max-num-clades=3000
 	time nice python scripts/preprocess_pangolin.py --max-num-clades=5000
 	time nice python scripts/preprocess_pangolin.py --max-num-clades=10000
 
@@ -95,6 +96,7 @@ update-usher: FORCE
 
 preprocess-usher: FORCE
 	python scripts/preprocess_usher.py --max-num-clades=2000
+	python scripts/preprocess_usher.py --max-num-clades=3000
 	python scripts/preprocess_usher.py --max-num-clades=5000
 	python scripts/preprocess_usher.py --max-num-clades=10000
 
