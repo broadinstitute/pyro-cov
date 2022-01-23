@@ -214,7 +214,8 @@ def nuc_mutations_to_aa_mutations(ms: List[str]) -> List[str]:
         # Format.
         old_aa = DNA_TO_AA[old_codon]
         new_aa = DNA_TO_AA[new_codon]
-        result.append(f"{gene}:{old_aa}{position_aa + 1}{new_aa}")  # 1-based
+        if new_aa != old_aa:  # ignore synonymous substitutions
+            result.append(f"{gene}:{old_aa}{position_aa + 1}{new_aa}")  # 1-based
     return result
 
 
