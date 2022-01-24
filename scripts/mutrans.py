@@ -241,8 +241,6 @@ def vary_leaves(args, default_config):
     # Load a single common dataset.
     dataset = load_data(args)
     descendents = pangolin.find_descendents(dataset["clade_id_inv"])
-    if dataset["sparse_hist"]:
-        raise NotImplementedError
 
     # Run default config to get a ranking of leaves.
     def make_config(**holdout):
