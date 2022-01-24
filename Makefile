@@ -109,6 +109,9 @@ analyze-usher: FORCE
 backtesting: FORCE
 	python scripts/mutrans.py --backtesting-max-day `seq -s, 150 14 625` --forecast-steps 12
 
+backtesting-short: FORCE
+	python scripts/mutrans.py --backtesting-max-day `seq -s, 500 14 625` --forecast-steps 12
+
 EXCLUDE='.*\.json$$|.*mutrans\.pt$$|.*temp\..*|.*\.[EI](gene|region)=.*\.pt$$|.*__(gene|region|lineage)__.*\.pt$$'
 
 push: FORCE
