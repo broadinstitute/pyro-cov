@@ -86,7 +86,7 @@ def load_data(args, **kwargs):
     return mutrans.load_gisaid_data(
         device=args.device,
         columns_filename=f"results/columns.{args.max_num_clades}.pkl",
-        features_filename=,
+        features_filename=features_filename,
         min_region_size=args.min_region_size,
         **kwargs,
     )
