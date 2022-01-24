@@ -49,7 +49,9 @@ def load_metadata(args):
     with open(args.tree_file_out, "rb") as f:
         proto = parsimony_pb2.data.FromString(f.read())
     tree = next(Parser.from_string(proto.newick).parse())
-    skipped = Counter()
+    stats = defaultdict(Counter)
+    skipped = stats["skipped"]
+    skipped_by_day = stats["skipped_by_day"]
 
     # Collect condensed samples.
     usher_strains = set()
@@ -60,7 +62,7 @@ def load_metadata(args):
         for strain in node.condensed_leaves:
             usher_strains.add(strain)
             genbank = try_parse_genbank(strain)
-            if genbank is None:
+            if genbank is None:  # i.e. strain == ""
                 skipped["strain re"] += 1
             else:
                 genbanks.append(genbank)
@@ -71,7 +73,7 @@ def load_metadata(args):
         if node.name and node.name not in nodename_to_genbanks:
             usher_strains.add(node.name)
             genbank = try_parse_genbank(node.name)
-            if genbank is None:
+            if genbank is None:  # i.e. strain == ""
                 skipped["strain re"] += 1
             else:
                 nodename_to_genbanks[node.name] = [genbank]
@@ -98,7 +100,6 @@ def load_metadata(args):
     get_canonical_location = get_canonical_location_generator(
         args.recover_missing_usa_state
     )
-    stats = defaultdict(Counter)
     nextstrain_df = pd.read_csv("results/nextstrain/metadata.tsv", sep="\t", dtype=str)
     columns = defaultdict(list)
     for row in tqdm.tqdm(nextstrain_df.itertuples(), total=len(nextstrain_df)):
@@ -108,13 +109,7 @@ def load_metadata(args):
             if isinstance(values, str) and values:
                 stats[key].update(values.split(","))
 
-        genbank_accession = row.genbank_accession
-        nodename = genbank_to_nodename.get(genbank_accession)
-        if nodename is None:
-            skipped["unknown genbank_accession"] += 1
-            continue
-        clade = nodename_to_clade[nodename]
-
+        # Filter dates.
         date = row.date
         if not isinstance(date, str) or date == "?":
             skipped["no date"] += 1
@@ -125,6 +120,16 @@ def load_metadata(args):
             continue
         if date < args.start_date:
             date = args.start_date  # Clip rows before start date.
+        day = (date - args.start_date).days
+
+        # Filter to entries that appear in the usher tree.
+        genbank_accession = row.genbank_accession
+        nodename = genbank_to_nodename.get(genbank_accession)
+        if nodename is None:
+            skipped["unknown genbank_accession"] += 1
+            skipped_by_day["unknown genbank_accession", day] += 1
+            continue
+        clade = nodename_to_clade[nodename]
 
         # Create a standard location.
         location = get_canonical_location(
@@ -132,6 +137,7 @@ def load_metadata(args):
         )
         if location is None:
             skipped["country"] += 1
+            skipped_by_day["country", day] += 1
             continue
 
         lineage = row.pango_lineage
@@ -140,7 +146,7 @@ def load_metadata(args):
 
         # Add a row.
         columns["genbank_accession"].append(genbank_accession)
-        columns["day"].append((date - args.start_date).days)
+        columns["day"].append(day)
         columns["location"].append(location)
         columns["lineage"].append(lineage)
         columns["nodename"].append(nodename)
@@ -299,7 +305,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     args.start_date = try_parse_date(args.start_date)
     if not args.features_file_out:
-        args.features_file_out = f"results/features.{args.max_num_clades}.pt"
+        args.features_file_out = f"results/features.{args.max_num_clades}.1.pt"
     if not args.columns_file_out:
         args.columns_file_out = f"results/columns.{args.max_num_clades}.pkl"
     main(args)
