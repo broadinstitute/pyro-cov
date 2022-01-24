@@ -25,7 +25,7 @@ else:
     mutations = pickle.load(open('mutations.pkl', 'rb'))
 
 X = YX[:, 1:].sum(0)
-good = (X > 4) & (X < 4996)
+#good = (X > 4) & (X < 4996)
 good = (X > -1) & (X < 9999)
 YX = np.concatenate([YX[:, 0:1], YX[:, 1:][:, good]], axis=-1)
 
@@ -42,8 +42,9 @@ selector = NormalLikelihoodVariableSelector(dataframe,
                                            )
 
 
-selector.run(T=20000, T_burnin=1000, verbosity='bar', seed=1, report_frequency=200)
+selector.run(T=40000, T_burnin=1000, verbosity='bar', seed=11, report_frequency=200)
 summary = selector.summary.sort_values(by=['PIP'], ascending=False).copy()
+summary['rank'] = np.arange(1, summary.values.shape[0] + 1)
 print("RANK #01 - #10")
 print(summary.iloc[0:10])
 print("RANK #11 - #20")
@@ -54,3 +55,5 @@ print("RANK #31 - #40")
 print(summary.iloc[30:40])
 print("RANK #41 - #50")
 print(summary.iloc[40:50])
+
+pickle.dump(summary, open('summary.pkl', 'wb'))
