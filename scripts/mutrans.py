@@ -82,8 +82,6 @@ def load_data(args, **kwargs):
     """
     features_filename = (
         f"results/features.{args.max_num_clades}.{args.min_num_mutations}.pt"
-        if args.gisaid
-        else f"results/features.{args.max_num_clades}.pt"
     )
     return mutrans.load_gisaid_data(
         device=args.device,
