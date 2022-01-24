@@ -755,6 +755,7 @@ def fit_svi(
     log_every=50,
     seed=20210319,
     check_loss=False,
+    num_ell_particles=64,
 ) -> dict:
     """
     Fits a variational posterior using stochastic variational inference (SVI).
@@ -878,6 +879,16 @@ def fit_svi(
             curr = torch.tensor(losses[-25:], device="cpu").median().item()
             assert (curr - prev) < num_obs, "loss is increasing"
 
+    # compute expected log probability
+    ell = 0.0
+    with torch.no_grad(), poutine.block():
+        for _ in range(num_ell_particles):
+            guide_trace = poutine.trace(guide).get_trace(dataset=dataset, model_type=model_type)
+            replayed_model = poutine.replay(model_, trace=guide_trace)
+            model_trace = poutine.trace(replayed_model).get_trace(dataset=dataset, model_type=model_type)
+            model_trace.compute_log_prob()
+            ell += model_trace.nodes['obs']['unscaled_log_prob'].item() / float(num_ell_particles)
+
     result = predict(
         model_,
         guide,
@@ -886,6 +897,7 @@ def fit_svi(
         num_samples=num_samples,
         forecast_steps=forecast_steps,
     )
+    result["ELL"] = ell
     result["losses"] = losses
     series["loss"] = losses
     result["series"] = dict(series)
@@ -895,6 +907,7 @@ def fit_svi(
         if v.numel() < 1e8
     }
     result["walltime"] = default_timer() - start_time
+
     return result
 
 
@@ -960,6 +973,8 @@ def log_stats(dataset: dict, result: dict) -> dict:
     stats["MAE"] = float(mae.sum(-1).mean())  # average over region
     stats["RMSE"] = float(mse.sum(-1).mean().sqrt())  # root average over region
     stats["KL"] = float(kl.sum() / counts.sum())  # in units of nats / observation
+    stats["ELL"] = result["ELL"]
+
     logger.info("KL = {KL:0.4g}, MAE = {MAE:0.4g}, RMSE = {RMSE:0.4g}".format(**stats))
 
     # Examine the MSE and RMSE over a few regions of interest.
