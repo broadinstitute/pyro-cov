@@ -94,8 +94,9 @@ USHER_LOCATIONS = {
     "England": "Europe / United Kingdom / England",
     "Wales": "Europe / United Kingdom / Wales",
     "Scotland": "Europe / United Kingdom / Scotland",
-    "Northern": "Europe / United Kingdom / Northern Ireland",
-    "NorthernIreland": "Europe / United Kingdom / Northern Ireland",
+    "Northern Ireland": "Europe / United Kingdom / Northern Ireland",
+    "China": "Asia / China",
+    "Pakistan": "Asia / Pakistan",
 }
 
 
@@ -184,9 +185,11 @@ def load_metadata(args):
             }
             if row["day"] is None:
                 skipped["no date"] += 1
+                continue
             if row["location"] is None:
                 skipped["no location"] += 1
                 skipped_by_day["no location", row["day"]] += 1
+                continue
 
             columns["clade"].append(node_to_clade[node])
             columns["nodename"].append(strain)
@@ -214,7 +217,7 @@ def load_metadata(args):
     return columns, nodename_to_count
 
 
-def prune_tree(args, coarse_to_fine, nodename_to_count):
+def prune_tree(args, max_num_clades, coarse_to_fine, nodename_to_count):
     logger.info(f"Loading fine tree {args.tree_file_out}")
     with open(args.tree_file_out, "rb") as f:
         proto = parsimony_pb2.data.FromString(f.read())
@@ -258,42 +261,39 @@ def prune_tree(args, coarse_to_fine, nodename_to_count):
     assert "" not in weights
 
     # Prune the tree, minimizing the number of incorrect mutations.
-    args.max_num_clades = max(args.max_num_clades, len(coarse_to_fine))
-    pruned_tree_filename = f"results/lineageTree.{args.max_num_clades}.pb"
+    max_num_clades = max(max_num_clades, len(coarse_to_fine))
+    pruned_tree_filename = f"results/lineageTree.{max_num_clades}.pb"
     meso_set = prune_mutation_tree(
-        args.tree_file_out, pruned_tree_filename, args.max_num_clades, weights
+        args.tree_file_out, pruned_tree_filename, max_num_clades, weights
     )
-    assert len(meso_set) == args.max_num_clades
+    assert len(meso_set) == max_num_clades
     return FineToMeso(meso_set), pruned_tree_filename
 
 
-def main(args):
-    # Extract mappings between coarse lineages and fine clades.
-    coarse_proto = args.tree_file_in
-    fine_proto = args.tree_file_out
-    fine_to_coarse = refine_mutation_tree(coarse_proto, fine_proto)
-    coarse_to_fines = defaultdict(list)
-    for fine, coarse in fine_to_coarse.items():
-        coarse_to_fines[coarse].append(fine)
-    # Choose the basal representative.
-    coarse_to_fine = {c: min(fs) for c, fs in coarse_to_fines.items()}
-
-    # Create columns.
-    columns, nodename_to_count = load_metadata(args)
-    columns["lineage"] = [fine_to_coarse[f] for f in columns["clade"]]
-
+def extract_features(
+    args,
+    max_num_clades,
+    fine_to_coarse,
+    coarse_to_fine,
+    nodename_to_count,
+    columns,
+):
     # Prune tree, updating data structures to use meso-scale clades.
     fine_to_meso, pruned_tree_filename = prune_tree(
-        args, coarse_to_fine, nodename_to_count
+        args, max_num_clades, coarse_to_fine, nodename_to_count
     )
     fine_to_coarse = {fine_to_meso(f): c for f, c in fine_to_coarse.items()}
     coarse_to_fine = {c: fine_to_meso(f) for c, f in coarse_to_fine.items()}
+
+    # Save finer columns.
+    columns = dict(columns)
     columns["clade"] = [fine_to_meso(f) for f in columns["clade"]]
     clade_set = set(columns["clade"])
     assert len(clade_set) <= args.max_num_clades
-    with open(args.columns_file_out, "wb") as f:
+    columns_file_out = f"results/columns.{max_num_clades}.pkl"
+    with open(columns_file_out, "wb") as f:
         pickle.dump(columns, f)
-    logger.info(f"Saved {args.columns_file_out}")
+    logger.info(f"Saved {columns_file_out}")
 
     # Convert from nucleotide mutations to amino acid mutations.
     nuc_mutations_by_clade = load_mutation_tree(pruned_tree_filename)
@@ -324,11 +324,37 @@ def main(args):
         "aa_mutations": aa_mutations,
         "aa_features": aa_features,
     }
-    logger.info(
-        f"saving {tuple(aa_features.shape)} aa features to {args.features_file_out}"
-    )
-    torch.save(features, args.features_file_out)
-    logger.info(f"Saved {args.features_file_out}")
+    features_file_out = f"results/features.{max_num_clades}.1.pt"
+    logger.info(f"saving {tuple(aa_features.shape)} aa features to {features_file_out}")
+    torch.save(features, features_file_out)
+    logger.info(f"Saved {features_file_out}")
+
+
+def main(args):
+    # Extract mappings between coarse lineages and fine clades.
+    coarse_proto = args.tree_file_in
+    fine_proto = args.tree_file_out
+    fine_to_coarse = refine_mutation_tree(coarse_proto, fine_proto)
+    coarse_to_fines = defaultdict(list)
+    for fine, coarse in fine_to_coarse.items():
+        coarse_to_fines[coarse].append(fine)
+    # Choose the basal representative.
+    coarse_to_fine = {c: min(fs) for c, fs in coarse_to_fines.items()}
+
+    # Create columns.
+    columns, nodename_to_count = load_metadata(args)
+    columns["lineage"] = [fine_to_coarse[f] for f in columns["clade"]]
+
+    # Extract features at various granularities.
+    for max_num_clades in map(int, args.max_num_clades.split(",")):
+        extract_features(
+            args,
+            max_num_clades,
+            fine_to_coarse,
+            coarse_to_fine,
+            nodename_to_count,
+            columns,
+        )
 
 
 if __name__ == "__main__":
@@ -342,15 +368,9 @@ if __name__ == "__main__":
     parser.add_argument("--tree-file-in", default="results/usher/all.masked.pb")
     parser.add_argument("--tree-file-out", default="results/lineageTree.fine.pb")
     parser.add_argument("--stats-file-out", default="results/stats.pkl")
-    parser.add_argument("--columns-file-out", default="")
-    parser.add_argument("--features-file-out", default="")
     parser.add_argument("--recover-missing-usa-state", action="store_true")
-    parser.add_argument("-c", "--max-num-clades", type=int, default=3000)
+    parser.add_argument("-c", "--max-num-clades", default="2000,3000,5000,10000")
     parser.add_argument("--start-date", default=START_DATE)
     args = parser.parse_args()
     args.start_date = try_parse_date(args.start_date)
-    if not args.features_file_out:
-        args.features_file_out = f"results/features.{args.max_num_clades}.1.pt"
-    if not args.columns_file_out:
-        args.columns_file_out = f"results/columns.{args.max_num_clades}.pkl"
     main(args)
