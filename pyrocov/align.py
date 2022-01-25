@@ -200,8 +200,8 @@ class AlignDB:
             f"--input-root-seq={NEXTCLADE_DATA}/reference.fasta",
             "--genes=E,M,N,ORF1a,ORF1b,ORF3a,ORF6,ORF7a,ORF7b,ORF8,ORF9b,S",
             f"--input-gene-map={NEXTCLADE_DATA}/genemap.gff",
-            f"--input-tree={NEXTCLADE_DATA}/tree.json",
-            f"--input-qc-config={NEXTCLADE_DATA}/qc.json",
+            f"--input-tree={NEXTCLADE_DATA}/tree.json",  # FIXME now missing
+            f"--input-qc-config={NEXTCLADE_DATA}/qc.json",  # FIXME now missing
             f"--input-pcr-primers={NEXTCLADE_DATA}/primers.csv",
             f"--input-fasta={self.fasta_filename}",
             f"--output-tsv={self.tsv_filename}",

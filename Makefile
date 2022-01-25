@@ -55,7 +55,7 @@ update-gisaid: FORCE
 	python scripts/git_pull.py cov-lineages/pango-designation
 	python scripts/git_pull.py cov-lineages/pangoLEARN
 	python scripts/git_pull.py CSSEGISandData/COVID-19
-	./nextclade dataset get --name sars-cov-2 --output-dir results/nextclade_data
+	python scripts/git_pull.py nextstrain/nextclade
 
 preprocess-gisaid: FORCE
 	time nice python scripts/preprocess_gisaid.py
@@ -92,6 +92,7 @@ update-usher: FORCE
 	python scripts/git_pull.py cov-lineages/pango-designation
 	python scripts/git_pull.py cov-lineages/pangoLEARN
 	python scripts/git_pull.py CSSEGISandData/COVID-19
+	python scripts/git_pull.py nextstrain/nextclade
 
 preprocess-usher: FORCE
 	python scripts/preprocess_usher.py --max-num-clades=2000
