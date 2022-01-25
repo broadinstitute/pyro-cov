@@ -278,6 +278,7 @@ def extract_features(
     nodename_to_count,
     columns,
 ):
+    logger.info(f"Extracting features with {max_num_clades} clades")
     # Prune tree, updating data structures to use meso-scale clades.
     fine_to_meso, pruned_tree_filename = prune_tree(
         args, max_num_clades, coarse_to_fine, nodename_to_count
@@ -289,11 +290,12 @@ def extract_features(
     columns = dict(columns)
     columns["clade"] = [fine_to_meso(f) for f in columns["clade"]]
     clade_set = set(columns["clade"])
-    assert len(clade_set) <= args.max_num_clades
+    assert len(clade_set) <= max_num_clades
     columns_file_out = f"results/columns.{max_num_clades}.pkl"
     with open(columns_file_out, "wb") as f:
         pickle.dump(columns, f)
     logger.info(f"Saved {columns_file_out}")
+    del columns
 
     # Convert from nucleotide mutations to amino acid mutations.
     nuc_mutations_by_clade = load_mutation_tree(pruned_tree_filename)
