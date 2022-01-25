@@ -979,7 +979,8 @@ def log_stats(dataset: dict, result: dict) -> dict:
     stats["MAE"] = float(mae.sum(-1).mean())  # average over region
     stats["RMSE"] = float(mse.sum(-1).mean().sqrt())  # root average over region
     stats["KL"] = float(kl.sum() / counts.sum())  # in units of nats / observation
-    stats["ELL"] = result["ELL"]
+    if 'ELL' in result:
+        stats["ELL"] = result["ELL"]
 
     logger.info("KL = {KL:0.4g}, MAE = {MAE:0.4g}, RMSE = {RMSE:0.4g}".format(**stats))
 
