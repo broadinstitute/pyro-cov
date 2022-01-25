@@ -755,7 +755,7 @@ def fit_svi(
     log_every=50,
     seed=20210319,
     check_loss=False,
-    num_ell_particles=64,
+    num_ell_particles=256,
 ) -> dict:
     """
     Fits a variational posterior using stochastic variational inference (SVI).
