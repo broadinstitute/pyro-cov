@@ -883,11 +883,17 @@ def fit_svi(
     ell = 0.0
     with torch.no_grad(), poutine.block():
         for _ in range(num_ell_particles):
-            guide_trace = poutine.trace(guide).get_trace(dataset=dataset, model_type=model_type)
+            guide_trace = poutine.trace(guide).get_trace(
+                dataset=dataset, model_type=model_type
+            )
             replayed_model = poutine.replay(model_, trace=guide_trace)
-            model_trace = poutine.trace(replayed_model).get_trace(dataset=dataset, model_type=model_type)
+            model_trace = poutine.trace(replayed_model).get_trace(
+                dataset=dataset, model_type=model_type
+            )
             model_trace.compute_log_prob()
-            ell += model_trace.nodes['obs']['unscaled_log_prob'].item() / float(num_ell_particles)
+            ell += model_trace.nodes["obs"]["unscaled_log_prob"].item() / float(
+                num_ell_particles
+            )
 
     result = predict(
         model_,
