@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 CIGAR_CODES = "MIDNSHP=X"  # Note minimap2 uses only "MIDNSH"
 
 ROOT = os.path.dirname(os.path.dirname(__file__))
-NEXTCLADE_DATA = os.path.join(ROOT, "results", "nextclade_data")
+NEXTCLADE_DATA = os.path.expanduser("~/github/nextstrain/nextclade/data/sars-cov-2")
 PANGOLEARN_DATA = os.path.expanduser("~/github/cov-lineages/pangoLEARN/pangoLEARN/data")
 
 

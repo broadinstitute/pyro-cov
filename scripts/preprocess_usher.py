@@ -43,47 +43,117 @@ def try_parse_genbank(strain):
         return match.group(1)
 
 
+def load_nextstrain_metadata(args, stats):
+    """
+    Returns a dict of dictionaries from genbank_accession to metadata.
+    """
+    logger.info("Loading nextstrain metadata")
+    get_canonical_location = get_canonical_location_generator(
+        args.recover_missing_usa_state
+    )
+    df = pd.read_csv("results/nextstrain/metadata.tsv", sep="\t", dtype=str)
+    result = defaultdict(dict)
+    for row in tqdm.tqdm(df.itertuples(), total=len(df)):
+        # Collect background mutation statistics for dN/dS etc.
+        for key in ["aaSubstitutions", "insertions", "substitutions"]:
+            values = getattr(row, key)
+            if isinstance(values, str) and values:
+                stats[key].update(values.split(","))
+
+        # Key on genbank accession.
+        key = row.genbank_accession
+        if not isinstance(key, str) or not key:
+            continue
+
+        # Extract dates.
+        date = row.date
+        if isinstance(date, str) and date and date != "?":
+            date = try_parse_date(date)
+            if date is not None:
+                if date < args.start_date:
+                    date = args.start_date  # Clip rows before start date.
+                result["day"][key] = (date - args.start_date).days
+
+        # Extract a standard location.
+        location = get_canonical_location(
+            row.strain, row.region, row.country, row.division, row.location
+        )
+        if location is not None:
+            result["location"][key] = location
+
+        lineage = row.pango_lineage
+        if isinstance(lineage, str) and lineage and lineage != "?":
+            result["lineage"][key] = lineage
+
+    logger.info("Found metadata:\n{}".format({k: len(v) for k, v in result.items()}))
+    return result
+
+
+# These are merely fallback locations in case nextrain is missing genbank ids.
+USHER_LOCATIONS = {
+    "England": "Europe / United Kingdom / England",
+    "Wales": "Europe / United Kingdom / Wales",
+    "Scotland": "Europe / United Kingdom / Scotland",
+    "Northern": "Europe / United Kingdom / Northern Ireland",
+    "NorthernIreland": "Europe / United Kingdom / Northern Ireland",
+}
+
+
+def load_usher_metadata(args):
+    """
+    Returns a dict of dictionaries from usher strain id to metadata.
+    """
+    logger.info("Loading usher metadata")
+    df = pd.read_csv("results/usher/metadata.tsv", sep="\t", dtype=str)
+    result = defaultdict(dict)
+    for row in tqdm.tqdm(df.itertuples(), total=len(df)):
+        # Key on usher strain.
+        key = row.strain
+        assert isinstance(key, str) and key
+
+        # Extract dates.
+        date = row.date
+        if isinstance(date, str) and date and date != "?":
+            date = try_parse_date(date)
+            if date is not None:
+                if date < args.start_date:
+                    date = args.start_date  # Clip rows before start date.
+                result["day"][key] = (date - args.start_date).days
+
+        # Extract a standard location.
+        if isinstance(row.strain, str) and row.strain:
+            prefix = re.split(r"[/|_]", row.strain)[0]
+            location = USHER_LOCATIONS.get(prefix)
+            if location is not None:
+                result["location"][key] = location
+
+        lineage = row.pangolin_lineage
+        if isinstance(lineage, str) and lineage and lineage != "?":
+            result["lineage"][key] = lineage
+
+    logger.info("Found metadata:\n{}".format({k: len(v) for k, v in result.items()}))
+    return result
+
+
 def load_metadata(args):
+    # Load metadata.
+    stats = defaultdict(Counter)
+    usher_metadata = load_usher_metadata(args)  # keyed on strain
+    nextstrain_metadata = load_nextstrain_metadata(args, stats)  # keyed on genbank
+
+    # Load usher tree.
     # Collect all names appearing in the usher tree.
     logger.info("Loading fine tree")
     with open(args.tree_file_out, "rb") as f:
         proto = parsimony_pb2.data.FromString(f.read())
     tree = next(Parser.from_string(proto.newick).parse())
-    stats = defaultdict(Counter)
-    skipped = stats["skipped"]
-    skipped_by_day = stats["skipped_by_day"]
 
     # Collect condensed samples.
-    usher_strains = set()
-    nodename_to_genbanks = {}
+    condensed_strains = {}
     for node in proto.condensed_nodes:
-        usher_strains.update(node.condensed_leaves)
-        genbanks = []
-        for strain in node.condensed_leaves:
-            usher_strains.add(strain)
-            genbank = try_parse_genbank(strain)
-            if genbank is None:  # i.e. strain == ""
-                skipped["strain re"] += 1
-            else:
-                genbanks.append(genbank)
-        nodename_to_genbanks[node.node_name] = genbanks
+        condensed_strains[node.node_name] = list(node.condensed_leaves)
 
-    # Collect info from each node in the tree.
-    for node in tree.find_clades():
-        if node.name and node.name not in nodename_to_genbanks:
-            usher_strains.add(node.name)
-            genbank = try_parse_genbank(node.name)
-            if genbank is None:  # i.e. strain == ""
-                skipped["strain re"] += 1
-            else:
-                nodename_to_genbanks[node.name] = [genbank]
-    logger.info(f"Found {len(usher_strains)} strains in the usher tree")
-
-    # Collate.
-    genbank_to_nodename = {k: v for v, ks in nodename_to_genbanks.items() for k in ks}
-    logger.info(
-        f"Found {len(genbank_to_nodename)} genbank accessions in the usher tree"
-    )
+    # Propagate fine clade names downward.
     node_to_clade = {}
     for clade, meta in zip(tree.find_clades(), proto.metadata):
         if meta.clade:
@@ -91,70 +161,46 @@ def load_metadata(args):
         # Propagate down to descendent clones.
         for child in clade.clades:
             node_to_clade[child] = node_to_clade[clade]
-    nodename_to_clade = {
-        node.name: clade for node, clade in node_to_clade.items() if node.name
-    }
 
-    # Read date, location, and stats from nextstrain metadata.
-    logger.info("Loading nextstrain metadata")
-    get_canonical_location = get_canonical_location_generator(
-        args.recover_missing_usa_state
-    )
-    nextstrain_df = pd.read_csv("results/nextstrain/metadata.tsv", sep="\t", dtype=str)
+    # Collect info from each node in the tree.
+    fields = "day", "location", "lineage"
     columns = defaultdict(list)
-    for row in tqdm.tqdm(nextstrain_df.itertuples(), total=len(nextstrain_df)):
-        # Collect background mutation statistics for dN/dS etc.
-        for key in ["aaSubstitutions", "insertions", "substitutions"]:
-            values = getattr(row, key)
-            if isinstance(values, str) and values:
-                stats[key].update(values.split(","))
+    usher_strains = set()
+    skipped = stats["skipped"]
+    skipped_by_day = Counter()
+    nodename_to_count = Counter()
+    for node, meta in zip(tree.find_clades(), proto.metadata):
+        strains = condensed_strains.get(node.name, [node.name])
+        for strain in strains:
+            if strain is None:
+                continue
+            usher_strains.add(strain)
+            genbank = try_parse_genbank(strain)
 
-        # Filter dates.
-        date = row.date
-        if not isinstance(date, str) or date == "?":
-            skipped["no date"] += 1
-            continue
-        date = try_parse_date(date)
-        if date is None:
-            skipped["no date"] += 1
-            continue
-        if date < args.start_date:
-            date = args.start_date  # Clip rows before start date.
-        day = (date - args.start_date).days
+            # Try to use nextstrain metadata; fallback to usher metadata.
+            row = {
+                k: nextstrain_metadata[k].get(genbank, usher_metadata[k].get(strain))
+                for k in fields
+            }
+            if row["day"] is None:
+                skipped["no date"] += 1
+            if row["location"] is None:
+                skipped["no location"] += 1
+                skipped_by_day["no location", row["day"]] += 1
 
-        # Filter to entries that appear in the usher tree.
-        genbank_accession = row.genbank_accession
-        nodename = genbank_to_nodename.get(genbank_accession)
-        if nodename is None:
-            skipped["unknown genbank_accession"] += 1
-            skipped_by_day["unknown genbank_accession", day] += 1
-            continue
-        clade = nodename_to_clade[nodename]
+            columns["clade"].append(node_to_clade[node])
+            columns["nodename"].append(strain)
+            columns["genbank_accession"].append(genbank)
+            for k, v in row.items():
+                columns[k].append(v)
+            nodename_to_count[node.name] += 1
+    logger.info(f"Found {len(usher_strains)} strains in the usher tree")
 
-        # Create a standard location.
-        location = get_canonical_location(
-            row.strain, row.region, row.country, row.division, row.location
-        )
-        if location is None:
-            skipped["country"] += 1
-            skipped_by_day["country", day] += 1
-            continue
-
-        lineage = row.pango_lineage
-        if not isinstance(lineage, str) or not lineage or lineage == "?":
-            lineage = None
-
-        # Add a row.
-        columns["genbank_accession"].append(genbank_accession)
-        columns["day"].append(day)
-        columns["location"].append(location)
-        columns["lineage"].append(lineage)
-        columns["nodename"].append(nodename)
-        columns["clade"].append(clade)
     columns = dict(columns)
     assert len(set(map(len, columns.values()))) == 1, "columns have unequal length"
     assert sum(skipped.values()) < 2e6, f"suspicious skippage:\n{skipped}"
     logger.info(f"Skipped {sum(skipped.values())} nodes because:\n{skipped}")
+    stats["skipped_by_day"] = skipped_by_day
     logger.info(f"Kept {len(columns['day'])} rows")
 
     with open("results/columns.pkl", "wb") as f:
@@ -165,10 +211,10 @@ def load_metadata(args):
         pickle.dump(stats, f)
     logger.info(f"Saved {args.stats_file_out}")
 
-    return columns, nodename_to_genbanks
+    return columns, nodename_to_count
 
 
-def prune_tree(args, coarse_to_fine, nodename_to_genbanks):
+def prune_tree(args, coarse_to_fine, nodename_to_count):
     logger.info(f"Loading fine tree {args.tree_file_out}")
     with open(args.tree_file_out, "rb") as f:
         proto = parsimony_pb2.data.FromString(f.read())
@@ -178,8 +224,7 @@ def prune_tree(args, coarse_to_fine, nodename_to_genbanks):
     cum_weights = {}
     mrca_weights = {}
     for clade in tree.find_clades():
-        genbanks = nodename_to_genbanks.get(clade.name, [])
-        count = len(genbanks)
+        count = nodename_to_count[clade.name]
         cum_weights[clade] = count
         mrca_weights[clade] = count ** 2
 
@@ -193,7 +238,7 @@ def prune_tree(args, coarse_to_fine, nodename_to_genbanks):
             mrca_weights[parent] += cum_weights[child] * (
                 cum_weights[parent] - cum_weights[child]
             )
-    num_samples = sum(map(len, nodename_to_genbanks.values()))
+    num_samples = sum(nodename_to_count.values())
     assert cum_weights[tree.root] == num_samples
     assert sum(mrca_weights.values()) == num_samples ** 2
 
@@ -234,12 +279,12 @@ def main(args):
     coarse_to_fine = {c: min(fs) for c, fs in coarse_to_fines.items()}
 
     # Create columns.
-    columns, nodename_to_genbanks = load_metadata(args)
+    columns, nodename_to_count = load_metadata(args)
     columns["lineage"] = [fine_to_coarse[f] for f in columns["clade"]]
 
     # Prune tree, updating data structures to use meso-scale clades.
     fine_to_meso, pruned_tree_filename = prune_tree(
-        args, coarse_to_fine, nodename_to_genbanks
+        args, coarse_to_fine, nodename_to_count
     )
     fine_to_coarse = {fine_to_meso(f): c for f, c in fine_to_coarse.items()}
     coarse_to_fine = {c: fine_to_meso(f) for c, f in coarse_to_fine.items()}
