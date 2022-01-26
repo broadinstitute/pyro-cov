@@ -28,8 +28,8 @@ then postprocessing with the following Jupyter notebooks:
 
 ## Information density plots
 
-![ELBO of various genes](vary_gene_elbo.png)
-![ELBO of various NSPs](vary_nsp_elbo.png)
+![How informative is each gene?](vary_gene_likelihood.png)
+![How informative is each NSP?](vary_nsp_likelihood.png)
 
 ## Volcano plot
 
