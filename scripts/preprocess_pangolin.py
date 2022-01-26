@@ -79,7 +79,7 @@ def main(args):
     logger.info(f"Saved {args.columns_file_out}")
 
     # Extract mutations from an annotated tree.
-    nuc_mutations_by_clade = load_mutation_tree(tree_filename)
+    nuc_mutations_by_clade = load_mutation_tree(tree_filename)[0]
     assert nuc_mutations_by_clade
     nuc_mutations = frozenset(m for ms in nuc_mutations_by_clade.values() for m in ms)
     logger.info(

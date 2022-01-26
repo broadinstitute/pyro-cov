@@ -53,7 +53,7 @@ def try_parse_gisaid(string, public_to_gisaid):
             return result
 
 
-def load_nextstrain_metadata(args, stats):
+def load_nextstrain_metadata(args):
     """
     Returns a dict of dictionaries from genbank_accession to metadata.
     """
@@ -64,12 +64,6 @@ def load_nextstrain_metadata(args, stats):
     df = pd.read_csv("results/nextstrain/metadata.tsv", sep="\t", dtype=str)
     result = defaultdict(dict)
     for row in tqdm.tqdm(df.itertuples(), total=len(df)):
-        # Collect background mutation statistics for dN/dS etc.
-        for key in ["aaSubstitutions", "insertions", "substitutions"]:
-            values = getattr(row, key)
-            if isinstance(values, str) and values:
-                stats[key].update(values.split(","))
-
         # Key on genbank accession.
         key = row.genbank_accession
         if not isinstance(key, str) or not key:
@@ -150,7 +144,7 @@ def load_usher_metadata(args):
     return result
 
 
-def load_gisaid_metadata(args, stats):
+def load_gisaid_metadata(args):
     """
     Returns a dict of dictionaries from gisaid accession to metadata.
     """
@@ -191,21 +185,15 @@ def load_gisaid_metadata(args, stats):
         if lineage:
             result["lineage"][key] = lineage
 
-        # Extract aa changes.
-        stats["AA Substitutions"].update(
-            row.get("AA Substitutions", "").strip("()").split(",")
-        )
-
     logger.info("Found metadata:\n{}".format({k: len(v) for k, v in result.items()}))
     return result
 
 
 def load_metadata(args):
     # Load metadata.
-    stats = defaultdict(Counter)
     public_to_gisaid = {}
     if args.gisaid_metadata_file_in:
-        metadata = load_gisaid_metadata(args, stats)
+        metadata = load_gisaid_metadata(args)
         with open("results/gisaid/epiToPublicAndDate.latest", "rt") as f:
             for line in f:
                 row = line.strip().split()
@@ -214,7 +202,7 @@ def load_metadata(args):
     else:
         # Use nextstrain metadata when available; otherwise fallback to usher.
         usher_metadata = load_usher_metadata(args)  # keyed on strain
-        nextstrain_metadata = load_nextstrain_metadata(args, stats)  # keyed on genbank
+        nextstrain_metadata = load_nextstrain_metadata(args)  # keyed on genbank
         metadata = usher_metadata
         for field, usher_col in metadata.items():
             nextstrain_col = nextstrain_metadata[field]
@@ -227,7 +215,14 @@ def load_metadata(args):
 
     # Load usher tree.
     # Collect all names appearing in the usher tree.
-    proto, tree = load_proto(args.tree_file_out)
+    nuc_mutations_by_clade, proto, tree = load_mutation_tree(args.tree_file_out)
+    assert nuc_mutations_by_clade
+
+    # Collect background mutation statistics.
+    stats = defaultdict(Counter)
+    aa_substitutions = stats["aaSubstitutions"]
+    for mutations in nuc_mutations_by_clade.values():
+        aa_substitutions.update(nuc_mutations_to_aa_mutations(mutations))
 
     # Collect condensed samples.
     condensed_nodes = {}

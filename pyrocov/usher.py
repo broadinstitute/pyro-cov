@@ -53,7 +53,9 @@ def load_usher_clades(filename: str) -> Dict[str, Tuple[str, str]]:
     return clades
 
 
-def load_mutation_tree(filename: str) -> Dict[str, FrozenSet[Mutation]]:
+def load_mutation_tree(
+    filename: str,
+) -> Tuple[Dict[str, FrozenSet[Mutation]], object, object]:
     """
     Loads an usher lineageTree.pb or lineageTree.pb.gz annotated with mutations
     and pango lineages, and creates a mapping from lineages to their set of
@@ -75,8 +77,9 @@ def load_mutation_tree(filename: str) -> Dict[str, FrozenSet[Mutation]]:
     }
 
     # Accumulate mutations in each clade, which are overwritten at each position.
+    logger.info(f"Accumulating mutations on {len(clades)} nodes")
     clade_to_muts: Dict[object, Dict[int, Mutation]] = defaultdict(dict)
-    for clade, muts in zip(clades, proto.node_mutations):
+    for clade, muts in zip(tqdm.tqdm(clades), proto.node_mutations):
         for mut in muts.mutation:
             clade_to_muts[clade][mut.position] = Mutation(
                 mut.position,
@@ -89,7 +92,7 @@ def load_mutation_tree(filename: str) -> Dict[str, FrozenSet[Mutation]]:
     mutations_by_lineage = {
         k: frozenset(clade_to_muts[v].values()) for k, v in lineage_to_clade.items()
     }
-    return mutations_by_lineage
+    return mutations_by_lineage, proto, tree
 
 
 def refine_mutation_tree(filename_in: str, filename_out: str) -> Dict[str, str]:
