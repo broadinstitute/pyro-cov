@@ -87,13 +87,17 @@ analyze-nextstrain: FORCE
 	python scripts/analyze_nextstrain.py --vary-nsp
 	python scripts/analyze_nextstrain.py --vary-leaves=9999 --num-steps=2001
 
+# The DO_NOT_UPDATE logic aims to avoid someone accidentally updating a frozen
+# results directory.
 update-usher: FORCE
+	! test -f results/DO_NOT_UPDATE
 	scripts/pull_nextstrain.sh
 	scripts/pull_usher.sh
 	python scripts/git_pull.py cov-lineages/pango-designation
 	python scripts/git_pull.py cov-lineages/pangoLEARN
 	python scripts/git_pull.py CSSEGISandData/COVID-19
 	python scripts/git_pull.py nextstrain/nextclade
+	echo "frozen" > results/DO_NOT_UPDATE
 
 preprocess-usher: FORCE
 	python scripts/preprocess_usher.py
