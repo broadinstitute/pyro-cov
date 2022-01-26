@@ -43,10 +43,14 @@ def try_parse_genbank(strain):
         return match.group(1)
 
 
-def try_parse_gisaid(string):
+def try_parse_gisaid(string, public_to_gisaid):
     match = re.search(r"\bEPI_ISL_[0-9]+\b", string)
     if match:
         return match.group(0)
+    for part in string.split("|"):
+        result = public_to_gisaid.get(part)
+        if result is not None:
+            return result
 
 
 def load_nextstrain_metadata(args, stats):
@@ -199,8 +203,14 @@ def load_gisaid_metadata(args, stats):
 def load_metadata(args):
     # Load metadata.
     stats = defaultdict(Counter)
+    public_to_gisaid = {}
     if args.gisaid_metadata_file_in:
         metadata = load_gisaid_metadata(args, stats)
+        with open("results/gisaid/epiToPublicAndDate.latest", "rt") as f:
+            for line in f:
+                row = line.strip().split()
+                if row:
+                    public_to_gisaid[row[1]] = row[0]
     else:
         # Use nextstrain metadata when available; otherwise fallback to usher.
         usher_metadata = load_usher_metadata(args)  # keyed on strain
@@ -248,7 +258,7 @@ def load_metadata(args):
             sample_keys.add(key)
 
             if args.gisaid_metadata_file_in:
-                key = try_parse_gisaid(key)
+                key = try_parse_gisaid(key, public_to_gisaid)
                 if key is None:
                     skipped["no gisaid id"] += 1
                     continue
