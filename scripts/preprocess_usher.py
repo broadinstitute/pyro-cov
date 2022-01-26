@@ -12,18 +12,18 @@ from collections import Counter, defaultdict
 import pandas as pd
 import torch
 import tqdm
-from Bio.Phylo.NewickIO import Parser
 
-from pyrocov.external.usher import parsimony_pb2
-from pyrocov.geo import get_canonical_location_generator
+from pyrocov.geo import get_canonical_location_generator, gisaid_normalize
 from pyrocov.mutrans import START_DATE
 from pyrocov.sarscov2 import nuc_mutations_to_aa_mutations
 from pyrocov.usher import (
     FineToMeso,
     load_mutation_tree,
+    load_proto,
     prune_mutation_tree,
     refine_mutation_tree,
 )
+from pyrocov.util import gzip_open_tqdm
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(format="%(relativeCreated) 9d %(message)s", level=logging.INFO)
@@ -41,6 +41,12 @@ def try_parse_genbank(strain):
     match = re.search(r"([A-Z]+[0-9]+)\.[0-9]", strain)
     if match:
         return match.group(1)
+
+
+def try_parse_gisaid(string):
+    match = re.search(r"\bEPI_ISL_[0-9]+\b", string)
+    if match:
+        return match.group(0)
 
 
 def load_nextstrain_metadata(args, stats):
@@ -65,7 +71,7 @@ def load_nextstrain_metadata(args, stats):
         if not isinstance(key, str) or not key:
             continue
 
-        # Extract dates.
+        # Extract date.
         date = row.date
         if isinstance(date, str) and date and date != "?":
             date = try_parse_date(date)
@@ -79,8 +85,10 @@ def load_nextstrain_metadata(args, stats):
             row.strain, row.region, row.country, row.division, row.location
         )
         if location is not None:
+            location = gisaid_normalize(location)
             result["location"][key] = location
 
+        # Extract pango lineage.
         lineage = row.pango_lineage
         if isinstance(lineage, str) and lineage and lineage != "?":
             result["lineage"][key] = lineage
@@ -112,7 +120,7 @@ def load_usher_metadata(args):
         key = row.strain
         assert isinstance(key, str) and key
 
-        # Extract dates.
+        # Extract date.
         date = row.date
         if isinstance(date, str) and date and date != "?":
             date = try_parse_date(date)
@@ -125,9 +133,11 @@ def load_usher_metadata(args):
         if isinstance(row.strain, str) and row.strain:
             prefix = re.split(r"[/|_]", row.strain)[0]
             location = USHER_LOCATIONS.get(prefix)
+            location = gisaid_normalize(location)
             if location is not None:
                 result["location"][key] = location
 
+        # Extract pango lineage.
         lineage = row.pangolin_lineage
         if isinstance(lineage, str) and lineage and lineage != "?":
             result["lineage"][key] = lineage
@@ -136,23 +146,83 @@ def load_usher_metadata(args):
     return result
 
 
+def load_gisaid_metadata(args, stats):
+    """
+    Returns a dict of dictionaries from gisaid accession to metadata.
+    """
+    filename = args.gisaid_metadata_file_in
+    logger.info(f"Loading gisaid metadata from {filename}")
+    assert filename.endswith(".tsv.gz")
+    result = defaultdict(dict)
+    header = ()
+    for i, line in enumerate(gzip_open_tqdm(filename, "rt")):
+        line = line.strip().split("\t")
+        if i == 0:
+            header = tuple(line)
+            continue
+        row = dict(zip(header, line))
+
+        # Key on gisaid accession id.
+        key = row.get("Accession ID")
+        if not key:
+            continue
+
+        # Extract date.
+        date = row.get("Collection date")
+        if date and date != "?":
+            date = try_parse_date(date)
+            if date is not None:
+                if date < args.start_date:
+                    date = args.start_date  # Clip rows before start date.
+                result["day"][key] = (date - args.start_date).days
+
+        # Extract location.
+        location = row.get("Location")
+        if location:
+            location = gisaid_normalize(location)
+            result["location"][key] = location
+
+        # Extract pango lineage.
+        lineage = row.get("Pango lineage")
+        if lineage:
+            result["lineage"][key] = lineage
+
+        # Extract aa changes.
+        stats["AA Substitutions"].update(
+            row.get("AA Substitutions", "").strip("()").split(",")
+        )
+
+    logger.info("Found metadata:\n{}".format({k: len(v) for k, v in result.items()}))
+    return result
+
+
 def load_metadata(args):
     # Load metadata.
     stats = defaultdict(Counter)
-    usher_metadata = load_usher_metadata(args)  # keyed on strain
-    nextstrain_metadata = load_nextstrain_metadata(args, stats)  # keyed on genbank
+    if args.gisaid_metadata_file_in:
+        metadata = load_gisaid_metadata(args, stats)
+    else:
+        # Use nextstrain metadata when available; otherwise fallback to usher.
+        usher_metadata = load_usher_metadata(args)  # keyed on strain
+        nextstrain_metadata = load_nextstrain_metadata(args, stats)  # keyed on genbank
+        metadata = usher_metadata
+        for field, usher_col in metadata.items():
+            nextstrain_col = nextstrain_metadata[field]
+            for strain in usher_col.items():
+                genbank = try_parse_genbank(strain)
+                if genbank:
+                    value = nextstrain_col.get(genbank)
+                    if value:
+                        usher_col[strain] = value
 
     # Load usher tree.
     # Collect all names appearing in the usher tree.
-    logger.info("Loading fine tree")
-    with open(args.tree_file_out, "rb") as f:
-        proto = parsimony_pb2.data.FromString(f.read())
-    tree = next(Parser.from_string(proto.newick).parse())
+    proto, tree = load_proto(args.tree_file_out)
 
     # Collect condensed samples.
-    condensed_strains = {}
+    condensed_nodes = {}
     for node in proto.condensed_nodes:
-        condensed_strains[node.node_name] = list(node.condensed_leaves)
+        condensed_nodes[node.node_name] = list(node.condensed_leaves)
 
     # Propagate fine clade names downward.
     node_to_clade = {}
@@ -166,23 +236,24 @@ def load_metadata(args):
     # Collect info from each node in the tree.
     fields = "day", "location", "lineage"
     columns = defaultdict(list)
-    usher_strains = set()
+    sample_keys = set()
     skipped = stats["skipped"]
     skipped_by_day = Counter()
     nodename_to_count = Counter()
     for node, meta in zip(tree.find_clades(), proto.metadata):
-        strains = condensed_strains.get(node.name, [node.name])
-        for strain in strains:
-            if strain is None:
+        keys = condensed_nodes.get(node.name, [node.name])
+        for key in keys:
+            if key is None:
                 continue
-            usher_strains.add(strain)
-            genbank = try_parse_genbank(strain)
+            sample_keys.add(key)
 
-            # Try to use nextstrain metadata; fallback to usher metadata.
-            row = {
-                k: nextstrain_metadata[k].get(genbank, usher_metadata[k].get(strain))
-                for k in fields
-            }
+            if args.gisaid_metadata_file_in:
+                key = try_parse_gisaid(key)
+                if key is None:
+                    skipped["no gisaid id"] += 1
+                    continue
+
+            row = {k: metadata[k].get(key) for k in fields}
             if row["day"] is None:
                 skipped["no date"] += 1
                 continue
@@ -192,19 +263,18 @@ def load_metadata(args):
                 continue
 
             columns["clade"].append(node_to_clade[node])
-            columns["nodename"].append(strain)
-            columns["genbank_accession"].append(genbank)
+            columns["index"].append(key)
             for k, v in row.items():
                 columns[k].append(v)
             nodename_to_count[node.name] += 1
-    logger.info(f"Found {len(usher_strains)} strains in the usher tree")
-
+    logger.info(f"Found {len(sample_keys)} samples in the usher tree")
+    logger.info(f"Skipped {sum(skipped.values())} nodes because:\n{skipped}")
     columns = dict(columns)
+    assert columns
     assert len(set(map(len, columns.values()))) == 1, "columns have unequal length"
     assert sum(skipped.values()) < 2e6, f"suspicious skippage:\n{skipped}"
-    logger.info(f"Skipped {sum(skipped.values())} nodes because:\n{skipped}")
-    stats["skipped_by_day"] = skipped_by_day
     logger.info(f"Kept {len(columns['day'])} rows")
+    stats["skipped_by_day"] = skipped_by_day
 
     with open("results/columns.pkl", "wb") as f:
         pickle.dump(columns, f)
@@ -218,10 +288,7 @@ def load_metadata(args):
 
 
 def prune_tree(args, max_num_clades, coarse_to_fine, nodename_to_count):
-    logger.info(f"Loading fine tree {args.tree_file_out}")
-    with open(args.tree_file_out, "rb") as f:
-        proto = parsimony_pb2.data.FromString(f.read())
-    tree = next(Parser.from_string(proto.newick).parse())
+    proto, tree = load_proto(args.tree_file_out)
 
     # Add weights for leaves.
     cum_weights = {}
@@ -337,15 +404,16 @@ def main(args):
     coarse_proto = args.tree_file_in
     fine_proto = args.tree_file_out
     fine_to_coarse = refine_mutation_tree(coarse_proto, fine_proto)
-    coarse_to_fines = defaultdict(list)
-    for fine, coarse in fine_to_coarse.items():
-        coarse_to_fines[coarse].append(fine)
-    # Choose the basal representative.
-    coarse_to_fine = {c: min(fs) for c, fs in coarse_to_fines.items()}
 
     # Create columns.
     columns, nodename_to_count = load_metadata(args)
     columns["lineage"] = [fine_to_coarse[f] for f in columns["clade"]]
+
+    # Choose the basal representative.
+    coarse_to_fines = defaultdict(list)
+    for fine, coarse in fine_to_coarse.items():
+        coarse_to_fines[coarse].append(fine)
+    coarse_to_fine = {c: min(fs) for c, fs in coarse_to_fines.items()}
 
     # Extract features at various granularities.
     for max_num_clades in map(int, args.max_num_clades.split(",")):
@@ -367,6 +435,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--nextstrain-metadata-file-in", default="results/nextstrain/metadata.tsv"
     )
+    parser.add_argument("--gisaid-metadata-file-in", default="")
     parser.add_argument("--tree-file-in", default="results/usher/all.masked.pb")
     parser.add_argument("--tree-file-out", default="results/lineageTree.fine.pb")
     parser.add_argument("--stats-file-out", default="results/stats.pkl")

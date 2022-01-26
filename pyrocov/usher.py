@@ -1,6 +1,7 @@
 # Copyright Contributors to the Pyro-Cov project.
 # SPDX-License-Identifier: Apache-2.0
 
+import gzip
 import heapq
 import logging
 import shutil
@@ -19,6 +20,15 @@ logger = logging.getLogger(__name__)
 Mutation = namedtuple("Mutation", ["position", "ref", "mut"])
 
 NUCLEOTIDE = "ACGT"
+
+
+def load_proto(filename):
+    open_ = gzip.open if filename.endswith(".gz") else open
+    with open_(filename, "rb") as f:
+        proto = parsimony_pb2.data.FromString(f.read())  # type: ignore
+    newick = proto.newick.replace(";", "")  # work around unescaped node names
+    tree = next(Parser.from_string(newick).parse())
+    return proto, tree
 
 
 def load_usher_clades(filename: str) -> Dict[str, Tuple[str, str]]:
@@ -45,14 +55,14 @@ def load_usher_clades(filename: str) -> Dict[str, Tuple[str, str]]:
 
 def load_mutation_tree(filename: str) -> Dict[str, FrozenSet[Mutation]]:
     """
-    Loads an usher lineageTree.pb annotated with mutations and pango lineages,
-    and creates a mapping from lineages to their set of mutations.
+    Loads an usher lineageTree.pb or lineageTree.pb.gz annotated with mutations
+    and pango lineages, and creates a mapping from lineages to their set of
+    mutations.
     """
-    with open(filename, "rb") as f:
-        proto = parsimony_pb2.data.FromString(f.read())  # type: ignore
+    logger.info(f"Loading tree from {filename}")
+    proto, tree = load_proto(filename)
 
     # Extract phylogenetic tree.
-    tree = next(Parser.from_string(proto.newick).parse())
     clades = list(tree.find_clades())
     assert len(proto.metadata) == len(clades)
     assert len(proto.node_mutations) == len(clades)
@@ -89,11 +99,9 @@ def refine_mutation_tree(filename_in: str, filename_out: str) -> Dict[str, str]:
     with have a .clade attribute, all descendents will have metadata.clade ==
     "". The tree structure remains unchanged.
     """
-    with open(filename_in, "rb") as f:
-        proto = parsimony_pb2.data.FromString(f.read())  # type: ignore
+    proto, tree = load_proto(filename_in)
 
     # Extract phylogenetic tree.
-    tree = next(Parser.from_string(proto.newick).parse())
     clades = list(tree.find_clades())
     logger.info(f"Refining a tree with {len(clades)} nodes")
     assert len(proto.metadata) == len(clades)
@@ -154,15 +162,13 @@ def prune_mutation_tree(
 
     Returns a restricted set of clade names.
     """
-    with open(filename_in, "rb") as f:
-        proto = parsimony_pb2.data.FromString(f.read())  # type: ignore
+    proto, tree = load_proto(filename_in)
     num_pruned = len(proto.node_mutations) - max_num_nodes
     if num_pruned < 0:
         shutil.copyfile(filename_in, filename_out)
         return {m.clade for m in proto.node_metadata if m.clade}
 
     # Extract phylogenetic tree.
-    tree = next(Parser.from_string(proto.newick).parse())
     clades = list(tree.find_clades())
     logger.info(f"Pruning {num_pruned}/{len(clades)} nodes")
     assert len(clades) == len(set(clades))

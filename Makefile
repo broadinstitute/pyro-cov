@@ -49,6 +49,7 @@ test: lint FORCE
 # Main processing workflows
 # Note *-nextstrain is a cheaper simpler workflow replacing *-gisaid.
 # Note *-usher joins usher trees with nextstrain data.
+# Note *-usher-gisaid is an experimental cheaper way to process gisaid data.
 
 update-gisaid: FORCE
 	scripts/pull_gisaid.sh
@@ -96,6 +97,11 @@ update-usher: FORCE
 
 preprocess-usher: FORCE
 	python scripts/preprocess_usher.py
+
+preprocess-usher-gisaid: FORCE
+	python scripts/preprocess_usher.py \
+	  --tree-file-in results/gisaid/gisaidAndPublic.masked.pb.gz \
+	  --gisaid-metadata-file-in results/gisaid/metadata_2022_*_*.tsv.gz
 
 analyze-usher: FORCE
 	python scripts/mutrans.py --vary-holdout

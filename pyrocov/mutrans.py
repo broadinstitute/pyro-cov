@@ -166,8 +166,6 @@ def load_gisaid_data(
     # Load column data.
     with open(columns_filename, "rb") as f:
         columns = pickle.load(f)
-    # Clean up location ids (temporary; this should be done in preprocess_gisaid.py).
-    columns["location"] = list(map(pyrocov.geo.gisaid_normalize, columns["location"]))
     logger.info(f"Training on {len(columns['day'])} rows with columns:")
     logger.info(", ".join(columns.keys()))
 
