@@ -37,7 +37,7 @@ from torch.distributions import constraints
 import pyrocov.geo
 
 from . import pangolin, sarscov2
-from .ops import sparse_categorical_kl, sparse_multinomial_likelihood
+from .ops import sparse_multinomial_likelihood
 from .util import pearson_correlation, quotient_central_moments
 
 # Requires https://github.com/pyro-ppl/pyro/pull/2953
@@ -139,7 +139,6 @@ def load_gisaid_data(
     columns_filename="results/usher.columns.pkl",
     features_filename="results/usher.features.pt",
     feature_type="aa",
-    ambiguous=False,
 ) -> dict:
     """
     Loads the two files columns_filename and features_filename,
@@ -167,8 +166,6 @@ def load_gisaid_data(
     # Load column data.
     with open(columns_filename, "rb") as f:
         columns = pickle.load(f)
-    # Clean up location ids (temporary; this should be done in preprocess_gisaid.py).
-    columns["location"] = list(map(pyrocov.geo.gisaid_normalize, columns["location"]))
     logger.info(f"Training on {len(columns['day'])} rows with columns:")
     logger.info(", ".join(columns.keys()))
 
@@ -214,23 +211,16 @@ def load_gisaid_data(
     clade_id_inv = usher_features["clades"]
     clade_id = {k: i for i, k in enumerate(clade_id_inv)}
     clades = columns["clade"]
-    histograms = columns["clades"]
-    ancestry = usher_features["ancestry"].to(
-        device=device, dtype=torch.get_default_dtype()
-    )
 
     # Generate sparse_data.
     sparse_data: dict = Counter()
-    sparse_hist: dict = defaultdict(list)
     countries = set()
     states = set()
     state_to_country_dict = {}
     location_id: dict = OrderedDict()
     skipped_clades = set()
     num_obs = 0
-    for day, location, clade, histogram in zip(
-        columns["day"], columns["location"], clades, histograms
-    ):
+    for day, location, clade in zip(columns["day"], columns["location"], clades):
         if clade not in clade_id:
             if clade not in skipped_clades:
                 skipped_clades.add(clade)
@@ -277,18 +267,8 @@ def load_gisaid_data(
         # Save sparse data.
         num_obs += 1
         t = day // TIMESTEP
-        if clade == histogram or not ambiguous:
-            # Save an unambiguous observation.
-            c = clade_id[clade]
-            sparse_data[t, p, c] += 1
-        else:
-            # Save an ambiguous observation.
-            i = len(sparse_hist["size"])
-            sparse_hist["size"].append(len(histogram))
-            for clade in histogram.split(","):
-                c = clade_id[clade]
-                sparse_hist["destin"].append(i)
-                sparse_hist["source"].append((t, p, c))
+        c = clade_id[clade]
+        sparse_data[t, p, c] += 1
     logger.warning(f"WARNING skipped {len(skipped_clades)} unsampled clades")
     state_to_country = torch.full((len(states),), 999999, dtype=torch.long)
     for s, c in state_to_country_dict.items():
@@ -319,26 +299,6 @@ def load_gisaid_data(
     # Construct sparse representation.
     pc_index = weekly_clades.ne(0).any(0).reshape(-1).nonzero(as_tuple=True)[0]
     sparse_counts = dense_to_sparse(weekly_clades)
-    if sparse_hist:
-        # Construct a sparse COO matrix for use in the fused gather-scatter:
-        # torch.mv(sparse_hist["matrix"], probs.reshape(-1))
-        sparse_destin = torch.tensor(sparse_hist["destin"])
-        sparse_source = torch.tensor(sparse_hist["source"])
-        sparse_source[:, 0] *= P * C
-        sparse_source[:, 1] *= C
-        sparse_source = sparse_source.sum(-1)
-        shape = (len(sparse_hist["size"]), T * P * C)
-        logger.info(
-            f"Sparse {shape} histogram has {len(sparse_hist['source'])} entries"
-        )
-        sparse_hist = {
-            "size": torch.tensor(sparse_hist["size"], dtype=torch.float),
-            "matrix": torch.sparse_coo_tensor(
-                torch.stack([sparse_destin, sparse_source]),
-                torch.ones(len(sparse_destin)),
-                shape,
-            ),
-        }
 
     # Construct time scales centered around observations.
     time = torch.arange(float(T)) * TIMESTEP / GENERATION_TIME
@@ -357,7 +317,6 @@ def load_gisaid_data(
         lineage_id_to_clade_id[lineage_id[l]] = clade_id[c]
 
     dataset = {
-        "ancestry": ancestry,
         "clade_id": clade_id,
         "clade_id_inv": clade_id_inv,
         "clade_id_to_lineage_id": clade_id_to_lineage_id,
@@ -372,7 +331,6 @@ def load_gisaid_data(
         "mutations": mutations,
         "pc_index": pc_index,
         "sparse_counts": sparse_counts,
-        "sparse_hist": sparse_hist,
         "state_to_country": state_to_country,
         "time": time,
         "weekly_clades": weekly_clades,
@@ -390,8 +348,6 @@ def subset_gisaid_data(
     This is not used in the final published results.
     """
     old = gisaid_dataset
-    if old["sparse_hist"]:
-        raise NotImplementedError
     new = old.copy()
 
     # Select locations.
@@ -509,7 +465,6 @@ def model(dataset, model_type, *, forecast_steps=None):
     time = dataset["time"]  # [T]
     weekly_clades = dataset["weekly_clades"]
     sparse_counts = dataset["sparse_counts"]
-    sparse_hist = dataset["sparse_hist"]
     clade_id_to_lineage_id = dataset["clade_id_to_lineage_id"]
     pc_index = dataset["pc_index"]
     T, P, C = weekly_clades.shape
@@ -589,8 +544,6 @@ def model(dataset, model_type, *, forecast_steps=None):
                     dist.Multinomial(logits=logits.unsqueeze(-2), validate_args=False),
                     obs=weekly_clades.unsqueeze(-2),
                 )  # [T, P, 1, C]
-            if dataset["sparse_hist"]:
-                raise NotImplementedError
             return
         # Compromise between sparse and dense.
         logits = logits.log_softmax(-1)
@@ -601,15 +554,6 @@ def model(dataset, model_type, *, forecast_steps=None):
                 sparse_counts["total"], logits[t, p, c], sparse_counts["value"]
             ),
         )
-        if sparse_hist:
-            pyro.factor(
-                "obs_ambiguous",
-                sparse_categorical_kl(
-                    log_q=logits.reshape(-1),
-                    p_support=sparse_hist["matrix"],
-                    log_p=sparse_hist["size"].log().neg_(),
-                ),
-            )
 
 
 class InitLocFn:
@@ -809,6 +753,7 @@ def fit_svi(
     log_every=50,
     seed=20210319,
     check_loss=False,
+    num_ell_particles=256,
 ) -> dict:
     """
     Fits a variational posterior using stochastic variational inference (SVI).
@@ -932,6 +877,22 @@ def fit_svi(
             curr = torch.tensor(losses[-25:], device="cpu").median().item()
             assert (curr - prev) < num_obs, "loss is increasing"
 
+    # compute expected log probability
+    ell = 0.0
+    with torch.no_grad(), poutine.block():
+        for _ in range(num_ell_particles):
+            guide_trace = poutine.trace(guide).get_trace(
+                dataset=dataset, model_type=model_type
+            )
+            replayed_model = poutine.replay(model_, trace=guide_trace)
+            model_trace = poutine.trace(replayed_model).get_trace(
+                dataset=dataset, model_type=model_type
+            )
+            model_trace.compute_log_prob()
+            ell += model_trace.nodes["obs"]["unscaled_log_prob"].item() / float(
+                num_ell_particles
+            )
+
     result = predict(
         model_,
         guide,
@@ -940,6 +901,7 @@ def fit_svi(
         num_samples=num_samples,
         forecast_steps=forecast_steps,
     )
+    result["ELL"] = ell
     result["losses"] = losses
     series["loss"] = losses
     result["series"] = dict(series)
@@ -949,6 +911,7 @@ def fit_svi(
         if v.numel() < 1e8
     }
     result["walltime"] = default_timer() - start_time
+
     return result
 
 
@@ -1014,6 +977,9 @@ def log_stats(dataset: dict, result: dict) -> dict:
     stats["MAE"] = float(mae.sum(-1).mean())  # average over region
     stats["RMSE"] = float(mse.sum(-1).mean().sqrt())  # root average over region
     stats["KL"] = float(kl.sum() / counts.sum())  # in units of nats / observation
+    if "ELL" in result:
+        stats["ELL"] = result["ELL"]
+
     logger.info("KL = {KL:0.4g}, MAE = {MAE:0.4g}, RMSE = {RMSE:0.4g}".format(**stats))
 
     # Examine the MSE and RMSE over a few regions of interest.

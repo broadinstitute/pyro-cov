@@ -12,6 +12,7 @@ from .align import NEXTCLADE_DATA
 REFERENCE_SEQ = None  # loaded lazily
 
 # Adapted from https://github.com/nextstrain/ncov/blob/50ceffa/defaults/annotation.gff
+# Note these are 1-based positions
 annotation_tsv = """\
 seqname	source	feature	start	end	score	strand	frame	attribute
 .	.	gene	26245	26472	.	+	.	 gene_name "E"
@@ -180,6 +181,7 @@ def nuc_mutations_to_aa_mutations(ms: List[str]) -> List[str]:
 
     for m in ms:
         # Parse a nucleotide mutation such as "A1234G" -> (1234, "G").
+        # Note this uses 1-based indexing.
         if isinstance(m, str):
             position_nuc = int(m[1:-1])
             new_nuc = m[-1]
@@ -190,7 +192,7 @@ def nuc_mutations_to_aa_mutations(ms: List[str]) -> List[str]:
 
         # Find the first matching gene.
         for gene, (start, end) in GENE_TO_POSITION.items():
-            if start <= position_nuc < end:  # FIXME is end bound right?
+            if start <= position_nuc <= end:
                 position_aa = (position_nuc - start) // 3
                 position_codon = (position_nuc - start) % 3
                 ms_by_aa[gene, position_aa].append((position_codon, new_nuc))
@@ -202,6 +204,7 @@ def nuc_mutations_to_aa_mutations(ms: List[str]) -> List[str]:
 
         # Apply mutation to determine new aa.
         pos = start + position_aa * 3
+        pos -= 1  # convert from 1-based to 0-based
         old_codon = REFERENCE_SEQ[pos : pos + 3]
         new_codon = list(old_codon)
         for position_codon, new_nuc in ms:
@@ -211,7 +214,13 @@ def nuc_mutations_to_aa_mutations(ms: List[str]) -> List[str]:
         # Format.
         old_aa = DNA_TO_AA[old_codon]
         new_aa = DNA_TO_AA[new_codon]
-        result.append(f"{gene}:{old_aa}{position_aa}{new_aa}")
+        if new_aa == old_aa:  # ignore synonymous substitutions
+            continue
+        if old_aa is None:
+            old_aa = "STOP"
+        if new_aa is None:
+            new_aa = "STOP"
+        result.append(f"{gene}:{old_aa}{position_aa + 1}{new_aa}")  # 1-based
     return result
 
 
