@@ -3,11 +3,8 @@ import numpy as np
 import pickle
 
 
-results_dir = '/home/mjankowi/pyro-cov/results/'
+results_dir = '../results/'
 fit = torch.load(results_dir + 'mutrans.svi.3000.1.50.coef_scale=0.1.reparam.full.10001.0.05.0.1.10.0.200.6.None..pt')
-
-rate = fit['median']['rate'].data.cpu()
-rate_loc = fit['median']['rate_loc'].data.cpu()
 
 coef = fit['median']['coef'].data.cpu()
 
@@ -33,7 +30,8 @@ for m in mutations:
 
     pos = int(m[3:-1])
 
-    if pos >= 331 and pos <= 531:
+    #if pos >= 331 and pos <= 531:
+    if pos >= 319 and pos <= 541:
         rbd.append(1)
     else:
         rbd.append(0)
@@ -62,10 +60,9 @@ print("rbd_pred", rbd_pred.shape)
 pickle.dump((full_pred.numpy(),
              rbd_mutations,
              rbd_pred.numpy(),
+             rbd_coef.numpy(),
              S_mutations,
              S_pred.numpy(),
              rbd_features.numpy(),
              clades,
-             clade_to_lineage,
-             rate.numpy(),
-             rate_loc.numpy()), open('rbd_data.pkl', 'wb'))
+             clade_to_lineage), open('rbd_data.pkl', 'wb'))
