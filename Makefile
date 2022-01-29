@@ -3,7 +3,7 @@ SHELL := /bin/bash
 ###########################################################################
 # installation
 
-install: install-nextalign install-usher FORCE
+install: install-usher FORCE
 	pip install -e .[test]
 
 install-pangolin:
@@ -11,18 +11,6 @@ install-pangolin:
 
 install-usher:
 	conda install -y -c bioconda -c conda-forge -c defaults usher
-
-install-nextalign:
-	curl -fsSL "https://github.com/nextstrain/nextclade/releases/1.6.0/download/nextalign-MacOS-x86_64" -o "nextalign" && chmod +x nextalign
-
-install-nextclade:
-	curl -fsSL "https://github.com/nextstrain/nextclade/releases/1.6.0/download/nextclade-MacOS-x86_64" -o "nextclade" && chmod +x nextclade
-    
-install-nextalign-linux:
-	curl -fsSL "https://github.com/nextstrain/nextclade/releases/download/1.6.0/nextalign-Linux-x86_64" -o nextalign && chmod +x nextalign
-
-install-nextclade-linux:
-	curl -fsSL "https://github.com/nextstrain/nextclade/releases/download/1.6.0/nextclade-Linux-x86_64" -o nextclade && chmod +x nextclade
 
 ###########################################################################
 # ci tasks
@@ -47,62 +35,38 @@ test: lint FORCE
 
 ###########################################################################
 # Main processing workflows
-# Note *-nextstrain is a cheaper simpler workflow replacing *-gisaid.
-# Note *-usher joins usher trees with nextstrain data.
 
-update-gisaid: FORCE
-	scripts/pull_gisaid.sh
-	python scripts/git_pull.py cov-lineages/pango-designation
-	python scripts/git_pull.py cov-lineages/pangoLEARN
-	python scripts/git_pull.py CSSEGISandData/COVID-19
-	./nextclade dataset get --name sars-cov-2 --output-dir results/nextclade_data
-
-preprocess-gisaid: FORCE
-	time nice python scripts/preprocess_gisaid.py
-	time nice python scripts/preprocess_nextclade.py
-	time nice python scripts/preprocess_pangolin.py --max-num-clades=2000
-	time nice python scripts/preprocess_pangolin.py --max-num-clades=5000
-	time nice python scripts/preprocess_pangolin.py --max-num-clades=10000
-
-analyze-gisaid: FORCE
-	python scripts/mutrans.py --vary-holdout
-	python scripts/mutrans.py --vary-gene
-	python scripts/mutrans.py --vary-nsp
-	python scripts/mutrans.py --vary-leaves=9999 --num-steps=2001
-
-update-nextstrain: FORCE
-	scripts/pull_nextstrain.sh
-	python scripts/git_pull.py cov-lineages/pango-designation
-	python scripts/git_pull.py cov-lineages/pangoLEARN
-	python scripts/git_pull.py CSSEGISandData/COVID-19
-
-preprocess-nextstrain: FORCE
-	python scripts/preprocess_nextstrain.py
-
-analyze-nextstrain: FORCE
-	python scripts/analyze_nextstrain.py --vary-holdout
-	python scripts/analyze_nextstrain.py --vary-gene
-	python scripts/analyze_nextstrain.py --vary-nsp
-	python scripts/analyze_nextstrain.py --vary-leaves=9999 --num-steps=2001
-
-update-usher: FORCE
+# The DO_NOT_UPDATE logic aims to avoid someone accidentally updating a frozen
+# results directory.
+update: FORCE
+	! test -f results/DO_NOT_UPDATE
 	scripts/pull_nextstrain.sh
 	scripts/pull_usher.sh
 	python scripts/git_pull.py cov-lineages/pango-designation
 	python scripts/git_pull.py cov-lineages/pangoLEARN
 	python scripts/git_pull.py CSSEGISandData/COVID-19
+	python scripts/git_pull.py nextstrain/nextclade
+	echo "frozen" > results/DO_NOT_UPDATE
 
-preprocess-usher: FORCE
+preprocess: FORCE
 	python scripts/preprocess_usher.py
 
-analyze-usher: FORCE
-	python scripts/analyze_usher.py --vary-holdout
-	python scripts/analyze_usher.py --vary-gene
-	python scripts/analyze_usher.py --vary-nsp
-	python scripts/analyze_usher.py --vary-leaves=9999 --num-steps=2001
+preprocess-gisaid: FORCE
+	python scripts/preprocess_usher.py \
+	  --tree-file-in results/gisaid/gisaidAndPublic.masked.pb.gz \
+	  --gisaid-metadata-file-in results/gisaid/metadata_2022_*_*.tsv.gz
+
+analyze: FORCE
+	python scripts/mutrans.py --vary-holdout
+	python scripts/mutrans.py --vary-gene
+	python scripts/mutrans.py --vary-nsp
+	python scripts/mutrans.py --vary-leaves=9999 --num-steps=2001
 
 backtesting: FORCE
 	python scripts/mutrans.py --backtesting-max-day `seq -s, 150 14 625` --forecast-steps 12
+
+backtesting-short: FORCE
+	python scripts/mutrans.py --backtesting-max-day `seq -s, 500 14 625` --forecast-steps 12
 
 EXCLUDE='.*\.json$$|.*mutrans\.pt$$|.*temp\..*|.*\.[EI](gene|region)=.*\.pt$$|.*__(gene|region|lineage)__.*\.pt$$'
 

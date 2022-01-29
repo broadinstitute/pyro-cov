@@ -18,22 +18,6 @@ git clone git@github.com:broadinstitute/pyro-cov
 cd pyro-cov
 ```
 
-Install nextclade, depending on your platform:
-```sh
-make install-nextalign-linux
-make install-nextclade-linux
-```
-or 
-```sh
-make install-nextalign
-make install-nextclade
-```
-or
-```sh
-conda install nodejs
-npm install --global @nextstrain/nextclade
-```
-
 Install this python package:
 ```py
 pip install -e .
@@ -58,7 +42,7 @@ make update
 
 ### Preprocess data
 
-This can takes 20-40 hours on a 60-core machine.
+This takes under an hour.
 Results are cached in the `results/` directory, so re-running on newly pulled data should be able to re-use alignment and PANGOlineage classification work.
 ```sh
 make preprocess

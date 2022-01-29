@@ -1,6 +1,7 @@
 # Copyright Contributors to the Pyro-Cov project.
 # SPDX-License-Identifier: Apache-2.0
 
+import gzip
 import heapq
 import logging
 import shutil
@@ -19,6 +20,15 @@ logger = logging.getLogger(__name__)
 Mutation = namedtuple("Mutation", ["position", "ref", "mut"])
 
 NUCLEOTIDE = "ACGT"
+
+
+def load_proto(filename):
+    open_ = gzip.open if filename.endswith(".gz") else open
+    with open_(filename, "rb") as f:
+        proto = parsimony_pb2.data.FromString(f.read())  # type: ignore
+    newick = proto.newick.replace(";", "")  # work around unescaped node names
+    tree = next(Parser.from_string(newick).parse())
+    return proto, tree
 
 
 def load_usher_clades(filename: str) -> Dict[str, Tuple[str, str]]:
@@ -43,16 +53,18 @@ def load_usher_clades(filename: str) -> Dict[str, Tuple[str, str]]:
     return clades
 
 
-def load_mutation_tree(filename: str) -> Dict[str, FrozenSet[Mutation]]:
+def load_mutation_tree(
+    filename: str,
+) -> Tuple[Dict[str, FrozenSet[Mutation]], object, object]:
     """
-    Loads an usher lineageTree.pb annotated with mutations and pango lineages,
-    and creates a mapping from lineages to their set of mutations.
+    Loads an usher lineageTree.pb or lineageTree.pb.gz annotated with mutations
+    and pango lineages, and creates a mapping from lineages to their set of
+    mutations.
     """
-    with open(filename, "rb") as f:
-        proto = parsimony_pb2.data.FromString(f.read())  # type: ignore
+    logger.info(f"Loading tree from {filename}")
+    proto, tree = load_proto(filename)
 
     # Extract phylogenetic tree.
-    tree = next(Parser.from_string(proto.newick).parse())
     clades = list(tree.find_clades())
     assert len(proto.metadata) == len(clades)
     assert len(proto.node_mutations) == len(clades)
@@ -65,8 +77,9 @@ def load_mutation_tree(filename: str) -> Dict[str, FrozenSet[Mutation]]:
     }
 
     # Accumulate mutations in each clade, which are overwritten at each position.
+    logger.info(f"Accumulating mutations on {len(clades)} nodes")
     clade_to_muts: Dict[object, Dict[int, Mutation]] = defaultdict(dict)
-    for clade, muts in zip(clades, proto.node_mutations):
+    for clade, muts in zip(tqdm.tqdm(clades), proto.node_mutations):
         for mut in muts.mutation:
             clade_to_muts[clade][mut.position] = Mutation(
                 mut.position,
@@ -79,20 +92,19 @@ def load_mutation_tree(filename: str) -> Dict[str, FrozenSet[Mutation]]:
     mutations_by_lineage = {
         k: frozenset(clade_to_muts[v].values()) for k, v in lineage_to_clade.items()
     }
-    return mutations_by_lineage
+    return mutations_by_lineage, proto, tree
 
 
 def refine_mutation_tree(filename_in: str, filename_out: str) -> Dict[str, str]:
     """
     Refines a mutation tree clade metadata from pango lineages like B.1.1 to
-    full node addresses like fine.0.12.4.1. The tree structure remains
-    unchanged.
+    full node addresses like fine.0.12.4.1. Among clones, only the basal clade
+    with have a .clade attribute, all descendents will have metadata.clade ==
+    "". The tree structure remains unchanged.
     """
-    with open(filename_in, "rb") as f:
-        proto = parsimony_pb2.data.FromString(f.read())  # type: ignore
+    proto, tree = load_proto(filename_in)
 
     # Extract phylogenetic tree.
-    tree = next(Parser.from_string(proto.newick).parse())
     clades = list(tree.find_clades())
     logger.info(f"Refining a tree with {len(clades)} nodes")
     assert len(proto.metadata) == len(clades)
@@ -153,15 +165,13 @@ def prune_mutation_tree(
 
     Returns a restricted set of clade names.
     """
-    with open(filename_in, "rb") as f:
-        proto = parsimony_pb2.data.FromString(f.read())  # type: ignore
+    proto, tree = load_proto(filename_in)
     num_pruned = len(proto.node_mutations) - max_num_nodes
     if num_pruned < 0:
         shutil.copyfile(filename_in, filename_out)
         return {m.clade for m in proto.node_metadata if m.clade}
 
     # Extract phylogenetic tree.
-    tree = next(Parser.from_string(proto.newick).parse())
     clades = list(tree.find_clades())
     logger.info(f"Pruning {num_pruned}/{len(clades)} nodes")
     assert len(clades) == len(set(clades))
