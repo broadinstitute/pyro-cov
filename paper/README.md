@@ -73,7 +73,7 @@ including either GISAID records (https://gisaid.org) or GENBANK records
 lineage classifications (https://cov-lineages.org), and case count time series
 from Johns-Hopkins University (https://github.com/CSSEGISandData/COVID-19).
 
-We gratefully acknowledge all data contributors, i.e. the Authors and their Originating laboratories responsible for obtaining the specimens, and their Submitting laboratories for generating the genetic sequence and metadata and sharing via the GISAID initiative [1,2] on which this research is based. A total of 2,160,748 submissions are included in this study. A complete list of 2.1million accession numbers are available in [accession_ids.txt.zip](accession_ids.txt.zip).
+We gratefully acknowledge all data contributors, i.e. the Authors and their Originating laboratories responsible for obtaining the specimens, and their Submitting laboratories for generating the genetic sequence and metadata and sharing via the GISAID initiative [1,2] on which this research is based. A total of 6,466,299 submissions are included in this study. A complete list of the 6,466,299 accession numbers is available in [accession_ids.txt.xz](accession_ids.txt.xz).
 
 1.  GISAID Initiative and global contributors,
     EpiCoV(TM) human coronavirus 2019 database.
