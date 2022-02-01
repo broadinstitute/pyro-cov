@@ -492,8 +492,9 @@ def model(dataset, model_type, *, forecast_steps=None):
     reparam = {}
     if "reparam" in model_type:
         reparam["coef"] = LocScaleReparam()
-        if "hier" in model_type:
+        if "localrate" in model_type:
             reparam["rate_loc"] = LocScaleReparam()
+        if "localinit" in model_type:
             reparam["init_loc"] = LocScaleReparam()
         reparam["pc_rate"] = LocScaleReparam()
         reparam["pc_init"] = LocScaleReparam()
@@ -503,8 +504,9 @@ def model(dataset, model_type, *, forecast_steps=None):
         coef_scale = pyro.sample("coef_scale", dist.LogNormal(-4, 2))
         rate_scale = pyro.sample("rate_scale", dist.LogNormal(-4, 2))
         init_scale = pyro.sample("init_scale", dist.LogNormal(0, 2))
-        if "hier" in model_type:
+        if "localrate" in model_type:
             rate_loc_scale = pyro.sample("rate_loc_scale", dist.LogNormal(-4, 2))
+        if "localinit" in model_type:
             init_loc_scale = pyro.sample("init_loc_scale", dist.LogNormal(0, 2))
 
         # Assume relative growth rate depends strongly on mutations and weakly
@@ -514,17 +516,19 @@ def model(dataset, model_type, *, forecast_steps=None):
             "coef", dist.Laplace(torch.zeros(F), coef_scale).to_event(1)
         )  # [F]
         with clade_plate:
-            if "hier" in model_type:
+            if "localrate" in model_type:
                 rate_loc = pyro.sample(
                     "rate_loc", dist.Normal(0.01 * coef @ features.T, rate_loc_scale)
-                )  # [C]
-                init_loc = pyro.sample(
-                    "init_loc", dist.Normal(0, init_loc_scale)
                 )  # [C]
             else:
                 rate_loc = pyro.deterministic(
                     "rate_loc", 0.01 * coef @ features.T
                 )  # [C]
+            if "localinit" in model_type:
+                init_loc = pyro.sample(
+                    "init_loc", dist.Normal(0, init_loc_scale)
+                )  # [C]
+            else:
                 init_loc = rate_loc.new_zeros(())
         with pc_plate:
             pc_rate_loc = rate_loc.expand(P, C).reshape(-1)
