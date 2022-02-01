@@ -492,8 +492,9 @@ def model(dataset, model_type, *, forecast_steps=None):
     reparam = {}
     if "reparam" in model_type:
         reparam["coef"] = LocScaleReparam()
-        reparam["rate_loc"] = LocScaleReparam()
-        reparam["init_loc"] = LocScaleReparam()
+        if "hier" in model_type:
+            reparam["rate_loc"] = LocScaleReparam()
+            reparam["init_loc"] = LocScaleReparam()
         reparam["pc_rate"] = LocScaleReparam()
         reparam["pc_init"] = LocScaleReparam()
     with poutine.reparam(config=reparam):
