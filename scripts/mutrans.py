@@ -273,13 +273,15 @@ def vary_leaves(args, default_config):
             for descendent in descendents[clade]:
                 heldout.append(clade_id[descendent])
             loo_dataset = dataset.copy()
-            loo_dataset["weekly_clades"] = dataset["weekly_clades"].clone()
-            loo_dataset["weekly_clades"][:, :, heldout] = 0
+            weekly_clades = dataset["weekly_clades"].clone()
+            weekly_clades[:, :, heldout] = 0
+            loo_dataset["weekly_clades"] = weekly_clades
+            loo_dataset["sparse_counts"] = mutrans.dense_to_sparse(weekly_clades)
+            loo_dataset["pc_index"] = (
+                weekly_clades.ne(0).any(0).reshape(-1).nonzero(as_tuple=True)[0]
+            )
             loo_num_obs = int(loo_dataset["weekly_clades"].sum())
             logger.info(f"Holding out {num_obs - loo_num_obs}/{num_obs} samples")
-            loo_dataset["sparse_counts"] = mutrans.dense_to_sparse(
-                loo_dataset["weekly_clades"]
-            )
 
         # Run SVI
         logger.info(f"Config: {config}")
