@@ -249,7 +249,6 @@ def vary_leaves(args, default_config):
 
     # Rank lineages by cut size.
     lineages = mutrans.rank_loo_lineages(dataset)
-    lineages = lineages[: args.vary_leaves]
     logger.info(
         "Leave-one-out predicting growth rate of {} lineages: {}".format(
             len(lineages), ", ".join(lineages)
@@ -297,7 +296,7 @@ def vary_leaves(args, default_config):
         results[config] = result
 
         # Cleanup
-        del result
+        del loo_dataset, result
         pyro.clear_param_store()
         gc.collect()
 
@@ -556,9 +555,7 @@ if __name__ == "__main__":
     parser.add_argument("--vary-guide-type", help="comma delimited list of guide types")
     parser.add_argument("--vary-num-steps", help="comma delimited list of num_steps")
     parser.add_argument("--vary-holdout", action="store_true")
-    parser.add_argument(
-        "--vary-leaves", type=int, help="min number of samples per held out lineage"
-    )
+    parser.add_argument("--vary-leaves", action="store_true")
     parser.add_argument("--vary-gene", action="store_true")
     parser.add_argument("--vary-nsp", action="store_true")
     parser.add_argument("--gisaid", action="store_true", default=False)
