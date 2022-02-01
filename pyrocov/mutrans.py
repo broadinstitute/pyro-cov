@@ -492,6 +492,8 @@ def model(dataset, model_type, *, forecast_steps=None):
     reparam = {}
     if "reparam" in model_type:
         reparam["coef"] = LocScaleReparam()
+        reparam["rate_loc"] = LocScaleReparam()
+        reparam["init_loc"] = LocScaleReparam()
         reparam["pc_rate"] = LocScaleReparam()
         reparam["pc_init"] = LocScaleReparam()
     with poutine.reparam(config=reparam):
@@ -500,6 +502,9 @@ def model(dataset, model_type, *, forecast_steps=None):
         coef_scale = pyro.sample("coef_scale", dist.LogNormal(-4, 2))
         rate_scale = pyro.sample("rate_scale", dist.LogNormal(-4, 2))
         init_scale = pyro.sample("init_scale", dist.LogNormal(0, 2))
+        if "hier" in model_type:
+            rate_loc_scale = pyro.sample("rate_loc_scale", dist.LogNormal(-4, 2))
+            init_loc_scale = pyro.sample("init_loc_scale", dist.LogNormal(0, 2))
 
         # Assume relative growth rate depends strongly on mutations and weakly
         # on clade and place. Assume initial infections depend strongly on
@@ -508,13 +513,27 @@ def model(dataset, model_type, *, forecast_steps=None):
             "coef", dist.Laplace(torch.zeros(F), coef_scale).to_event(1)
         )  # [F]
         with clade_plate:
-            rate_loc = pyro.deterministic("rate_loc", 0.01 * coef @ features.T)  # [C]
+            if "hier" in model_type:
+                rate_loc = pyro.sample(
+                    "rate_loc", dist.Normal(0.01 * coef @ features.T, rate_loc_scale)
+                )  # [C]
+                init_loc = pyro.sample(
+                    "init_loc", dist.Normal(0, init_loc_scale)
+                )  # [C]
+            else:
+                rate_loc = pyro.deterministic(
+                    "rate_loc", 0.01 * coef @ features.T
+                )  # [C]
+                init_loc = rate_loc.new_zeros(())
         with pc_plate:
             pc_rate_loc = rate_loc.expand(P, C).reshape(-1)
+            pc_init_loc = init_loc.expand(P, C).reshape(-1)
             pc_rate = pyro.sample(
                 "pc_rate", dist.Normal(pc_rate_loc[pc_index], rate_scale)
             )  # [PC]
-            pc_init = pyro.sample("pc_init", dist.Normal(0, init_scale))  # [PC]
+            pc_init = pyro.sample(
+                "pc_init", dist.Normal(pc_init_loc[pc_index], init_scale)
+            )  # [PC]
         with place_plate, clade_plate:
             rate = pyro.deterministic(
                 "rate",
@@ -594,6 +613,7 @@ class InitLocFn:
             return torch.full(shape, 0.002)
         if name in (
             "rate_scale",
+            "rate_loc_scale",
             "place_scale",
             "clade_scale",
         ):

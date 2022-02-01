@@ -85,7 +85,7 @@ def main(args):
     columns = ["NumMutations", "GeneSize", "PValue", "Lengthscale"]
     index = list(gene_map.keys()) + ["EntireGenome"] * 2
     result = pd.DataFrame(data=results, index=index, columns=columns)
-    result.sort_values(['PValue']).to_csv("paper/moran.csv")
+    result.sort_values(["PValue"]).to_csv("paper/moran.csv")
 
 
 if __name__ == "__main__":
