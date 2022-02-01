@@ -530,11 +530,16 @@ def model(dataset, model_type, *, forecast_steps=None):
                 )  # [C]
             else:
                 init_loc = rate_loc.new_zeros(())
+            if "variableslop" in model_type:
+                slop_multiplier = 1 + features.sum(-1)
+            else:
+                slop_multiplier = features.new_ones(C)
         with pc_plate:
             pc_rate_loc = rate_loc.expand(P, C).reshape(-1)
             pc_init_loc = init_loc.expand(P, C).reshape(-1)
+            pc_slop_multiplier = slop_multiplier.expand(P, C).reshape(-1)
             pc_rate = pyro.sample(
-                "pc_rate", dist.Normal(pc_rate_loc[pc_index], rate_scale)
+                "pc_rate", dist.Normal(pc_rate_loc[pc_index], rate_scale * pc_slop_multiplier[pc_index])
             )  # [PC]
             pc_init = pyro.sample(
                 "pc_init", dist.Normal(pc_init_loc[pc_index], init_scale)
