@@ -4,7 +4,8 @@ import pickle
 
 
 results_dir = '../results/'
-fit = torch.load(results_dir + 'mutrans.svi.3000.1.50.coef_scale=0.1.reparam.full.10001.0.05.0.1.10.0.200.6.None..pt')
+filename = 'mutrans.svi.3000.1.50.coef_scale=0.05.reparam-localinit.full.10001.0.05.0.1.10.0.200.6.None..pt'
+fit = torch.load(results_dir + filename)
 
 coef = fit['median']['coef'].data.cpu()
 
@@ -30,7 +31,6 @@ for m in mutations:
 
     pos = int(m[3:-1])
 
-    #if pos >= 331 and pos <= 531:
     if pos >= 319 and pos <= 541:
         rbd.append(1)
     else:
