@@ -28,8 +28,8 @@ then postprocessing with the following Jupyter notebooks:
 
 ## Information density plots
 
-![ELBO of various genes](vary_gene_elbo.png)
-![ELBO of various NSPs](vary_nsp_elbo.png)
+![How informative is each gene?](vary_gene_likelihood.png)
+![How informative is each NSP?](vary_nsp_likelihood.png)
 
 ## Volcano plot
 
@@ -61,19 +61,16 @@ The following plots assess robustness via 2-fold crossvalidation, splitting data
 
 ## Acknowledgements
 
-**Note:** While our original
-[preprint](https://www.medrxiv.org/content/10.1101/2021.09.07.21263228v1) is
-based on GISAID data, we have since lost access to GISAID. Therefore the
-current plots are based on GENBANK data.
-
 The aggregated model outputs in this directory were generated from data inputs
-including either GISAID records (https://gisaid.org) or GENBANK records
-(https://www.ncbi.nlm.nih.gov), an UShER tree placement of those records
+including either GISAID records (https://gisaid.org), an UShER tree placement
+of those records
 (http://hgdownload.soe.ucsc.edu/goldenPath/wuhCor1/UShER_SARS-CoV-2), PANGO
 lineage classifications (https://cov-lineages.org), and case count time series
 from Johns-Hopkins University (https://github.com/CSSEGISandData/COVID-19).
+Results in this directory can alternatively be generated using GENBANK records
+(https://www.ncbi.nlm.nih.gov) instead of GISAID records.
 
-We gratefully acknowledge all data contributors, i.e. the Authors and their Originating laboratories responsible for obtaining the specimens, and their Submitting laboratories for generating the genetic sequence and metadata and sharing via the GISAID initiative [1,2] on which this research is based. A total of 2,160,748 submissions are included in this study. A complete list of 2.1million accession numbers are available in [accession_ids.txt.zip](accession_ids.txt.zip).
+We gratefully acknowledge all data contributors, i.e. the Authors and their Originating laboratories responsible for obtaining the specimens, and their Submitting laboratories for generating the genetic sequence and metadata and sharing via the GISAID initiative [1,2] on which this research is based. A total of 6,466,299 submissions are included in this study. A complete list of the 6,466,299 accession numbers is available in [accession_ids.txt.xz](accession_ids.txt.xz).
 
 1.  GISAID Initiative and global contributors,
     EpiCoV(TM) human coronavirus 2019 database.

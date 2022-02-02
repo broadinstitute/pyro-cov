@@ -159,18 +159,18 @@ The full model is specified as follows:
 %%%
 \begin{align*}
   \textstyle
-  \alpha_s &\sim \operatorname{Normal}(0, \sigma_1) &
+  \alpha_c &\sim \operatorname{Normal}(0, \sigma_1) &
   \sigma_1 &\sim \operatorname{LogNormal}(0, 2) \\
-  \alpha_{ps} &\sim \operatorname{Normal}(\alpha_s, \sigma_2) &
+  \alpha_{pc} &\sim \operatorname{Normal}(\alpha_c, \sigma_2) &
   \sigma_2 &\sim \operatorname{LogNormal}(0, 2) \\
-  \beta_f &\sim \operatorname{Logistic}(0,\, \sigma_3) &
-  \sigma_3 &= \frac{1}{200} \\
-  \beta_{ps} &\sim \operatorname{Normal}\Bigl(
-   \sum_f \beta_f X_{sf},\, \sigma_4
+  \beta_f &\sim \operatorname{Laplace}(0,\, \sigma_3) &
+  \sigma_3 &= \frac{1}{2000} \\
+  \beta_{pc} &\sim \operatorname{Normal}\Bigl(
+   \sum_f \beta_f X_{cf},\, \sigma_4
   \Bigr) &
   \sigma_4 &\sim \operatorname{LogNormal}(-4, 2) \\
-  \underline{y_{tps}} &\sim \operatorname{Multinomial}\Bigl(
-    \sum_s y_{tps},\, \operatorname{softmax}(\alpha_{p\blank} + t\beta_{p\blank}/\tau)_s
+  \underline{y_{tp.}} &\sim \operatorname{Multinomial}\Bigl(
+    \sum_c y_{tpc},\, \operatorname{softmax}(\alpha_{p\blank} + t\beta_{p\blank}/\tau)
   \Bigr)
 \end{align*}
 %%%

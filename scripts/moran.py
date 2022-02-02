@@ -24,7 +24,7 @@ def moran(values, distances, lengthscale):
 
 
 # compute moran statistic and do permutation test with given number of permutations
-def permutation_test(values, distances, lengthscale, num_perm=9999):
+def permutation_test(values, distances, lengthscale, num_perm=999):
     values = values - values.mean()
     moran_given = moran(values, distances, lengthscale).item()
     idx = [torch.randperm(distances.size(-1)) for _ in range(num_perm)]
@@ -40,7 +40,7 @@ def main(args):
     df = pd.read_csv("paper/mutations.tsv", sep="\t", index_col=0)
     df = df[["mutation", "Δ log R"]]
     mutations = df.values[:, 0]
-    assert mutations.shape == (2337,)
+    assert mutations.shape == (2904,)
     coefficients = df.values[:, 1] if not args.magnitude else np.abs(df.values[:, 1])
     gene_map = defaultdict(list)
     distance_map = defaultdict(list)
@@ -85,7 +85,7 @@ def main(args):
     columns = ["NumMutations", "GeneSize", "PValue", "Lengthscale"]
     index = list(gene_map.keys()) + ["EntireGenome"] * 2
     result = pd.DataFrame(data=results, index=index, columns=columns)
-    result.to_csv("paper/moran.csv")
+    result.sort_values(["PValue"]).to_csv("paper/moran.csv")
 
 
 if __name__ == "__main__":

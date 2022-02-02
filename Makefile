@@ -63,10 +63,14 @@ analyze: FORCE
 	python scripts/mutrans.py --vary-leaves=9999 --num-steps=2001
 
 backtesting: FORCE
-	python scripts/mutrans.py --backtesting-max-day `seq -s, 150 14 625` --forecast-steps 12
+	python scripts/mutrans.py --backtesting-max-day `seq -s, 150 14 220` --forecast-steps 12
+	python scripts/mutrans.py --backtesting-max-day `seq -s, 220 14 500` --forecast-steps 12
+	python scripts/mutrans.py --backtesting-max-day `seq -s, 500 14 625` --forecast-steps 12
+	python scripts/mutrans.py --backtesting-max-day `seq -s, 626 14 700` --forecast-steps 12
+	python scripts/mutrans.py --backtesting-max-day `seq -s, 710 14 766` --forecast-steps 12
 
 backtesting-short: FORCE
-	python scripts/mutrans.py --backtesting-max-day `seq -s, 500 14 625` --forecast-steps 12
+	python scripts/mutrans.py --backtesting-max-day `seq -s, 500 14 700` --forecast-steps 12
 
 EXCLUDE='.*\.json$$|.*mutrans\.pt$$|.*temp\..*|.*\.[EI](gene|region)=.*\.pt$$|.*__(gene|region|lineage)__.*\.pt$$'
 

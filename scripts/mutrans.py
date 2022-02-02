@@ -249,7 +249,6 @@ def vary_leaves(args, default_config):
 
     # Rank lineages by cut size.
     lineages = mutrans.rank_loo_lineages(dataset)
-    lineages = lineages[: args.vary_leaves]
     logger.info(
         "Leave-one-out predicting growth rate of {} lineages: {}".format(
             len(lineages), ", ".join(lineages)
@@ -274,13 +273,15 @@ def vary_leaves(args, default_config):
             for descendent in descendents[clade]:
                 heldout.append(clade_id[descendent])
             loo_dataset = dataset.copy()
-            loo_dataset["weekly_clades"] = dataset["weekly_clades"].clone()
-            loo_dataset["weekly_clades"][:, :, heldout] = 0
+            weekly_clades = dataset["weekly_clades"].clone()
+            weekly_clades[:, :, heldout] = 0
+            loo_dataset["weekly_clades"] = weekly_clades
+            loo_dataset["sparse_counts"] = mutrans.dense_to_sparse(weekly_clades)
+            loo_dataset["pc_index"] = (
+                weekly_clades.ne(0).any(0).reshape(-1).nonzero(as_tuple=True)[0]
+            )
             loo_num_obs = int(loo_dataset["weekly_clades"].sum())
             logger.info(f"Holding out {num_obs - loo_num_obs}/{num_obs} samples")
-            loo_dataset["sparse_counts"] = mutrans.dense_to_sparse(
-                loo_dataset["weekly_clades"]
-            )
 
         # Run SVI
         logger.info(f"Config: {config}")
@@ -297,7 +298,7 @@ def vary_leaves(args, default_config):
         results[config] = result
 
         # Cleanup
-        del result
+        del loo_dataset, result
         pyro.clear_param_store()
         gc.collect()
 
@@ -556,17 +557,15 @@ if __name__ == "__main__":
     parser.add_argument("--vary-guide-type", help="comma delimited list of guide types")
     parser.add_argument("--vary-num-steps", help="comma delimited list of num_steps")
     parser.add_argument("--vary-holdout", action="store_true")
-    parser.add_argument(
-        "--vary-leaves", type=int, help="min number of samples per held out lineage"
-    )
+    parser.add_argument("--vary-leaves", action="store_true")
     parser.add_argument("--vary-gene", action="store_true")
     parser.add_argument("--vary-nsp", action="store_true")
     parser.add_argument("--gisaid", action="store_true", default=False)
     parser.add_argument("--max-num-clades", default=3000, type=int)
     parser.add_argument("--min-num-mutations", default=1, type=int)
     parser.add_argument("--min-region-size", default=50, type=int)
-    parser.add_argument("-cd", "--cond-data", default="coef_scale=0.1")
-    parser.add_argument("-m", "--model-type", default="reparam")
+    parser.add_argument("-cd", "--cond-data", default="coef_scale=0.05")
+    parser.add_argument("-m", "--model-type", default="reparam-localinit")
     parser.add_argument("-g", "--guide-type", default="full")
     parser.add_argument("-n", "--num-steps", default=10001, type=int)
     parser.add_argument("-s", "--num-samples", default=1000, type=int)
