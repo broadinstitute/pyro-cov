@@ -956,6 +956,12 @@ def log_stats(dataset: dict, result: dict) -> dict:
     mean = result["mean"]["coef"].cpu()
     if not mean.shape:
         return stats  # Work around error in map estimation.
+    logger.info(
+        "Dense data has shape {} totaling {} sequences".format(
+            " x ".join(map(str, dataset["weekly_clades"].shape)),
+            int(dataset["weekly_clades"].sum()),
+        )
+    )
 
     # Statistical significance.
     std = result["std"]["coef"].cpu()
