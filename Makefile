@@ -62,15 +62,24 @@ analyze: FORCE
 	python scripts/mutrans.py --vary-nsp
 	python scripts/mutrans.py --vary-leaves=9999 --num-steps=2001
 
+backtesting-piecewise: FORCE
+	# Generates all the backtesting models piece by piece so that it can be run on a GPU enabled machine
+	python scripts/mutrans.py --backtesting-max-day `seq -s, 150 14 220` --forecast-steps 12
+	python scripts/mutrans.py --backtesting-max-day `seq -s, 220 14 500` --forecast-steps 12
+	python scripts/mutrans.py --backtesting-max-day `seq -s, 500 14 625` --forecast-steps 12
+	python scripts/mutrans.py --backtesting-max-day `seq -s, 626 14 700` --forecast-steps 12
+	python scripts/mutrans.py --backtesting-max-day `seq -s, 710 14 766` --forecast-steps 12
+
+backtesting-complete: FORCE
+	# Run only after running backtesting-piecewise on a machine with > 500GB ram to aggregate results
+	python scripts/mutrans.py --backtesting-max-day `seq -s, 220 14 766` --forecast-steps 12
+
 backtesting: FORCE
-	#python scripts/mutrans.py --backtesting-max-day `seq -s, 150 14 220` --forecast-steps 12
-	#python scripts/mutrans.py --backtesting-max-day `seq -s, 220 14 500` --forecast-steps 12
-	#python scripts/mutrans.py --backtesting-max-day `seq -s, 500 14 625` --forecast-steps 12
-	#python scripts/mutrans.py --backtesting-max-day `seq -s, 626 14 700` --forecast-steps 12
-	#python scripts/mutrans.py --backtesting-max-day `seq -s, 710 14 766` --forecast-steps 12
+	# Maximum possible run in a GPU highmem machine
 	python scripts/mutrans.py --backtesting-max-day `seq -s, 430 14 766` --forecast-steps 12
 
 backtesting-short: FORCE
+	# For quick testing of backtesting code changes
 	python scripts/mutrans.py --backtesting-max-day `seq -s, 500 14 700` --forecast-steps 12
 
 EXCLUDE='.*\.json$$|.*mutrans\.pt$$|.*temp\..*|.*\.[EI](gene|region)=.*\.pt$$|.*__(gene|region|lineage)__.*\.pt$$'
