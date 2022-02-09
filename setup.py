@@ -40,6 +40,7 @@ setup(
         "mappy",
         "protobuf",
         "tqdm",
+        "colorcet",
     ],
     extras_require={
         "test": [
