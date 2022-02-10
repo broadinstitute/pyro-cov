@@ -72,7 +72,7 @@ backtesting-piecewise: FORCE
 
 backtesting-complete: FORCE
 	# Run only after running backtesting-piecewise on a machine with > 500GB ram to aggregate results
-	python scripts/mutrans.py --backtesting-max-day `seq -s, 220 14 766` --forecast-steps 12
+	python scripts/mutrans.py --backtesting-max-day `seq -s, 150 14 766` --forecast-steps 12
 
 backtesting: FORCE
 	# Maximum possible run in a GPU highmem machine
