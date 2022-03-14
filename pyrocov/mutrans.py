@@ -695,7 +695,7 @@ class RegressiveGuide(AutoRegressiveMessenger):
                     constraint=constraints.positive,
                 )
                 self.coef.cov_factor = PyroParam(
-                    torch.empty(n, rank).normal_(0, 1 / rank ** 0.5),
+                    torch.empty(n, rank).normal_(0, 1 / rank**0.5),
                     event_dim=2,
                 )
             scale = self.coef.scale
@@ -1002,7 +1002,7 @@ def log_stats(dataset: dict, result: dict) -> dict:
     true_probs = true / counts
     pred = result["median"]["probs"][: len(true)] + 1e-20  # truncate, avoid nans
     kl = true.mul(true_probs.log() - pred.log()).sum([0, -1])
-    error = (pred - true_probs) * counts ** 0.5  # scaled by Poisson stddev
+    error = (pred - true_probs) * counts**0.5  # scaled by Poisson stddev
     mae = error.abs().mean(0)  # average over time
     mse = error.square().mean(0)  # average over time
     stats["MAE"] = float(mae.sum(-1).mean())  # average over region

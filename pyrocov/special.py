@@ -55,7 +55,7 @@ def log_ndtr_series(value: torch.Tensor, num_terms=3):
     This is based on the TFP implementation.
     """
     # sum = sum_{n=1}^{num_terms} (-1)^{n} (2n - 1)!! / x^{2n}))
-    value_sq = value ** 2
+    value_sq = value**2
     t1 = -0.5 * (math.log(2 * math.pi) + value_sq) - torch.log(-value)
     t2 = torch.zeros_like(value)
     value_even_power = value_sq.clone()
