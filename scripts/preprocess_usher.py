@@ -206,7 +206,7 @@ def load_metadata(args):
         metadata = usher_metadata
         for field, usher_col in metadata.items():
             nextstrain_col = nextstrain_metadata[field]
-            for strain in usher_col.items():
+            for strain in usher_col:
                 genbank = try_parse_genbank(strain)
                 if genbank:
                     value = nextstrain_col.get(genbank)
@@ -277,7 +277,7 @@ def load_metadata(args):
     columns = dict(columns)
     assert columns
     assert len(set(map(len, columns.values()))) == 1, "columns have unequal length"
-    assert sum(skipped.values()) < 2e6, f"suspicious skippage:\n{skipped}"
+    assert sum(skipped.values()) < 3e6, f"suspicious skippage:\n{skipped}"
     logger.info(f"Kept {len(columns['day'])} rows")
     stats["skipped_by_day"] = skipped_by_day
 
