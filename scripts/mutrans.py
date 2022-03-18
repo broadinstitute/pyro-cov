@@ -502,7 +502,7 @@ def main(args):
             {"exclude": {"location": "^Europe"}},
         ]
         for holdout in grid:
-            for coef_scale in args.coef_scale.split(","):
+            for coef_scale in args.vary_coef_scale.split(","):
                 cond_data = f"coef_scale={coef_scale}"
                 configs.append(
                     (
