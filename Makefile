@@ -17,13 +17,13 @@ install-usher:
 
 lint: FORCE
 	flake8 --extend-exclude=pyrocov/external
-	black --extend-exclude=\.ipynb --extend-exclude=pyrocov/external --check .
+	black --extend-exclude='notebooks|pyrocov/external' --check .
 	isort --check --skip=pyrocov/external .
 	python scripts/update_headers.py --check
 	mypy .
 
 format: FORCE
-	black --extend-exclude=\.ipynb --extend-exclude=pyrocov/external .
+	black --extend-exclude='notebooks|pyrocov/external' .
 	isort --skip=pyrocov/external .
 	python scripts/update_headers.py
 

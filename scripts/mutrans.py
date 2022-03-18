@@ -495,6 +495,30 @@ def main(args):
                     holdout_to_hashable(holdout),
                 )
             )
+    elif args.vary_coef_scale:
+        grid = [
+            {},
+            {"include": {"location": "^Europe"}},
+            {"exclude": {"location": "^Europe"}},
+        ]
+        for holdout in grid:
+            for coef_scale in args.coef_scale.split(","):
+                cond_data = f"coef_scale={coef_scale}"
+                configs.append(
+                    (
+                        cond_data,
+                        args.model_type,
+                        args.guide_type,
+                        args.num_steps,
+                        args.learning_rate,
+                        args.learning_rate_decay,
+                        args.clip_norm,
+                        args.rank,
+                        args.forecast_steps,
+                        empty_end_day,
+                        holdout_to_hashable(holdout),
+                    )
+                )
     elif args.backtesting_max_day:
         backtesting(args, default_config)
     else:
@@ -559,6 +583,7 @@ if __name__ == "__main__":
     parser.add_argument("--vary-model-type", help="comma delimited list of model types")
     parser.add_argument("--vary-guide-type", help="comma delimited list of guide types")
     parser.add_argument("--vary-num-steps", help="comma delimited list of num_steps")
+    parser.add_argument("--vary-coef-scale", help="comma delimited list of coef_scale")
     parser.add_argument("--vary-holdout", action="store_true")
     parser.add_argument("--vary-leaves", action="store_true")
     parser.add_argument("--vary-gene", action="store_true")
