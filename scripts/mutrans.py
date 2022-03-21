@@ -437,6 +437,7 @@ def vary_coef_scale(args, default_config):
         result = {
             "mutations": dataset["mutations"],
             "mean": {"coef": result["mean"]["coef"]},
+            "std": {"coef": result["std"]["coef"]},
         }
         result = torch_map(result, device="cpu", dtype=torch.float)  # to save space
         results[config] = result
