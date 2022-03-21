@@ -133,7 +133,7 @@ def _sym_inverse(mat):
     eye = torch.eye(len(mat))
     e = None
     for exponent in [-math.inf] + list(range(-20, 1)):
-        eps = 10**exponent
+        eps = 10 ** exponent
         try:
             u = torch.cholesky(eye * eps + mat)
         except RuntimeError as e:  # noqa F841

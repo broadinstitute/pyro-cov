@@ -120,7 +120,7 @@ class AMSSketcher:
         assert radius >= 1
 
         # Aggregate hash counts.
-        counts = torch.zeros(2**self.bits, dtype=torch.float)
+        counts = torch.zeros(2 ** self.bits, dtype=torch.float)
         ones = torch.ones(()).expand_as(hard_hashes)
         counts.scatter_add_(-1, hard_hashes, ones)
 
@@ -137,7 +137,7 @@ class AMSSketcher:
 
         # Greedily detect clusters, suppressing nearby maxima.
         mask = count_bits(self.bits) <= radius
-        k = torch.arange(2**self.bits)
+        k = torch.arange(2 ** self.bits)
         clusters = []
         while counts.max() > 0:
             c = counts.max(0).indices.item()

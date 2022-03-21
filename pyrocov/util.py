@@ -152,7 +152,7 @@ def generate_colors(num_points=100, lb=0.5, ub=2.5):
     """
     # http://extremelearning.com.au/unreasonable-effectiveness-of-quasirandom-sequences/
     phi3 = 1.2207440846
-    alpha = torch.tensor([1 / phi3**3, 1 / phi3**2, 1 / phi3])
+    alpha = torch.tensor([1 / phi3 ** 3, 1 / phi3 ** 2, 1 / phi3])
     t = torch.arange(float(2 * num_points))
     rgb = alpha.mul(t[:, None]).add(torch.tensor([0.8, 0.2, 0.1])).fmod(1)
     total = rgb.sum(-1)

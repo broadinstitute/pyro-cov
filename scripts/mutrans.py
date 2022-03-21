@@ -390,6 +390,67 @@ def vary_nsp(args, default_config):
         torch.save(results, "results/mutrans.vary_nsp.pt")
 
 
+def vary_coef_scale(args, default_config):
+    grid = [
+        {},
+        {"include": {"location": "^Europe"}},
+        {"exclude": {"location": "^Europe"}},
+    ]
+    configs = []
+    empty_end_day = None
+    for coef_scale in args.vary_coef_scale.split(","):
+        cond_data = f"coef_scale={coef_scale}"
+        for holdout in grid:
+            config = (
+                cond_data,
+                args.model_type,
+                args.guide_type,
+                args.num_steps,
+                args.learning_rate,
+                args.learning_rate_decay,
+                args.clip_norm,
+                args.rank,
+                args.forecast_steps,
+                empty_end_day,
+                holdout_to_hashable(holdout),
+            )
+            configs.append(config)
+
+    # Sequentially fit models.
+    results = {}
+    for config in configs:
+        logger.info(f"Config: {config}")
+
+        # Holdout is the last in the config
+        holdout = hashable_to_holdout(config[-1])
+        # end_day is second from last
+        end_day = config[-2]
+
+        # load dataset
+        dataset = load_data(args, end_day=end_day, **holdout)
+
+        # Run SVI
+        result = fit_svi(args, dataset, *config)
+        mutrans.log_stats(dataset, result)
+
+        # Save only what is needed to generate plots determining coef_scale.
+        result = {
+            "mutations": dataset["mutations"],
+            "mean": {"coef": result["mean"]["coef"]},
+        }
+        result = torch_map(result, device="cpu", dtype=torch.float)  # to save space
+        results[config] = result
+
+        # Cleanup
+        del dataset
+        pyro.clear_param_store()
+        gc.collect()
+
+    if not args.test:
+        logger.info("saving results/mutrans.vary_coef_scale.pt")
+        torch.save(results, "results/mutrans.vary_coef_scale.pt")
+
+
 def main(args):
     """Main Entry Point"""
 
@@ -426,6 +487,8 @@ def main(args):
         return vary_gene(args, default_config)
     if args.vary_nsp:
         return vary_nsp(args, default_config)
+    if args.vary_coef_scale:
+        return vary_coef_scale(args, default_config)
 
     if args.vary_num_steps:
         grid = sorted(int(n) for n in args.vary_num_steps.split(","))
@@ -495,30 +558,6 @@ def main(args):
                     holdout_to_hashable(holdout),
                 )
             )
-    elif args.vary_coef_scale:
-        grid = [
-            {},
-            {"include": {"location": "^Europe"}},
-            {"exclude": {"location": "^Europe"}},
-        ]
-        for holdout in grid:
-            for coef_scale in args.vary_coef_scale.split(","):
-                cond_data = f"coef_scale={coef_scale}"
-                configs.append(
-                    (
-                        cond_data,
-                        args.model_type,
-                        args.guide_type,
-                        args.num_steps,
-                        args.learning_rate,
-                        args.learning_rate_decay,
-                        args.clip_norm,
-                        args.rank,
-                        args.forecast_steps,
-                        empty_end_day,
-                        holdout_to_hashable(holdout),
-                    )
-                )
     elif args.backtesting_max_day:
         backtesting(args, default_config)
     else:

@@ -15,7 +15,7 @@ def force_apart(*X, radius=[0.05, 0.005], iters=10, stepsize=2, xshift=0.01):
         XX = X - X[:, None]
         r = (XX / radius).square().sum(-1, True)
         kernel = r.neg().exp()
-        F = (XX * radius.square().sum() / radius**2 * kernel).sum(0)
+        F = (XX * radius.square().sum() / radius ** 2 * kernel).sum(0)
         F_norm = F.square().sum(-1, True).sqrt().clamp(min=1e-20)
         F *= F_norm.neg().expm1().neg() / F_norm
         F *= stepsize
