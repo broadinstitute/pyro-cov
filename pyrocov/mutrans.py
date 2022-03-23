@@ -492,7 +492,7 @@ def model(dataset, model_type, *, forecast_steps=None):
     reparam = {}
     if "reparam" in model_type:
         reparam["coef"] = LocScaleReparam()
-        if "localrate" in model_type:
+        if "localrate" in model_type or "nofeatures" in model_type:
             reparam["rate_loc"] = LocScaleReparam()
         if "localinit" in model_type:
             reparam["init_loc"] = LocScaleReparam()
@@ -505,6 +505,8 @@ def model(dataset, model_type, *, forecast_steps=None):
         rate_scale = pyro.sample("rate_scale", dist.LogNormal(-4, 2))
         init_scale = pyro.sample("init_scale", dist.LogNormal(0, 2))
         if "localrate" in model_type:
+            rate_loc_scale = pyro.sample("rate_loc_scale", dist.LogNormal(-4, 2))
+        if "nofeatures" in model_type:
             rate_loc_scale = pyro.sample("rate_loc_scale", dist.LogNormal(-4, 2))
         if "localinit" in model_type:
             init_loc_scale = pyro.sample("init_loc_scale", dist.LogNormal(0, 2))
@@ -519,6 +521,10 @@ def model(dataset, model_type, *, forecast_steps=None):
             if "localrate" in model_type:
                 rate_loc = pyro.sample(
                     "rate_loc", dist.Normal(0.01 * coef @ features.T, rate_loc_scale)
+                )  # [C]
+            elif "nofeatures" in model_type:
+                rate_loc = pyro.sample(
+                    "rate_loc", dist.Normal(torch.zeros((C,)), rate_loc_scale.expand(C))
                 )  # [C]
             else:
                 rate_loc = pyro.deterministic(

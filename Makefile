@@ -3,12 +3,12 @@ SHELL := /bin/bash
 ###########################################################################
 # installation
 
-install: install-usher FORCE
+install: FORCE
 	pip install -e .[test]
 
 install-pangolin:
 	conda install -y -c bioconda -c conda-forge -c defaults pangolin
-
+	
 install-usher:
 	conda install -y -c bioconda -c conda-forge -c defaults usher
 
@@ -64,11 +64,11 @@ analyze: FORCE
 
 backtesting-piecewise: FORCE
 	# Generates all the backtesting models piece by piece so that it can be run on a GPU enabled machine
-	python scripts/mutrans.py --backtesting-max-day `seq -s, 150 14 220` --forecast-steps 12
-	python scripts/mutrans.py --backtesting-max-day `seq -s, 220 14 500` --forecast-steps 12
-	python scripts/mutrans.py --backtesting-max-day `seq -s, 500 14 625` --forecast-steps 12
-	python scripts/mutrans.py --backtesting-max-day `seq -s, 626 14 700` --forecast-steps 12
-	python scripts/mutrans.py --backtesting-max-day `seq -s, 710 14 766` --forecast-steps 12
+	python scripts/mutrans.py --backtesting-max-day `seq -s, 150 14 220` --forecast-steps 12 --model-type reparam-localinit-nofeatures
+	python scripts/mutrans.py --backtesting-max-day `seq -s, 220 14 500` --forecast-steps 12 --model-type reparam-localinit-nofeatures
+	python scripts/mutrans.py --backtesting-max-day `seq -s, 500 14 625` --forecast-steps 12 --model-type reparam-localinit-nofeatures
+	python scripts/mutrans.py --backtesting-max-day `seq -s, 626 14 700` --forecast-steps 12 --model-type reparam-localinit-nofeatures
+	python scripts/mutrans.py --backtesting-max-day `seq -s, 710 14 766` --forecast-steps 12 --model-type reparam-localinit-nofeatures
 
 backtesting-complete: FORCE
 	# Run only after running backtesting-piecewise on a machine with > 500GB ram to aggregate results
