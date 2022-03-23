@@ -108,11 +108,19 @@ except Exception as e:
 
 DECOMPRESS = PANGOLIN_ALIASES.copy()
 COMPRESS: Dict[str, str] = {}
+RE_PANGOLIN = re.compile(r"^[A-Z]+(\.[0-9]+)*$")
+
+
+def is_pango_lineage(name: str) -> bool:
+    """
+    Returns whether the name looks like a PANGO lineage e.g. "AY.4.2".
+    """
+    return RE_PANGOLIN.match(name) is not None
 
 
 def decompress(name: str) -> str:
     """
-    Decompress an alias like C.10 to a full lineage like B.1.1.1.10.
+    Decompress an alias like C.10 to a full lineage like "B.1.1.1.10".
     """
     if name.startswith("fine"):
         return name
@@ -134,7 +142,7 @@ def decompress(name: str) -> str:
 
 def compress(name: str) -> str:
     """
-    Compress a full lineage like B.1.1.1.10 to an alias like C.10.
+    Compress a full lineage like "B.1.1.1.10" to an alias like "C.10".
     """
     if name.startswith("fine"):
         return name
@@ -151,7 +159,7 @@ def compress(name: str) -> str:
             if name == value or name.startswith(value + "."):
                 result = key + name[len(value) :]
                 break
-    assert re.match(r"^[A-Z]+(\.[0-9]+)*$", result), result
+    assert is_pango_lineage(result), result
     COMPRESS[name] = result
     return result
 

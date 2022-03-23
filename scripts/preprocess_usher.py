@@ -34,7 +34,10 @@ DATE_FORMATS = {7: "%Y-%m", 10: "%Y-%m-%d"}
 def try_parse_date(string):
     fmt = DATE_FORMATS.get(len(string))
     if fmt is not None:
-        return datetime.datetime.strptime(string, fmt)
+        try:
+            return datetime.datetime.strptime(string, fmt)
+        except ValueError:
+            return
 
 
 def try_parse_genbank(strain):
@@ -370,7 +373,7 @@ def extract_features(
     del columns
 
     # Convert from nucleotide mutations to amino acid mutations.
-    nuc_mutations_by_clade = load_mutation_tree(pruned_tree_filename)
+    nuc_mutations_by_clade = load_mutation_tree(pruned_tree_filename)[0]
     assert nuc_mutations_by_clade
     aa_mutations_by_clade = {
         clade: nuc_mutations_to_aa_mutations(mutations)

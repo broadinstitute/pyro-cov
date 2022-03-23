@@ -134,7 +134,7 @@ def refine_mutation_tree(filename_in: str, filename_out: str) -> Dict[str, str]:
     fine_to_coarse = {}
     for clade, meta in metadata.items():
         fine = clade_to_fine[clade]
-        if meta.clade:
+        if meta.clade and pangolin.is_pango_lineage(meta.clade):
             fine_to_coarse[fine] = pangolin.compress(meta.clade)
         meta.clade = fine if clade is fine_to_clade[fine] else ""
     # Propagate basal clade metadata downward.
