@@ -26,7 +26,7 @@ features_alpha = np.array(features_alpha, dtype=bool)
 print("features_alpha", features_alpha.sum())
 
 
-days = list(range(487 + 7 * 7, 487 + 9 * 7, 7))
+days = list(range(536 + 7 * 0, 536 + 1 * 7, 7))
 print("days: ", days)
 alpha_feature_counts = []
 alpha_sequence_counts = []
@@ -44,10 +44,11 @@ alpha_tuples = []
 
 for day, fc_alpha, sc_alpha in zip(days, alpha_feature_counts, alpha_sequence_counts):
     f = 'mutrans.svi.3000.1.50.coef_scale=0.05.reparam-localinit.full.10001.0.05.0.1.10.0.200.0.{}..pt'.format(day)
+    f = 'mutrans.svi.3000.1.50.coef_scale=0.05.reparam-localinit.full.7.0.05.0.1.10.0.200.0.{}..pt'.format(day)
     fit = torch.load(results_dir + f, map_location=torch.device('cpu'))
 
     rate_mean = fit['median']['rate'].data.cpu()[:, alpha].flatten()
-    rate_std = fit['std']['rate'].data.cpu()[:, alpha].flatten()
+    rate_std = fit['std']['rate'].data.cpu()[:, alpha].flatten().clamp(min=1.0e-10)
     delta = rate_mean.max() - rate_mean.min()
     print('delta', delta.exp(), rate_mean.max().exp(),  rate_mean.min().exp())
     rates = torch.distributions.Normal(rate_mean, rate_std).sample(sample_shape=(100,)).exp().flatten()

@@ -501,7 +501,7 @@ def model(dataset, model_type, *, forecast_steps=None):
     with poutine.reparam(config=reparam):
 
         # Sample global random variables.
-        coef_scale = pyro.sample("coef_scale", dist.LogNormal(-4, 2))
+        #coef_scale = pyro.sample("coef_scale", dist.LogNormal(-4, 2))
         rate_scale = pyro.sample("rate_scale", dist.LogNormal(-4, 2))
         init_scale = pyro.sample("init_scale", dist.LogNormal(0, 2))
         if "localrate" in model_type:
@@ -512,18 +512,21 @@ def model(dataset, model_type, *, forecast_steps=None):
         # Assume relative growth rate depends strongly on mutations and weakly
         # on clade and place. Assume initial infections depend strongly on
         # clade and place.
-        coef = pyro.sample(
-            "coef", dist.Laplace(torch.zeros(F), coef_scale).to_event(1)
-        )  # [F]
+        #coef = pyro.sample(
+        #    "coef", dist.Laplace(torch.zeros(F), coef_scale).to_event(1)
+        #)  # [F]
         with clade_plate:
-            if "localrate" in model_type:
-                rate_loc = pyro.sample(
-                    "rate_loc", dist.Normal(0.01 * coef @ features.T, rate_loc_scale)
-                )  # [C]
-            else:
-                rate_loc = pyro.deterministic(
-                    "rate_loc", 0.01 * coef @ features.T
-                )  # [C]
+            #if "localrate" in model_type:
+            #    rate_loc = pyro.sample(
+            #        "rate_loc", dist.Normal(0.01 * coef @ features.T, rate_loc_scale)
+            #    )  # [C]
+            #else:
+            #    rate_loc = pyro.deterministic(
+            #        "rate_loc", 0.01 * coef @ features.T
+            #    )  # [C]
+            rate_loc = pyro.deterministic(
+                "rate_loc", init_loc_scale.new_zeros(C)
+            )  # [C]
             if "localinit" in model_type:
                 init_loc = pyro.sample(
                     "init_loc", dist.Normal(0, init_loc_scale)
@@ -953,27 +956,29 @@ def log_stats(dataset: dict, result: dict) -> dict:
     stats = {k: float(v) for k, v in result["median"].items() if v.numel() == 1}
     stats["loss"] = float(np.median(result["losses"][-100:]))
     mutations = dataset["mutations"]
-    mean = result["mean"]["coef"].cpu()
-    if not mean.shape:
-        return stats  # Work around error in map estimation.
 
-    # Statistical significance.
-    std = result["std"]["coef"].cpu()
-    sig = mean.abs() / std
-    logger.info(f"|μ|/σ [median,max] = [{sig.median():0.3g},{sig.max():0.3g}]")
-    stats["|μ|/σ median"] = sig.median()
-    stats["|μ|/σ max"] = sig.max()
+    if 'coef' in result['mean']:
+        mean = result["mean"]["coef"].cpu()
+        if not mean.shape:
+            return stats  # Work around error in map estimation.
 
-    # Effects of individual mutations.
-    for name in ["S:D614G", "S:N501Y", "S:E484K", "S:L452R"]:
-        if name not in mutations:
-            continue
-        i = mutations.index(name)
-        m = mean[i] * 0.01
-        s = std[i] * 0.01
-        logger.info(f"ΔlogR({name}) = {m:0.3g} ± {s:0.2f}")
-        stats[f"ΔlogR({name}) mean"] = m
-        stats[f"ΔlogR({name}) std"] = s
+        # Statistical significance.
+        std = result["std"]["coef"].cpu()
+        sig = mean.abs() / std
+        logger.info(f"|μ|/σ [median,max] = [{sig.median():0.3g},{sig.max():0.3g}]")
+        stats["|μ|/σ median"] = sig.median()
+        stats["|μ|/σ max"] = sig.max()
+
+        # Effects of individual mutations.
+        for name in ["S:D614G", "S:N501Y", "S:E484K", "S:L452R"]:
+            if name not in mutations:
+                continue
+            i = mutations.index(name)
+            m = mean[i] * 0.01
+            s = std[i] * 0.01
+            logger.info(f"ΔlogR({name}) = {m:0.3g} ± {s:0.2f}")
+            stats[f"ΔlogR({name}) mean"] = m
+            stats[f"ΔlogR({name}) std"] = s
 
     # Growth rates of individual clades.
     rate = quotient_central_moments(
