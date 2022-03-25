@@ -491,9 +491,9 @@ def model(dataset, model_type, *, forecast_steps=None):
     # Configure reparametrization (which does not affect model density).
     reparam = {}
     if "reparam" in model_type:
-        reparam["coef"] = LocScaleReparam()
-        if "localrate" in model_type:
-            reparam["rate_loc"] = LocScaleReparam()
+        #reparam["coef"] = LocScaleReparam()
+        #if "localrate" in model_type:
+        reparam["rate_loc"] = LocScaleReparam()
         if "localinit" in model_type:
             reparam["init_loc"] = LocScaleReparam()
         reparam["pc_rate"] = LocScaleReparam()
@@ -504,8 +504,8 @@ def model(dataset, model_type, *, forecast_steps=None):
         #coef_scale = pyro.sample("coef_scale", dist.LogNormal(-4, 2))
         rate_scale = pyro.sample("rate_scale", dist.LogNormal(-4, 2))
         init_scale = pyro.sample("init_scale", dist.LogNormal(0, 2))
-        if "localrate" in model_type:
-            rate_loc_scale = pyro.sample("rate_loc_scale", dist.LogNormal(-4, 2))
+        #if "localrate" in model_type:
+        rate_loc_scale = pyro.sample("rate_loc_scale", dist.LogNormal(-4, 2))
         if "localinit" in model_type:
             init_loc_scale = pyro.sample("init_loc_scale", dist.LogNormal(0, 2))
 
@@ -524,9 +524,10 @@ def model(dataset, model_type, *, forecast_steps=None):
             #    rate_loc = pyro.deterministic(
             #        "rate_loc", 0.01 * coef @ features.T
             #    )  # [C]
-            rate_loc = pyro.deterministic(
-                "rate_loc", init_loc_scale.new_zeros(C)
-            )  # [C]
+            #rate_loc = pyro.param(
+            #    "param_rate_loc", init_loc_scale.new_zeros(C)
+            #)  # [C]
+            rate_loc = pyro.sample("rate_loc", dist.Normal(0, rate_loc_scale))
             if "localinit" in model_type:
                 init_loc = pyro.sample(
                     "init_loc", dist.Normal(0, init_loc_scale)
@@ -635,6 +636,7 @@ class InitLocFn:
             "rate_decentered",
             "pc_rate",
             "pc_rate_decentered",
+            "global_rate_scale",
         ):
             return torch.rand(shape).sub_(0.5).mul_(0.01)
         if name == "coef_loc":
