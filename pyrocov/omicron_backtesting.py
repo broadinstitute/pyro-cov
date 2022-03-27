@@ -29,15 +29,20 @@ features_ba2 = features[ba2].sum(0).clamp(max=1.0).data.numpy()
 features_ba2 = np.array(features_ba2, dtype=bool)
 
 
-days = list(range(710, 766 + 7, 7))
+days = list(range(710, 710 + 7 * 9, 7))
+print("days", days)
 ba1_feature_counts = []
 ba2_feature_counts = []
 ba1_sequence_counts = []
 ba2_sequence_counts = []
 
 for day in days:
-    f = 'mutrans.data.single.3000.1.50.{}.pt'.format(day)
-    data = torch.load(results_dir + f, map_location='cpu')
+    try:
+        f = 'mutrans.data.single.3000.1.50.{}.pt'.format(day)
+        data = torch.load(results_dir + f, map_location='cpu')
+    except Exception as e:
+        print(e)
+        break
     weekly_clades = data['weekly_clades'].sum([0, 1])
     feature_counts = weekly_clades.data.numpy() @ features.data.numpy()
     ba1_feature_counts.append( feature_counts[features_ba1] )
@@ -51,21 +56,36 @@ ba2_tuples = []
 
 for day, fc_ba1, fc_ba2, sc_ba1, sc_ba2, in zip(days, ba1_feature_counts, ba2_feature_counts,
                                                 ba1_sequence_counts, ba2_sequence_counts):
-    f = 'mutrans.svi.3000.1.50.coef_scale=0.05.reparam-localinit.full.10001.0.05.0.1.10.0.200.12.{}..pt'.format(day)
-    fit = torch.load(results_dir + f, map_location=torch.device('cpu'))
+    f = 'mutrans.svi.3000.1.50.coef_scale=0.05.reparam-localinit.full.10001.0.05.0.1.10.0.200.0.{}..pt'.format(day)
 
-    rate_mean = fit['median']['rate'].data.cpu()[:, ba1].flatten()
-    rate_std = fit['std']['rate'].data.cpu()[:, ba1].flatten()
+    try:
+        fit = torch.load(results_dir + f, map_location=torch.device('cpu'))
+    except Exception as e:
+        print(e)
+        break
+
+    if 'rate_loc' in fit['median']:
+        rate_mean = fit['median']['rate_loc'].data.cpu()[ba1].flatten()
+        rate_std = fit['std']['rate_loc'].data.cpu()[ba1].flatten()
+    else:
+        rate_mean = fit['median']['rate'].data.cpu()[:, ba1].flatten()
+        rate_std = fit['std']['rate'].data.cpu()[:, ba1].flatten()
     rates = torch.distributions.Normal(rate_mean, rate_std).sample(sample_shape=(100,)).exp().flatten()
     R_mean, R_std = rates.mean().item(), rates.std().item()
+
     t = (day, R_mean, R_mean - 1.96 * R_std, R_mean + 1.96 * R_std, sc_ba1, fc_ba1.tolist())
     print("ba1", t[:5])
     ba1_tuples.append(t)
 
-    rate_mean = fit['median']['rate'].data.cpu()[:, ba2].flatten()
-    rate_std = fit['std']['rate'].data.cpu()[:, ba2].flatten()
+    if 'rate_loc' in fit['median']:
+        rate_mean = fit['median']['rate_loc'].data.cpu()[ba2].flatten()
+        rate_std = fit['std']['rate_loc'].data.cpu()[ba2].flatten()
+    else:
+        rate_mean = fit['median']['rate'].data.cpu()[:, ba2].flatten()
+        rate_std = fit['std']['rate'].data.cpu()[:, ba2].flatten()
     rates = torch.distributions.Normal(rate_mean, rate_std).sample(sample_shape=(100,)).exp().flatten()
     R_mean, R_std = rates.mean().item(), rates.std().item()
+
     t = (day, R_mean, R_mean - 1.96 * R_std, R_mean + 1.96 * R_std, sc_ba2, fc_ba2.tolist())
     print("ba2", t[:5])
     ba2_tuples.append(t)
