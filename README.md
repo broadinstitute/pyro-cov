@@ -6,7 +6,7 @@
 
 ![Overview](paper/schematic_overview.png)
 
-Supporting material for the paper ["Analysis of 6.4 million SARS-CoV-2 genomes identifies mutations associated with fitness"](https://www.medrxiv.org/content/10.1101/2021.09.07.21263228v2). Figures and supplementary data for that paper are in the [paper/](paper/) directory.
+Supporting material for the paper ["Analysis of 6.4 million SARS-CoV-2 genomes identifies mutations associated with fitness"](https://www.science.org/doi/10.1126/science.abm1208) ([bioRxiv](https://www.medrxiv.org/content/10.1101/2021.09.07.21263228v2)). Figures and supplementary data for that paper are in the [paper/](paper/) directory.
 
 This is open source, but we are not intending to support code for use by outside groups. To use outputs of this model, we recommend ingesting the tables [strains.tsv](paper/strains.tsv) and [mutations.tsv](paper/mutations.tsv).
 
