@@ -304,7 +304,7 @@ def prune_tree(args, max_num_clades, coarse_to_fine, nodename_to_count):
     for clade in tree.find_clades():
         count = nodename_to_count[clade.name]
         cum_weights[clade] = count
-        mrca_weights[clade] = count ** 2
+        mrca_weights[clade] = count**2
 
     # Add weights of MRCA pairs.
     reverse_clades = list(tree.find_clades())
@@ -318,7 +318,7 @@ def prune_tree(args, max_num_clades, coarse_to_fine, nodename_to_count):
             )
     num_samples = sum(nodename_to_count.values())
     assert cum_weights[tree.root] == num_samples
-    assert sum(mrca_weights.values()) == num_samples ** 2
+    assert sum(mrca_weights.values()) == num_samples**2
 
     # Aggregate among clones to basal representative.
     weights = defaultdict(float)
@@ -328,7 +328,7 @@ def prune_tree(args, max_num_clades, coarse_to_fine, nodename_to_count):
         assert isinstance(meta.clade, str)
         if meta.clade:
             weights[meta.clade] = mrca_weights.pop(parent)
-    assert sum(weights.values()) == num_samples ** 2
+    assert sum(weights.values()) == num_samples**2
 
     # To ensure pango lineages remain distinct, set their weights to infinity.
     for fine in coarse_to_fine.values():
