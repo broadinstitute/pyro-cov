@@ -448,7 +448,7 @@ if __name__ == "__main__":
     parser.add_argument("--tree-file-out", default="results/lineageTree.fine.pb")
     parser.add_argument("--stats-file-out", default="results/stats.pkl")
     parser.add_argument("--recover-missing-usa-state", action="store_true")
-    parser.add_argument("-s", "--max-skippage", type=int, default=1e7)
+    parser.add_argument("-s", "--max-skippage", type=float, default=1e7)
     parser.add_argument("-c", "--max-num-clades", default="2000,3000,5000,10000")
     parser.add_argument("--start-date", default=START_DATE)
     args = parser.parse_args()
