@@ -13,6 +13,7 @@ echo " Arg 1 - date (YYYY-mm_dd)"
 echo " Arg 2 - Angie's tree url "
 echo " Arg 3 - metadata subset  "
 echo "--------------------------------------------------------"
+fi
 
 d=$1
 url=$2
@@ -42,9 +43,10 @@ wget -O "results/gisaid/$usher_file" "$usher_url"
 # Process phylogenies
 echo "Processing phylogenies"
 mfb="metadata_$d"
-ipython generate_epiToPublicAndDate.py --metadata-file-basename mfb
-python scripts/preprocess_usher.py --tree-file-in results/gisaid/"$usher_file" --gisaid-metadata-file-in results/gisaid/"$mfb".tsv.gz
+python generate_epiToPublicAndDate.py --metadata-file-basename $mfb
+#python scripts/preprocess_usher.py --tree-file-in results/gisaid/"$usher_file" --gisaid-metadata-file-in results/gisaid/"$mfb".tsv.gz
 
 # Fit model
-echo "Fitting model"
-nohup python scripts/mutrans.py > results/nohup.out 2>&1 &
+#echo "Fitting model"
+#nohup python scripts/mutrans.py > results/nohup.out 2>&1 &
+
