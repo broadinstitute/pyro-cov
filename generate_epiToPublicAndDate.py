@@ -11,7 +11,7 @@ import argparse
 
 parser = argparse.ArgumentParser(description="generate_epiToPublicAndDate")
 parser.add_argument("--metadata-file-basename")
-
+args = parser.parse_args()
 
 
 
@@ -61,7 +61,7 @@ epi_map.to_csv("results/gisaid/epiToPublicAndDate.latest", header=False, sep="\t
 # In[9]:
 
 
-get_ipython().run_line_magic('pinfo', 'pd.DataFrame.to_csv')
+# get_ipython().run_line_magic('pinfo', 'pd.DataFrame.to_csv')
 
 
 # In[ ]:
