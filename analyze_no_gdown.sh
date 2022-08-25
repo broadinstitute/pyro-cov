@@ -14,9 +14,9 @@ echo " Arg 2 - Angie's tree url "
 echo " Arg 3 - metadata subset  "
 echo "--------------------------------------------------------"
 
-d = $1
-url = $2
-subset = $3
+d=$1
+url=$2
+subset=$3
 
 # Create and link directories
 echo "Creating and linking directories"
@@ -29,7 +29,7 @@ ln -sf metadata_subsets/$subset/results.$d results
 # Download Angie's tree
 echo "Downloading UShER tree"
 # mkdir results/gisaid && cd results/gisaid
-usher_url = $url
+usher_url=$url
 usher_file=$(basename "$usher_url")
 wget -O "results/gisaid/$usher_file" "$usher_url"
 
@@ -41,7 +41,7 @@ wget -O "results/gisaid/$usher_file" "$usher_url"
 
 # Process phylogenies
 echo "Processing phylogenies"
-mfb = "metadata_$d"
+mfb="metadata_$d"
 ipython generate_epiToPublicAndDate.py --metadata-file-basename mfb
 python scripts/preprocess_usher.py --tree-file-in results/gisaid/"$usher_file" --gisaid-metadata-file-in results/gisaid/"$mfb".tsv.gz
 
