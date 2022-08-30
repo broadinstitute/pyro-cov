@@ -17,14 +17,19 @@ echo "--------------------------------------------------------"
 
 declare -a series=(\
 # "2022-02-10 BA.2.12.1_wk0" \
-"2022-02-17 https://hgwdev.gi.ucsc.edu/~angie/9620db8/gisaidAndPublic.2022-02-17.masked.pb.gz BA.2.12.2_wk1 " \
+"2022-02-17 https://hgwdev.gi.ucsc.edu/~angie/9620db8/gisaidAndPublic.2022-02-17.masked.pb.gz BA.2.12.1_wk1 " \
 "2022-02-24 https://hgwdev.gi.ucsc.edu/~angie/6bca5eb/gisaidAndPublic.2022-02-23.masked.pb.gz BA.2.12.1_wk2 " \
 "2022-03-10 https://hgwdev.gi.ucsc.edu/~angie/14b4e4e/gisaidAndPublic.2022-03-10.masked.pb.gz BA.2.12.1_wk4 " \
 )
 
-for args in "${series[@]}"; do
-  echo Running on $args
-  source analyze_no_gdown.sh $args
+for row in "${series[@]}"; do
+  args=($row)
+  d=${args[0]}
+  url=${args[1]}
+  subset=${args[2]}
+  echo analyze_no_gdown.sh $d $url $subset
+  source analyze_no_gdown.sh $d $url $subset
+  wait
   echo "----------------------------------------------------------"
 done
 
