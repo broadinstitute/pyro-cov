@@ -44,9 +44,9 @@ wget -O "results/gisaid/$usher_file" "$usher_url"
 echo "Processing phylogenies"
 mfb="metadata_$d"
 python generate_epiToPublicAndDate.py --metadata-file-basename $mfb
-#python scripts/preprocess_usher.py --tree-file-in results/gisaid/"$usher_file" --gisaid-metadata-file-in results/gisaid/"$mfb".tsv.gz
+python scripts/preprocess_usher.py --tree-file-in results/gisaid/"$usher_file" --gisaid-metadata-file-in results/gisaid/"$mfb".tsv.gz
 
 # Fit model
-#echo "Fitting model"
-#nohup python scripts/mutrans.py > results/nohup.out 2>&1 &
+echo "Fitting model in background - progress in results/nohup.out"
+nohup python scripts/mutrans.py > results/nohup.out 2>&1 &
 
