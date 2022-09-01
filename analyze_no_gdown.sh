@@ -6,7 +6,7 @@
 # Assume that GISAID metadata files have already been downloaded
 
 
-if [[ "#$" -ne 2 ]]; then
+if [[ "#$" -ne 3 ]]; then
 echo ""
 echo "--------------------------------------------------------"
 echo " Arg 1 - date (YYYY-mm_dd)"

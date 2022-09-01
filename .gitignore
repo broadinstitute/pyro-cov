@@ -5,6 +5,7 @@ nextclade_results/
 /data
 /results
 /results.*
+/metadata_subsets/results.*
 *.swp
 temp.*
 
