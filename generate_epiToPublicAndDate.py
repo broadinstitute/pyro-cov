@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 #!/usr/bin/env python
 # coding: utf-8
 
@@ -65,8 +66,5 @@ epi_map.to_csv("results/gisaid/epiToPublicAndDate.latest", header=False, sep="\t
 
 
 # In[ ]:
-
-
-
 
 
