@@ -22,7 +22,7 @@ def subset(voc_date_first_seen):
                 date = str(datetime.strptime(voc_date_first_seen[voc], '%Y-%m-%d') + timedelta(weeks= wk))[:10]
                 print(date)
                 gisaid_i = gisaid[gisaid["Submission date"] >= date]
-                filepath = "epochs/"+voc+"_wk"+str(wk)+"/results."+date+"/gisaid"
+                filepath = "epochs/"+voc+"/results."+date+"/gisaid"
                 os.makedirs(filepath)
                 gisaid_i.to_csv(filepath+"/metadata_"+date+".tsv.gz", 
                                 sep = '\t',
