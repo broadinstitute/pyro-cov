@@ -7,12 +7,18 @@
 
 
 import pandas as pd
+import argparse
+
+parser = argparse.ArgumentParser(description="generate_epiToPublicAndDate")
+parser.add_argument("--metadata-file-basename")
+args = parser.parse_args()
+
 
 
 # In[2]:
 
-
-gisaid_meta = pd.read_csv("results/gisaid/metadata_2022_08_08.tsv.gz", sep="\t")
+filename = "results/gisaid/" + args.metadata_file_basename + ".tsv.gz"
+gisaid_meta = pd.read_csv(filename, sep="\t")
 
 
 # In[3]:
@@ -55,12 +61,7 @@ epi_map.to_csv("results/gisaid/epiToPublicAndDate.latest", header=False, sep="\t
 # In[9]:
 
 
-get_ipython().run_line_magic('pinfo', 'pd.DataFrame.to_csv')
+# get_ipython().run_line_magic('pinfo', 'pd.DataFrame.to_csv')
 
 
 # In[ ]:
-
-
-
-
-
