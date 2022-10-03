@@ -98,7 +98,7 @@ PANGOLIN_RECOMBINANTS = {
     "XZ": ["BA.2*", "BA.1*"],
     "XAA": ["BA.1*", "BA.2*"],
     "XAB": ["BA.1*", "BA.2*"],
-    "XAC": ["BA.2*", "BA.1*","BA.2*"],
+    "XAC": ["BA.2*", "BA.1*", "BA.2*"],
     "XAD": ["BA.2*", "BA.1*"],
     "XAE": ["BA.2*", "BA.1*"],
     "XAF": ["BA.1*", "BA.2*"],
@@ -119,7 +119,7 @@ PANGOLIN_RECOMBINANTS = {
     "XAZ": ["BA.2.5", "BA.5", "BA.2.5"],
     "XBA": ["AY.45", "BA.2"],
     "XBB": ["BJ.1", "BM.1.1.1"],
-    "XBC": ["BA.2*", "B.1.617.2*", "BA.2*","B.1.617.2*"]
+    "XBC": ["BA.2*", "B.1.617.2*", "BA.2*", "B.1.617.2*"]
 }
 
 # From https://www.who.int/en/activities/tracking-SARS-CoV-2-variants/
