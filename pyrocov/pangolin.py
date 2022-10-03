@@ -73,52 +73,52 @@ PANGOLIN_ALIASES = {
 }
 
 PANGOLIN_RECOMBINANTS = {
-    "XA": ["B.1.1.7","B.1.177"],
-    "XB": ["B.1.634","B.1.631"],
-    "XC": ["AY.29","B.1.1.7"],
-    "XD": ["B.1.617.2*","BA.1*"],
-    "XE": ["BA.1*","BA.2*"],
-    "XF": ["B.1.617.2*","BA.1*"],
-    "XG": ["BA.1*","BA.2*"],
-    "XH": ["BA.1*","BA.2*"],
-    "XJ": ["BA.1*","BA.2*"],
-    "XK": ["BA.1*","BA.2*"],
-    "XL": ["BA.1*","BA.2*"],
-    "XM": ["BA.1.1*","BA.2*"],
-    "XN": ["BA.1*","BA.2*"],
-    "XP": ["BA.1.1*","BA.2*"],
-    "XQ": ["BA.1.1*","BA.2*"],
-    "XR": ["BA.1.1*","BA.2*"],
-    "XS": ["B.1.617.2*","BA.1.1*"],
-    "XT": ["BA.2*","BA.1*"],
-    "XU": ["BA.1*","BA.2*"],
-    "XV": ["BA.1*","BA.2*"],
-    "XW": ["BA.1*","BA.2*"],
-    "XY": ["BA.1*","BA.2*"],
-    "XZ": ["BA.2*","BA.1*"],
-    "XAA": ["BA.1*","BA.2*"],
-    "XAB": ["BA.1*","BA.2*"],
-    "XAC": ["BA.2*","BA.1*","BA.2*"],
-    "XAD": ["BA.2*","BA.1*"],
-    "XAE": ["BA.2*","BA.1*"],
-    "XAF": ["BA.1*","BA.2*"],
-    "XAG": ["BA.1*","BA.2*"],
-    "XAH": ["BA.2*","BA.1*"],
-    "XAJ": ["BA.2.12.1*","BA.4*"],
-    "XAK": ["BA.2*","BA.1*","BA.2*"],
-    "XAL": ["BA.1*","BA.2*"],
-    "XAM": ["BA.1.1","BA.2.9"],
-    "XAN": ["BA.2*","BA.5.1"],
-    "XAP": ["BA.2*","BA.1*"],
-    "XAQ": ["BA.1*","BA.2*"],
-    "XAR": ["BA.1*","BA.2*"],
-    "XAS": ["BA.5*","BA.2*"],
-    "XAT": ["BA.2.3.13","BA.1*"],
-    "XAU": ["BA.1.1*","BA.2.9*"],
-    "XAV": ["BA.2*","BA.5*"],
-    "XAZ": ["BA.2.5","BA.5","BA.2.5"],
-    "XBA": ["AY.45","BA.2"],
-    "XBB": ["BJ.1","BM.1.1.1"],
+    "XA": ["B.1.1.7","B.1.177"], 
+    "XB": ["B.1.634","B.1.631"], 
+    "XC": ["AY.29","B.1.1.7"], 
+    "XD": ["B.1.617.2*","BA.1*"], 
+    "XE": ["BA.1*","BA.2*"], 
+    "XF": ["B.1.617.2*","BA.1*"], 
+    "XG": ["BA.1*","BA.2*"], 
+    "XH": ["BA.1*","BA.2*"], 
+    "XJ": ["BA.1*","BA.2*"], 
+    "XK": ["BA.1*","BA.2*"], 
+    "XL": ["BA.1*","BA.2*"], 
+    "XM": ["BA.1.1*","BA.2*"], 
+    "XN": ["BA.1*","BA.2*"], 
+    "XP": ["BA.1.1*","BA.2*"], 
+    "XQ": ["BA.1.1*","BA.2*"], 
+    "XR": ["BA.1.1*","BA.2*"], 
+    "XS": ["B.1.617.2*","BA.1.1*"], 
+    "XT": ["BA.2*","BA.1*"], 
+    "XU": ["BA.1*","BA.2*"], 
+    "XV": ["BA.1*","BA.2*"], 
+    "XW": ["BA.1*","BA.2*"], 
+    "XY": ["BA.1*","BA.2*"], 
+    "XZ": ["BA.2*","BA.1*"], 
+    "XAA": ["BA.1*","BA.2*"], 
+    "XAB": ["BA.1*","BA.2*"], 
+    "XAC": ["BA.2*","BA.1*","BA.2*"], 
+    "XAD": ["BA.2*","BA.1*"], 
+    "XAE": ["BA.2*","BA.1*"], 
+    "XAF": ["BA.1*","BA.2*"], 
+    "XAG": ["BA.1*","BA.2*"], 
+    "XAH": ["BA.2*","BA.1*"], 
+    "XAJ": ["BA.2.12.1*","BA.4*"], 
+    "XAK": ["BA.2*","BA.1*","BA.2*"], 
+    "XAL": ["BA.1*","BA.2*"], 
+    "XAM": ["BA.1.1","BA.2.9"], 
+    "XAN": ["BA.2*","BA.5.1"], 
+    "XAP": ["BA.2*","BA.1*"], 
+    "XAQ": ["BA.1*","BA.2*"], 
+    "XAR": ["BA.1*","BA.2*"], 
+    "XAS": ["BA.5*","BA.2*"], 
+    "XAT": ["BA.2.3.13","BA.1*"], 
+    "XAU": ["BA.1.1*","BA.2.9*"], 
+    "XAV": ["BA.2*","BA.5*"], 
+    "XAZ": ["BA.2.5","BA.5","BA.2.5"], 
+    "XBA": ["AY.45","BA.2"], 
+    "XBB": ["BJ.1","BM.1.1.1"], 
     "XBC": ["BA.2*","B.1.617.2*","BA.2*","B.1.617.2*"]
 }
 
@@ -147,11 +147,12 @@ def update_aliases():
     repo = os.path.expanduser(PANGOLIN_REPO)
     with open(f"{repo}/pango_designation/alias_key.json") as f:
         for k, v in json.load(f).items():
-            if isinstance(v, list) and len(v)==1:
+            if isinstance(v, list) and len(v) == 1:
                 v = v[0]
             if isinstance(v, str) and v:
                 PANGOLIN_ALIASES[k] = v
     return PANGOLIN_ALIASES
+
 
 def update_recombinants():
     repo = os.path.expanduser(PANGOLIN_REPO)
@@ -160,6 +161,7 @@ def update_recombinants():
             if isinstance(v, list) and v:
                 PANGOLIN_RECOMBINANTS[k] = v
     return PANGOLIN_RECOMBINANTS
+
 
 try:
     update_aliases()
@@ -253,6 +255,7 @@ def get_parent(name: str) -> Optional[str]:
         if any(['*' in p for p in parents]):
             parents = [p.rstrip('*') for p in parents]
         return parents[0]
+
 
 def get_most_recent_ancestor(name: str, ancestors: Set[str]) -> Optional[str]:
     """
