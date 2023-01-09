@@ -20,7 +20,7 @@ lint: FORCE
 	black --extend-exclude='notebooks|pyrocov/external' --check .
 	isort --check --skip=pyrocov/external .
 	python scripts/update_headers.py --check
-	mypy --install-types --non-interactive --exclude=parsimony_pb2.py .
+	mypy --install-types --non-interactive .
 
 format: FORCE
 	black --extend-exclude='notebooks|pyrocov/external' .
