@@ -20,7 +20,7 @@ lint: FORCE
 	black --extend-exclude='notebooks|pyrocov/external' --check .
 	isort --check --skip=pyrocov/external .
 	python scripts/update_headers.py --check
-	mypy .
+	mypy . --exclude=build/
 
 format: FORCE
 	black --extend-exclude='notebooks|pyrocov/external' .
