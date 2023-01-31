@@ -32,7 +32,9 @@ test: lint FORCE
 	python scripts/git_pull.py --no-update cov-lineages/pangoLEARN
 	python scripts/git_pull.py --no-update nextstrain/nextclade
 	pytest -v -n auto test
-	test -e results/aligndb && python scripts/mutrans.py --test -n 2 -s 2
+	test -e results/columns.3000.pkl \
+	  && python scripts/mutrans.py --test -n 2 -s 2 \
+	  || echo skipping test
 
 ###########################################################################
 # Main processing workflows

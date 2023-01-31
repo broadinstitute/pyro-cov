@@ -38,7 +38,7 @@ setup(
         "scikit-learn",
         "umap-learn",
         "mappy",
-        "protobuf==3.12",  # pinned by usher
+        "protobuf>=3.12,<3.13",  # pinned by usher
         "tqdm",
         "colorcet",
     ],
