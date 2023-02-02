@@ -61,5 +61,4 @@ epi_map.to_csv(
 
 get_ipython().run_line_magic("pinfo", "pd.DataFrame.to_csv")  # type: ignore
 
-
 # In[ ]:
