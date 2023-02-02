@@ -1,3 +1,6 @@
+# Copyright Contributors to the Pyro-Cov project.
+# SPDX-License-Identifier: Apache-2.0
+
 #!/usr/bin/env python
 # coding: utf-8
 
@@ -7,7 +10,6 @@
 
 
 import pandas as pd
-
 
 # In[2]:
 
@@ -43,7 +45,9 @@ epi_map
 # In[7]:
 
 
-epi_map.to_csv("results/gisaid/epiToPublicAndDate.latest", header=False, sep="\t", index=False)
+epi_map.to_csv(
+    "results/gisaid/epiToPublicAndDate.latest", header=False, sep="\t", index=False
+)
 
 
 # In[8]:
@@ -56,6 +60,5 @@ epi_map.to_csv("results/gisaid/epiToPublicAndDate.latest", header=False, sep="\t
 
 
 # get_ipython().run_line_magic('pinfo', 'pd.DataFrame.to_csv')
-
 
 # In[ ]:

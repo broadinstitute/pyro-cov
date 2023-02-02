@@ -125,7 +125,7 @@ class Phylogeny:
                 d2 = descendents[c2]
                 mask = d1 & d2[:, None]
                 mask[p] |= d1 | d2
-                mask |= mask.T
+                mask |= mask.T.clone()
                 result[mask] = self.times[p]
         return result
 

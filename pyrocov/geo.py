@@ -319,8 +319,8 @@ def gisaid_to_jhu_location(
             value = GISAID_TO_JHU[value[0]] + value[1:]
         while value not in jhu_prefixes:
             value = value[:-1]
-#            if not value:
-#                raise ValueError(f"Failed to find GISAID loctaion '{key}' in JHU data")
+        #            if not value:
+        #                raise ValueError(f"Failed to find GISAID loctaion '{key}' in JHU data")
         gisaid_to_jhu[key] = value
 
     # Construct a matrix many-to-many matching GISAID locations to JHU locations.

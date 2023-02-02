@@ -74,7 +74,7 @@ def log_factorial_sum(x: torch.Tensor) -> torch.Tensor:
         return (x + 1).lgamma().sum()
     key = id(x)
     if key not in _log_factorial_cache:
-        weakref.finalize(x, _log_factorial_cache.pop, key, None)
+        weakref.finalize(x, _log_factorial_cache.pop, key, None)  # type: ignore
         _log_factorial_cache[key] = (x + 1).lgamma().sum()
     return _log_factorial_cache[key]
 
