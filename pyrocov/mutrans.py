@@ -932,6 +932,7 @@ def fit_svi(
         model_type,
         num_samples=num_samples,
         forecast_steps=forecast_steps,
+        vectorize=False,  # vectorization probably won't work here
     )
     result["ELL"] = ell
     result["losses"] = losses

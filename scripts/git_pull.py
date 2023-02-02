@@ -30,7 +30,9 @@ for arg in sys.argv[1:]:
     dirname = os.path.join(dirname, repo)
     if not os.path.exists(dirname):
         print(f"Cloning {arg}")
-        check_call(["git", "clone", "--depth", "1", f"git@github.com:{user}/{repo}"])
+        check_call(
+            ["git", "clone", "--depth", "1", f"https://github.com/{user}/{repo}"]
+        )
     elif update:
         print(f"Pulling {arg}")
         os.chdir(dirname)

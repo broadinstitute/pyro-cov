@@ -38,7 +38,7 @@ setup(
         "scikit-learn",
         "umap-learn",
         "mappy",
-        "protobuf",
+        "protobuf>=3.12,<3.13",  # pinned by usher
         "tqdm",
         "colorcet",
     ],
@@ -48,6 +48,7 @@ setup(
             "isort>=5.0",
             "flake8",
             "pytest>=5.0",
+            "pytest-xdist",
             "mypy>=0.812",
             "types-protobuf",
         ],
