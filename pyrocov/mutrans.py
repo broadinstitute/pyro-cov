@@ -514,9 +514,33 @@ def model(dataset, model_type, *, forecast_steps=None):
         # Assume relative growth rate depends strongly on mutations and weakly
         # on clade and place. Assume initial infections depend strongly on
         # clade and place.
+        
+        # Get coef loc from eve if possible
+        # First, read eve
+        prior_fname = 'EVE/EVEPriors_Rescaled_2023-03-01.csv'
+        prior = pd.read_csv(prior_fname)
+        prior['mutations'] = ['S:'+m for m in list(eve['mutations'])]
+        # Next, read features
+        features_dict = torch.load('results/features.3000.1.pt')
+        mutations = features_dict['aa_mutations']
+        # Now, get centers and re-normlize so that have mean 0 and std = rescaled EVE priors (sort of a random choice)
+        s = np.std(prior['evol_indices_centered_rescaled'])
+        center1 = [prior['evol_indices_centered_rescaled'][i] 
+                   if m in list(prior['mutations']) else 0 
+                   for i,m in enumerate(mutations)]
+        center1 = [(c - np.mean(center1)) * s / np.std(center1) 
+                   for c in center1]
+
+        s = np.std(prior['evol_indices_boxcox_centered_rescaled'])
+        center2 = [prior['evol_indices_boxcox_centered_rescaled'][i] 
+                   if m in list(eve['mutations']) else 0 
+                   for i,m in enumerate(mutations)]
+        center2 = (center2 - np.mean(center2)) * s / np.std(center2)
+        
+        
         if "nofeatures" not in model_type:
             coef = pyro.sample(
-                "coef", dist.Laplace(torch.zeros(F), coef_scale).to_event(1)
+                "coef", dist.Laplace(torch.tensor(center1).float(), coef_scale).to_event(1)
             )  # [F]
         with clade_plate:
             if "localrate" in model_type:
