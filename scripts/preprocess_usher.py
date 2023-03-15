@@ -390,8 +390,10 @@ def extract_features(
     for clade, ms in aa_mutations_by_clade.items():
         i = clade_ids[clade]
         for m in ms:
-            j = mutation_ids.get(m)
-            aa_features[i, j] = True
+            if m.startswith('S:'):
+                j = mutation_ids.get(m)
+                aa_features[i, j] = True
+    
 
     # Save features.
     features = {
