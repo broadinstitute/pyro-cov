@@ -629,7 +629,7 @@ if __name__ == "__main__":
     parser.add_argument("--vary-gene", action="store_true")
     parser.add_argument("--vary-nsp", action="store_true")
     parser.add_argument("--gisaid", action="store_true", default=False)
-    parser.add_argument("--max-num-clades", default=3000, type=int)
+    parser.add_argument("--max-num-clades", default=5000, type=int)
     parser.add_argument("--min-num-mutations", default=1, type=int)
     parser.add_argument("--min-region-size", default=50, type=int)
     parser.add_argument("-cd", "--cond-data", default="coef_scale=0.05")
