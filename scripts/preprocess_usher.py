@@ -336,7 +336,7 @@ def prune_tree(args, max_num_clades, coarse_to_fine, nodename_to_count):
     assert "" not in weights
 
     # Prune the tree, minimizing the number of incorrect mutations.
-    max_num_clades = max(max_num_clades, len(coarse_to_fine))
+    max_num_clades = min(max_num_clades, len(coarse_to_fine))
     pruned_tree_filename = f"results/lineageTree.{max_num_clades}.pb"
     meso_set = prune_mutation_tree(
         args.tree_file_out, pruned_tree_filename, max_num_clades, weights
