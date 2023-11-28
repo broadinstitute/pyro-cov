@@ -54,15 +54,15 @@ def load_usher_clades(filename: str) -> Dict[str, Tuple[str, str]]:
 
 
 def load_mutation_tree(
-    filename: str,
+    proto, tree
 ) -> Tuple[Dict[str, FrozenSet[Mutation]], object, object]:
     """
     Loads an usher lineageTree.pb or lineageTree.pb.gz annotated with mutations
     and pango lineages, and creates a mapping from lineages to their set of
     mutations.
     """
-    logger.info(f"Loading tree from {filename}")
-    proto, tree = load_proto(filename)
+    # logger.info(f"Loading tree from {filename}")
+    # proto, tree = load_proto(filename)
 
     # Extract phylogenetic tree.
     clades = list(tree.find_clades())
@@ -143,17 +143,21 @@ def refine_mutation_tree(filename_in: str, filename_out: str) -> Dict[str, str]:
         for child in parent.clades:
             fine_to_coarse.setdefault(clade_to_fine[child], parent_coarse)
 
-    with open(filename_out, "wb") as f:
-        f.write(proto.SerializeToString())
+    ## TOO BIG TO SAVE ##
+    # with open(filename_out, "wb") as f:
+    #     f.write(proto.SerializeToString())    
 
     logger.info(f"Found {len(clades) - len(fine_to_coarse)} clones")
     logger.info(f"Refined {len(set(fine_to_coarse.values()))} -> {len(fine_to_coarse)}")
-    return fine_to_coarse
+    return fine_to_coarse, proto, tree
+    # return fine_to_coarse
 
 
 def prune_mutation_tree(
+    proto,
+    tree,
     filename_in: str,
-    filename_out: str,
+    # filename_out: str,
     max_num_nodes: int,
     weights: Optional[Dict[str, int]] = None,
 ) -> Set[str]:
@@ -165,11 +169,12 @@ def prune_mutation_tree(
 
     Returns a restricted set of clade names.
     """
-    proto, tree = load_proto(filename_in)
+    # proto, tree = load_proto(filename_in)
     num_pruned = len(proto.node_mutations) - max_num_nodes
     if num_pruned < 0:
-        shutil.copyfile(filename_in, filename_out)
-        return {m.clade for m in proto.node_metadata if m.clade}
+        # shutil.copyfile(filename_in, filename_out)
+        # return {m.clade for m in proto.node_metadata if m.clade}
+        return {m.clade for m in proto.node_metadata if m.clade}, proto, tree
 
     # Extract phylogenetic tree.
     clades = list(tree.find_clades())
@@ -233,10 +238,10 @@ def prune_mutation_tree(
     del proto.node_mutations[:]
     proto.metadata.extend(metadata[clade] for clade in clades)
     proto.node_mutations.extend(mutations[clade] for clade in clades)
-    with open(filename_out, "wb") as f:
-        f.write(proto.SerializeToString())
+    # with open(filename_out, "wb") as f:
+    #     f.write(proto.SerializeToString())
 
-    return {metadata[clade].clade for clade in clades if metadata[clade].clade}
+    return {metadata[clade].clade for clade in clades if metadata[clade].clade}, proto, tree
 
 
 def apply_mutations(ref: str, mutations: FrozenSet[Mutation]) -> str:

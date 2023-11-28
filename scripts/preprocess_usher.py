@@ -9,6 +9,8 @@ import pickle
 import re
 from collections import Counter, defaultdict
 
+import copy
+
 import pandas as pd
 import torch
 import tqdm
@@ -192,7 +194,7 @@ def load_gisaid_metadata(args):
     return result
 
 
-def load_metadata(args):
+def load_metadata(proto, tree, args):
     # Load metadata.
     public_to_gisaid = {}
     if args.gisaid_metadata_file_in:
@@ -218,7 +220,7 @@ def load_metadata(args):
 
     # Load usher tree.
     # Collect all names appearing in the usher tree.
-    nuc_mutations_by_clade, proto, tree = load_mutation_tree(args.tree_file_out)
+    nuc_mutations_by_clade, proto, tree = load_mutation_tree(proto, tree)
     assert nuc_mutations_by_clade
 
     # Collect background mutation statistics.
@@ -292,11 +294,11 @@ def load_metadata(args):
         pickle.dump(stats, f)
     logger.info(f"Saved {args.stats_file_out}")
 
-    return columns, nodename_to_count
+    return columns, nodename_to_count, proto, tree
 
 
-def prune_tree(args, max_num_clades, coarse_to_fine, nodename_to_count):
-    proto, tree = load_proto(args.tree_file_out)
+def prune_tree(proto, tree, args, max_num_clades, coarse_to_fine, nodename_to_count):
+    # proto, tree = load_proto(args.tree_file_out)
 
     # Add weights for leaves.
     cum_weights = {}
@@ -338,14 +340,17 @@ def prune_tree(args, max_num_clades, coarse_to_fine, nodename_to_count):
     # Prune the tree, minimizing the number of incorrect mutations.
     max_num_clades = min(max_num_clades, len(coarse_to_fine))
     pruned_tree_filename = f"results/lineageTree.{max_num_clades}.pb"
-    meso_set = prune_mutation_tree(
-        args.tree_file_out, pruned_tree_filename, max_num_clades, weights
+    meso_set, proto_pruned, tree_pruned = prune_mutation_tree(proto, tree,
+        # args.tree_file_out, 
+                              pruned_tree_filename, max_num_clades, weights
     )
     assert len(meso_set) == max_num_clades
-    return FineToMeso(meso_set), pruned_tree_filename
+    return FineToMeso(meso_set), proto_pruned, tree_pruned  # pruned_tree_filename
 
 
 def extract_features(
+    fine_proto,
+    fine_tree,
     args,
     max_num_clades,
     fine_to_coarse,
@@ -355,7 +360,7 @@ def extract_features(
 ):
     logger.info(f"Extracting features with {max_num_clades} clades")
     # Prune tree, updating data structures to use meso-scale clades.
-    fine_to_meso, pruned_tree_filename = prune_tree(
+    fine_to_meso, proto_pruned, tree_pruned = prune_tree(fine_proto, fine_tree,
         args, max_num_clades, coarse_to_fine, nodename_to_count
     )
     fine_to_coarse = {fine_to_meso(f): c for f, c in fine_to_coarse.items()}
@@ -373,7 +378,7 @@ def extract_features(
     del columns
 
     # Convert from nucleotide mutations to amino acid mutations.
-    nuc_mutations_by_clade = load_mutation_tree(pruned_tree_filename)[0]
+    nuc_mutations_by_clade = load_mutation_tree(proto_pruned, tree_pruned)[0]
     assert nuc_mutations_by_clade
     aa_mutations_by_clade = {
         clade: nuc_mutations_to_aa_mutations(mutations)
@@ -411,10 +416,11 @@ def main(args):
     # Extract mappings between coarse lineages and fine clades.
     coarse_proto = args.tree_file_in
     fine_proto = args.tree_file_out
-    fine_to_coarse = refine_mutation_tree(coarse_proto, fine_proto)
+    fine_to_coarse, fine_proto, fine_tree = refine_mutation_tree(coarse_proto, fine_proto)
+    # fine_to_coarse = refine_mutation_tree(coarse_proto, fine_proto)
 
     # Create columns.
-    columns, nodename_to_count = load_metadata(args)
+    columns, nodename_to_count, meta_proto, meta_tree = load_metadata(fine_proto, fine_tree, args)
     columns["lineage"] = [fine_to_coarse[f] for f in columns["clade"]]
 
     # Choose the basal representative.
@@ -425,7 +431,11 @@ def main(args):
 
     # Extract features at various granularities.
     for max_num_clades in map(int, args.max_num_clades.split(",")):
+        proto_loop = copy.deepcopy(meta_proto)
+        tree_loop = copy.deepcopy(meta_tree)
         extract_features(
+            proto_loop,
+            tree_loop,
             args,
             max_num_clades,
             fine_to_coarse,
