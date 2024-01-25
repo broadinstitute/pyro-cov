@@ -294,7 +294,15 @@ PANGOLIN_ALIASES = {
     "JZ": "XBB.1.5.107",
     "KA": "XBB.1.5.103",
     "KB": "XBB.1.9.2.5.1.8",
-    "KC": "XBB.1.9.1.1.5.2"
+    "KC": "XBB.1.9.1.1.5.2",
+    "KD": "XBC.1.3.1",
+    "KE": "XBB.1.19.1.5.1.1",
+    "KF": "XBB.1.9.1.15.1.1",
+    "KG": "B.1.1.529.2.75.3.4.1.1.1.1.1.7.1.5",
+    "KH": "XBB.2.3.3.1.2.1.1.1.1",
+    "KJ": "XBB.1.16.32",
+    "KK": "XBB.1.5.102.1.1.8",
+    "KL": "XBB.1.9.2.5.1.6.1.6.1"
 }
 
 PANGOLIN_RECOMBINANTS = {
@@ -443,8 +451,16 @@ PANGOLIN_RECOMBINANTS = {
     "XDD": ["EG.5.1.1","JN.1","EG.5.1.1"],
     "XDE": ["GW.5.1","FL.13.4"],
     "XDF": ["XBB*","EG.5.1.3"],
-    "XDG": ["FL.37","EG.5.2.4"]
+    "XDG": ["FL.37","EG.5.2.4"],
+    "XDH": ["BN.1.2.8","XBB.1.9.1"],
+    "XDJ": ["XBB.1.16.6","HK.3.1"],
+    "XDK": ["XBB.1.16.11","JN.1.1.1"],
+    "XDL": ["EG.5.1.1","XBB*"],
+    "XDM": ["XDA","GW.5","XDA"],
+    "XDN": ["JN.1.1","JD.1*"],
+    "XDP": ["JN.1.4","FL.15"]
 }
+
 
 # From https://www.who.int/en/activities/tracking-SARS-CoV-2-variants/
 WHO_ALIASES = {
