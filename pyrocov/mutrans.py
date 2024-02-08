@@ -1009,10 +1009,14 @@ def log_stats(dataset: dict, result: dict) -> dict:
     )
     true = weekly_lineages + 1e-20  # avoid nans
     counts = true.sum(-1, True)
-    true_probs = true / counts
+####################################### BEGIN SAVING GPU ################################
+#    true_probs = true / counts   # don't store in variable
     pred = result["median"]["probs"][: len(true)] + 1e-20  # truncate, avoid nans
-    kl = true.mul(true_probs.log() - pred.log()).sum([0, -1])
-    error = (pred - true_probs) * counts**0.5  # scaled by Poisson stddev
+    del weekly_clades, weekly_lineages    # remove tensors that we don't need anymore
+#    kl = true.mul(true_probs.log() - pred.log()).sum([0, -1])
+    kl = true.mul((true/counts).log() - pred.log()).sum([0, -1])
+#    error = (pred - true_probs) * counts**0.5  # scaled by Poisson stddev
+    error = (pred - (true/counts)) * counts**0.5  # scaled by Poisson stddev
     mae = error.abs().mean(0)  # average over time
     mse = error.square().mean(0)  # average over time
     stats["MAE"] = float(mae.sum(-1).mean())  # average over region
