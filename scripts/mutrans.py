@@ -19,6 +19,7 @@ from pyrocov.util import torch_map
 logger = logging.getLogger(__name__)
 logging.basicConfig(format="%(relativeCreated) 9d %(message)s", level=logging.INFO)
 
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:64"
 
 def cached(filename: Union[str, Callable]):
     """
