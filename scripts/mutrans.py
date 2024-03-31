@@ -1,6 +1,8 @@
 # Copyright Contributors to the Pyro-Cov project.
 # SPDX-License-Identifier: Apache-2.0
 
+import pandas as pd
+import numpy as np
 import argparse
 import functools
 import gc
@@ -452,6 +454,32 @@ def vary_coef_scale(args, default_config):
         logger.info("saving results/mutrans.vary_coef_scale.pt")
         torch.save(results, "results/mutrans.vary_coef_scale.pt")
 
+def load_priors(prior_fname, features_fname):
+        # prior_fname = 'EVE/EVEPriors_Rescaled_2023-03-01.csv'
+        prior = pd.read_csv(prior_fname)
+        prior['mutations'] = ['S:'+m for m in list(prior['mutations'])]
+        # Next, read features
+        features_dict = torch.load(features_fname)
+        mutations = features_dict['aa_mutations']
+        # Now, get centers and re-normlize so that have mean 0 and std = rescaled EVE priors (sort of a random choice)
+        s = np.std(prior['evol_indices_centered_rescaled'])
+        center1 = [prior['evol_indices_centered_rescaled'][i] 
+                   if m in list(prior['mutations']) else 0 
+                   for i,m in enumerate(mutations)]
+        center1 = [(c - np.mean(center1)) * s / np.std(center1) 
+                   for c in center1]
+        if torch.cuda.is_available():
+            center1 = torch.tensor(center1).float().to('cuda')
+        else:
+            center1 = torch.tensor(center1).float()
+
+        # s = np.std(prior['evol_indices_boxcox_centered_rescaled'])
+        # center2 = [prior['evol_indices_boxcox_centered_rescaled'][i] 
+        #            if m in list(prior['mutations']) else 0 
+        #            for i,m in enumerate(mutations)]
+        # center2 = (center2 - np.mean(center2)) * s / np.std(center2)
+        
+        return center1
 
 def main(args):
     """Main Entry Point"""
@@ -577,6 +605,9 @@ def main(args):
 
         # load dataset
         dataset = load_data(args, end_day=end_day, **holdout)
+        # add priors
+        dataset['priors'] = load_priors('EVE/EVEPriors_Rescaled_2023-03-01.csv', 
+                                        f'results/features.{args.max_num_clades}.1.pt')
 
         # Run SVI
         result = fit_svi(args, dataset, *config)
